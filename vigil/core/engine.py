@@ -1,17 +1,23 @@
 import asyncio
 import yaml
 import logging
+import sys
 from typing import List
 from vigil.core.collector import BaseCollector
 from vigil.core.database import VigilDatabase
-
+from peewee import OperationalError
 class VigilEngine:
     def __init__(self, config_path):
         self.config = self._load_config(config_path)
         self.collectors: List[BaseCollector] = []
         self.alert_handlers = []
         self.controllers = []
-        self.db = VigilDatabase(self.config.get('database', {}).get('path', 'vigil.db'))
+        try:
+            self.db = VigilDatabase(self.config.get('database', {}).get('path', 'vigil.db'))
+            self.db.insert_event("INFO", "Vigil Engine initialized.", "vigil_core")
+        except OperationalError as e:
+            logging.critical(f"Failed to initialize database: {e}. Exiting.")
+            sys.exit(1)
 
     def _load_config(self, path):
         try:
@@ -36,6 +42,7 @@ class VigilEngine:
 
     async def run(self):
         logging.info("Vigil Engine started...")
+        self.db.insert_event("INFO", "Vigil Engine started polling loop.", "vigil_core")
         self.setup_modules()
         
         while True:
@@ -46,6 +53,7 @@ class VigilEngine:
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
                 # Process results and trigger alerting/control logic
+                # TODO: Store results in DB
                 logging.info(f"Processed {len(results)} collection tasks.")
             else:
                 logging.debug("No collectors configured.")
