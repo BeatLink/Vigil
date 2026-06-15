@@ -3,6 +3,7 @@ import yaml
 import logging
 from typing import List
 from vigil.core.collector import BaseCollector
+from vigil.core.database import VigilDatabase
 
 class VigilEngine:
     def __init__(self, config_path):
@@ -10,6 +11,7 @@ class VigilEngine:
         self.collectors: List[BaseCollector] = []
         self.alert_handlers = []
         self.controllers = []
+        self.db = VigilDatabase(self.config.get('database', {}).get('path', 'vigil.db'))
 
     def _load_config(self, path):
         try:
