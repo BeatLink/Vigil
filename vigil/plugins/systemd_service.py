@@ -1,6 +1,6 @@
 import logging
 from typing import Dict, Any, List
-from vigil.core.plugin import BasePlugin
+from vigil.core.common.base_plugin import BasePlugin
 
 class SystemdPlugin(BasePlugin):
     """

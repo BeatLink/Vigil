@@ -4,14 +4,13 @@ import importlib
 import inspect
 import sys
 from typing import List
-from vigil.core.plugin import BasePlugin
-from vigil.core.config import VigilConfig
-from vigil.core.dashboard.app import init_gui
-from vigil.core.database import VigilDatabase
-from vigil.core.database.logger import InternalDatabaseLogger
-from vigil.core.ssh import SSHConnection
-from vigil.core.collectors.ssh_collector import SSHCollector
-from vigil.core.controllers.ssh_controller import SSHController
+from vigil.core.common.base_plugin import BasePlugin
+from vigil.core.data.config_file import ConfigFileManager as VigilConfig
+from vigil.core.data.database import DatabaseManager as VigilDatabase
+# Note: The following modules are referenced but not present in the current context
+from vigil.core.common.ssh_connector import SSHConnection
+from vigil.core.modules.collectors.ssh_collector import SSHCollector
+from vigil.core.modules.controllers.ssh_controller import SSHController
 from peewee import OperationalError
 
 class VigilEngine:

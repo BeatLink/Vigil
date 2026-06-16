@@ -1,6 +1,6 @@
 import logging
 from typing import Tuple, Dict, Any
-from vigil.core.ssh import SSHConnection
+from vigil.core.common.ssh_connector import SSHConnection
 
 class SSHCollector:
     """
