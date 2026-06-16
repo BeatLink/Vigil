@@ -57,3 +57,40 @@ class UptimePlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         """Basic uptime monitoring does not currently support remediation actions."""
         return False
+
+    def render_ui(self):
+        """Specialized UI for Uptime monitoring."""
+        from nicegui import ui
+        from vigil.core.data.database import Metric
+        
+        with ui.row().classes('w-full gap-4 mb-4'):
+            # Status Card
+            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-md'):
+                ui.label('CURRENT STATUS').classes('text-xs text-gray-400 font-bold')
+                status_label = ui.label('Checking...').classes('text-5xl font-black')
+                
+                def update_status():
+                    last = Metric.select().where(
+                        (Metric.collector == self.name) & (Metric.metric_name == 'up')
+                    ).order_by(Metric.timestamp.desc()).first()
+                    if last:
+                        is_up = last.value > 0.5
+                        status_label.text = 'ONLINE' if is_up else 'OFFLINE'
+                        status_label.style('color: #22c55e' if is_up else 'color: #ef4444')
+                ui.timer(2.0, update_status)
+
+            # Latency Card
+            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-md'):
+                ui.label('LAST LATENCY').classes('text-xs text-gray-400 font-bold')
+                latency_label = ui.label('-- ms').classes('text-5xl font-black text-blue-500')
+                
+                def update_latency():
+                    last = Metric.select().where(
+                        (Metric.collector == self.name) & (Metric.metric_name == 'latency_ms')
+                    ).order_by(Metric.timestamp.desc()).first()
+                    if last:
+                        latency_label.text = f"{last.value:.1f} ms"
+                ui.timer(2.0, update_latency)
+        
+        # Call the base implementation to show the logs table below the status cards
+        super().render_ui()
