@@ -48,12 +48,14 @@ def init_gui(engine: Any, port: int = 8080):
                     is_group = plugin.config.get('type') == 'group'
                     
                     if is_group:
-                        with ui.expansion(info['name'], icon='folder').classes('w-full').props('header-class="font-medium"'):
+                        # Only toggle expansion on arrow click; clicking the header title navigates to the group dashboard
+                        with ui.expansion().classes('w-full').props(f'expand-icon-toggle header-class="font-medium ml-{level*2}"') as exp:
+                            with exp.add_slot('header'):
+                                with ui.row().classes('items-center w-full h-full cursor-pointer').on('click', lambda p=plugin: switch_view('plugin', p)):
+                                    ui.icon('folder').classes('mr-2')
+                                    ui.label(info['name']).classes('flex-grow')
+                            
                             render_sidebar_tree(plugin.children, level + 1)
-                            # Groups can also be clicked to see their summary
-                            with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable dense').classes('ml-4'):
-                                with ui.item_section():
-                                    ui.label('Group Dashboard').classes('text-xs italic')
                     else:
                         with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable').classes(f'ml-{level*2}'):
                             with ui.item_section().props('avatar'):
