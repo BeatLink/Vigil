@@ -16,7 +16,7 @@ Vigil is a Python-based, pull-based monitoring system. It aims to be the "Swiss 
 
 1. **Simplicity First**: Configuration should be intuitive.
 2. **No Remote Agent**: All logic stays on the Vigil server; remote hosts only need SSH.
-3. **Functional Decoupling**: Plugins are grouped by function (Collectors, Alerting, Control) to ensure strict interfaces and composability.
+3. **Domain Encapsulation**: Plugins are grouped by domain (e.g., Systemd, HTTP, Hardware). Each plugin handles its own collection, alerting, and control logic.
 4. **Fail-Safe Control**: Control actions must be logged and confirmable.
 5. **Standard-Aware**: While the core is lightweight, it aims for OpenTelemetry compatibility in data naming and export capability.
 6. **Hybrid Config**: Use YAML for infrastructure definitions (Source of Truth) and SQLite for runtime state/overrides.
@@ -34,10 +34,5 @@ Vigil is a Python-based, pull-based monitoring system. It aims to be the "Swiss 
 
 ## Instructions for AI Agents
 
-When adding new features, follow the functional directory structure:
-
-- `vigil/core/database/`: Database package with `models.py` (schemas) and `manager.py` (logic).
-- `vigil/gui/`: Web-based user interface logic.
-- `vigil/modules/collectors/`: Data acquisition logic.
-- `vigil/modules/alerting/`: Notification and threshold logic.
-- `vigil/modules/control/`: Remote execution and remediation logic.
+When adding new features, follow the domain-based directory structure:
+- `vigil/modules/<domain>/`: Contains the `Plugin` class inheriting from `BasePlugin`.
