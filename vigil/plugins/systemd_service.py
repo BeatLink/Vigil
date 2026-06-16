@@ -24,7 +24,6 @@ class SystemdPlugin(BasePlugin):
         """Fetches recent journalctl logs."""
         command = f"journalctl -u {self.service_name} -n {self.lines} --no-pager"
         status, stdout, stderr = await self.ssh_collector.fetch_output(command)
-        
         if status == 0:
             for line in stdout.splitlines():
                 level = "INFO"

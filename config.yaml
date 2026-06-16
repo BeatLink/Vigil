@@ -6,14 +6,15 @@ database:
 
 # Domain-based Plugins
 plugins:
-  - name: "nginx-logs"
-    type: "systemd"
-    target_host: "192.168.1.10"
+  - name: "bluetooth"
+    type: "systemd_service"
+    target_host: "localhost"
     interval: 60
-    service_name: "nginx"
+    service_name: "bluetooth.service"
     lines: 20
     ssh_config:
-      username: "monitor"
-      key_path: "~/.ssh/id_rsa"
-      # password: "securepassword" # Alternatively use password auth
-      port: 22
+      target_host: "localhost" # Should be the only mandatory field for ssh collector and controller. 
+      #username: "monitor"  # if username is omitted run ssh command without user e.g. ssh localhost instead of ssh user@localhost 
+      #key_path: "~/.ssh/id_rsa"  # if not specified, assume system keys
+      # password: "securepassword" # Alternatively use password auth # if ommitted, assume passwordless login
+      #port: 22 # if ommitted assume default port
