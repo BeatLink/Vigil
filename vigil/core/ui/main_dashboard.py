@@ -30,10 +30,10 @@ def init_gui(engine: Any, port: int = 8080):
         ui.icon('security', size='md')
         ui.label('Vigil System Monitor').classes('text-2xl font-bold ml-2')
 
-    with ui.left_drawer(value=True).classes('bg-slate-100 p-0 shadow-lg').props('width=400') as left_drawer:
-        with ui.list().classes('w-full mt-4'):
-            ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable').classes('text-lg font-semibold border-b')
-            ui.item_label('MONITORS').classes('text-xs text-gray-500 mt-4 px-4')
+    with ui.left_drawer(value=True).classes('bg-slate-100 p-0 shadow-lg').props('width=300') as left_drawer:
+        with ui.list().classes('w-full').props('dense'):
+            ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b')
+            ui.item_label('MONITORS').classes('text-xs text-gray-500 mt-2 px-4')
             
             COLOR_MAP = {
                 'success': '#22c55e',
@@ -49,18 +49,14 @@ def init_gui(engine: Any, port: int = 8080):
                     
                     if is_group:
                         # Only toggle expansion on arrow click; clicking the header title navigates to the group dashboard
-                        with ui.expansion().classes('w-full').props(f'expand-icon-toggle header-class="font-medium ml-{level*2}"') as exp:
+                        with ui.expansion().classes('w-full').props(f'expand-icon-toggle dense header-class="font-medium ml-{level*2}"') as exp:
                             with exp.add_slot('header'):
                                 with ui.row().classes('items-center w-full h-full cursor-pointer').on('click', lambda p=plugin: switch_view('plugin', p)):
-                                    ui.icon('folder').classes('mr-2')
                                     ui.label(info['name']).classes('flex-grow text-left truncate')
                             
                             render_sidebar_tree(plugin.children, level + 1)
                     else:
-                        with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable').classes(f'ml-{level*2} no-wrap items-center'):
-                            with ui.item_section().props('side'):
-                                ui.icon('sensors', color='green' if info.get('actions') else 'blue', size='sm')
-                            
+                        with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable dense').classes(f'ml-{level*2} no-wrap items-center'):
                             with ui.item_section():
                                 ui.item_label(info['name']).classes('text-sm text-left truncate')
 
