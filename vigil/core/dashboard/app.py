@@ -4,25 +4,17 @@ from nicegui import ui
 from vigil.core.database.manager import VigilDatabase
 from vigil.core.database.models import Metric, Event
 
-def main():
-    parser = argparse.ArgumentParser(description="Vigil Web Dashboard")
-    parser.add_argument("--db", default="vigil.db", help="Path to the SQLite database file")
-    parser.add_argument("--port", type=int, default=8080, help="Port to run the dashboard on")
-    parser.add_argument("--config", help="Path to config file to also run the monitoring engine")
-    args = parser.parse_args()
-
+def init_gui(db_path: str, port: int = 8080, engine_run_func=None):
     # Initialize database connection context
     try:
-        VigilDatabase(args.db)
+        VigilDatabase(db_path)
     except Exception as e:
         logging.error(f"Could not connect to database: {e}")
         return
 
-    # If a config is provided, initialize and schedule the engine in the background
-    if args.config:
-        from vigil.core.engine import VigilEngine
-        engine = VigilEngine(args.config)
-        ui.on_startup(engine.run)
+    # If an engine loop is provided, schedule it in the background
+    if engine_run_func:
+        ui.on_startup(engine_run_func)
 
     ui.query('body').style('background-color: #f8f9fa')
 
@@ -77,7 +69,15 @@ def main():
             ui.timer(5.0, refresh_events)
 
     # Run the NiceGUI app
-    ui.run(title='Vigil Dashboard', port=args.port, reload=False)
+    ui.run(title='Vigil Dashboard', port=port, reload=False)
+
+def main():
+    parser = argparse.ArgumentParser(description="Vigil Web Dashboard")
+    parser.add_argument("--db", default="vigil.db", help="Path to the SQLite database file")
+    parser.add_argument("--port", type=int, default=8080, help="Port to run the dashboard on")
+    args = parser.parse_args()
+    
+    init_gui(args.db, args.port)
 
 if __name__ in {"__main__", "gui"}:
     logging.basicConfig(level=logging.INFO)

@@ -13,4 +13,4 @@ echo "------------------------------------------------"
 echo "Starting Vigil (Combined Mode) on http://localhost:8080"
 echo "------------------------------------------------"
 
-python3 vigil/core/dashboard/app.py --db vigil.db --port 8080 --config config.yaml
+python3 vigil/core/engine.py --config config.yaml --gui --port 8080

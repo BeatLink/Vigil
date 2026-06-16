@@ -18,8 +18,9 @@ class VigilEngine:
         self.config_loader = VigilConfig(config_path)
         self.config = self.config_loader.data
         self.plugins: List[BasePlugin] = []
+        self.db_path = self.config_loader.database_settings.get('path', 'vigil.db')
         try:
-            self.db = VigilDatabase(self.config_loader.database_settings.get('path', 'vigil.db'))
+            self.db = VigilDatabase(self.db_path)
             self.db.insert_event("INFO", "Vigil Engine initialized.", "vigil_core")
         except OperationalError as e:
             logging.critical(f"Failed to initialize database: {e}. Exiting.")
@@ -97,11 +98,18 @@ def main():
     import argparse
     parser = argparse.ArgumentParser(description="Vigil Monitoring Engine")
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
+    parser.add_argument("--gui", action="store_true", help="Start the web dashboard")
+    parser.add_argument("--port", type=int, default=8080, help="Port for the web dashboard")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
     engine = VigilEngine(args.config)
-    asyncio.run(engine.run())
+    
+    if args.gui:
+        from vigil.core.dashboard.app import init_gui
+        init_gui(db_path=engine.db_path, port=args.port, engine_run_func=engine.run)
+    else:
+        asyncio.run(engine.run())
 
 if __name__ == "__main__":
     main()
