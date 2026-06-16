@@ -36,3 +36,7 @@ Vigil is a Python-based, pull-based monitoring system. It aims to be the "Swiss 
 
 When adding new features, follow the domain-based directory structure:
 - `vigil/modules/<domain>/`: Contains the `Plugin` class inheriting from `BasePlugin`.
+
+Internal components for plugin developers are available in:
+- `vigil/core/collectors/`: Generic collection helpers (e.g., SSHCollector).
+- `vigil/core/controllers/`: Generic control/execution helpers (e.g., SSHController).

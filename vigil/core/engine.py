@@ -5,6 +5,8 @@ from typing import List
 from vigil.core.plugin import BasePlugin
 from vigil.core.config import VigilConfig
 from vigil.core.database import VigilDatabase
+from vigil.core.collectors.ssh_collector import SSHCollector
+from vigil.core.controllers.ssh_controller import SSHController
 from peewee import OperationalError
 
 class VigilEngine:

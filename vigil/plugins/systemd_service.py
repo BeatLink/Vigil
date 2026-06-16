@@ -3,6 +3,8 @@ from typing import Dict, Any
 from vigil.core.plugin import BasePlugin
 from vigil.core.ssh import SSHConnection
 from vigil.core.database import VigilDatabase
+from vigil.core.collectors.ssh_collector import SSHCollector
+from vigil.core.controllers.ssh_controller import SSHController
 
 class SystemdPlugin(BasePlugin):
     """
@@ -16,25 +18,25 @@ class SystemdPlugin(BasePlugin):
         self.service_name = service_name
         self.lines = lines
         self.db_manager = db_manager
-        self.ssh = SSHConnection(
+        
+        # Internal SSH connection utility
+        self.ssh_conn = SSHConnection(
             host=target_host,
             username=ssh_config.get('username'),
             key_path=ssh_config.get('key_path'),
             password=ssh_config.get('password'),
             port=ssh_config.get('port', 22)
         )
+        self.collector = SSHCollector(self.ssh_conn)
+        self.controller = SSHController(self.ssh_conn)
 
     async def collect(self) -> str:
         """Fetches recent journalctl logs."""
         command = f"journalctl -u {self.service_name} -n {self.lines} --no-pager"
-        try:
-            with self.ssh as conn:
-                status, stdout, stderr = conn.execute(command)
-                if status == 0:
-                    return stdout
-                return f"Error: {stderr}"
-        except Exception as e:
-            return f"SSH Failure: {e}"
+        status, stdout, stderr = await self.collector.fetch_output(command)
+        if status == 0:
+            return stdout
+        return f"Error: {stderr}"
 
     async def alert(self, data: str):
         """Parses logs for keywords and records events."""
@@ -54,10 +56,6 @@ class SystemdPlugin(BasePlugin):
         """Remediates service issues (e.g., restart)."""
         if action == "restart":
             command = f"systemctl restart {self.service_name}"
-            try:
-                with self.ssh as conn:
-                    status, _, stderr = conn.execute(command)
-                    return status == 0
-            except Exception:
-                return False
+            status, _, _ = await self.controller.execute_action(command)
+            return status == 0
         return False
