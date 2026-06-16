@@ -66,8 +66,12 @@ class UptimePlugin(BasePlugin):
         from nicegui import ui
         from vigil.core.data.database import Metric
         
-        ui.label(f"Target Host: {self.target}").classes('text-gray-500 italic mb-4')
         with ui.row().classes('w-full gap-4 mb-4'):
+            # Target Host Card
+            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-md'):
+                ui.label('TARGET HOST').classes('text-xs text-gray-400 font-bold')
+                ui.label(self.target).classes('text-3xl font-black text-slate-500')
+
             # Status Card
             with ui.card().classes('flex-1 p-6 items-center justify-center shadow-md'):
                 ui.label('CURRENT STATUS').classes('text-xs text-gray-400 font-bold')
