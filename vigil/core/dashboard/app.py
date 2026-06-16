@@ -8,6 +8,7 @@ def main():
     parser = argparse.ArgumentParser(description="Vigil Web Dashboard")
     parser.add_argument("--db", default="vigil.db", help="Path to the SQLite database file")
     parser.add_argument("--port", type=int, default=8080, help="Port to run the dashboard on")
+    parser.add_argument("--config", help="Path to config file to also run the monitoring engine")
     args = parser.parse_args()
 
     # Initialize database connection context
@@ -16,6 +17,12 @@ def main():
     except Exception as e:
         logging.error(f"Could not connect to database: {e}")
         return
+
+    # If a config is provided, initialize and schedule the engine in the background
+    if args.config:
+        from vigil.core.engine import VigilEngine
+        engine = VigilEngine(args.config)
+        ui.on_startup(engine.run)
 
     ui.query('body').style('background-color: #f8f9fa')
 

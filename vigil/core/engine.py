@@ -1,10 +1,14 @@
 import asyncio
 import logging
+import importlib
+import inspect
 import sys
 from typing import List
 from vigil.core.plugin import BasePlugin
 from vigil.core.config import VigilConfig
 from vigil.core.database import VigilDatabase
+from vigil.core.database.logger import InternalDatabaseLogger
+from vigil.core.ssh import SSHConnection
 from vigil.core.collectors.ssh_collector import SSHCollector
 from vigil.core.controllers.ssh_controller import SSHController
 from peewee import OperationalError
@@ -23,13 +27,49 @@ class VigilEngine:
 
     def setup_modules(self):
         """
-        Dynamically loads domain-based plugins based on the configuration.
+        Dynamically instantiates plugins and injects internal modules.
         """
-        logging.info("Initializing plugins by domain...")
-        # Placeholder for dynamic loading logic
-        # for plugin_cfg in self.config_loader.plugins:
-        #     self.plugins.append(load_domain_plugin(plugin_cfg))
-        pass
+        logging.info("Building plugin registry and injecting dependencies...")
+        
+        for plugin_cfg in self.config_loader.plugins:
+            name = plugin_cfg.get('name')
+            p_type = plugin_cfg.get('type')
+            ssh_cfg = plugin_cfg.get('ssh_config', {})
+            target = plugin_cfg.get('target_host', ssh_cfg.get('host', 'localhost'))
+
+            # 1. Initialize shared SSH infrastructure for this plugin
+            ssh_conn = SSHConnection(
+                host=ssh_cfg.get('host', target),
+                username=ssh_cfg.get('username'),
+                key_path=ssh_cfg.get('key_path'),
+                password=ssh_cfg.get('password'),
+                port=ssh_cfg.get('port')
+            )
+
+            # 2. Prepare the internal modules registry
+            internal = {
+                'collectors': {'ssh': SSHCollector(ssh_conn)},
+                'controllers': {'ssh': SSHController(ssh_conn)},
+                'loggers': {
+                    'db_logs': InternalDatabaseLogger(self.db, target, name),
+                    'db_metrics': InternalDatabaseLogger(self.db, target, name)
+                }
+            }
+
+            # 3. Dynamically load the plugin class
+            try:
+                module_path = f"vigil.plugins.{p_type}"
+                module = importlib.import_module(module_path)
+                
+                # Find class inheriting from BasePlugin
+                for _, obj in inspect.getmembers(module, inspect.isclass):
+                    if issubclass(obj, BasePlugin) and obj is not BasePlugin:
+                        plugin_instance = obj(name, plugin_cfg, internal)
+                        self.plugins.append(plugin_instance)
+                        logging.info(f"Loaded plugin '{name}' of type '{p_type}'")
+                        break
+            except Exception as e:
+                logging.error(f"Failed to load plugin '{name}' ({p_type}): {e}")
 
     async def run(self):
         logging.info("Vigil Engine started...")
@@ -54,11 +94,14 @@ class VigilEngine:
             await asyncio.sleep(60)
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Vigil Monitoring Engine")
+    parser.add_argument("--config", default="config.yaml", help="Path to config file")
+    args = parser.parse_args()
+
     logging.basicConfig(level=logging.INFO)
-    # Example entry point
-    # engine = VigilEngine("config.yaml")
-    # asyncio.run(engine.run())
-    print("Vigil Engine Scaffolding Loaded.")
+    engine = VigilEngine(args.config)
+    asyncio.run(engine.run())
 
 if __name__ == "__main__":
     main()
