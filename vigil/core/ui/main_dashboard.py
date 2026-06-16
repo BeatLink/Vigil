@@ -1,6 +1,6 @@
 import logging
 from nicegui import app, ui
-from vigil.core.database import VigilDatabase, Metric, Event
+from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event
 
 def init_gui(db_path: str, port: int = 8080, engine_run_func=None):
     # Initialize database connection context

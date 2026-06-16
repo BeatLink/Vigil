@@ -74,11 +74,12 @@ For users with the Nix package manager, Vigil supports Flakes for reproducible e
 
 ## Project Structure
 
-* `vigil/core/`: The main orchestrator and base classes.
-* `vigil/gui/`: NiceGUI-based dashboard for visualization.
-* `vigil/modules/`: Individual monitoring and control modules.
-* `vigil/presentation/`: Formatters for CLI, Web, or file logging.
-* `vigil/alerting/`: Logic for handling thresholds and notifications.
+* `vigil/core/main.py`: The main orchestrator and engine.
+* `vigil/core/data/`: Persistence layer (SQLite/Peewee) and Config loading.
+* `vigil/core/common/`: Base classes and shared utilities (like SSH).
+* `vigil/core/modules/`: Core business logic (Collectors, Controllers, Alerting).
+* `vigil/core/ui/`: NiceGUI-based dashboard and visualization.
+* `vigil/plugins/`: Domain-specific monitoring logic (Systemd, Hardware, etc.).
 
 ## License
 
