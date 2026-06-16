@@ -22,8 +22,7 @@ Vigil is a Python-based, pull-based monitoring system. It aims to be the "Swiss 
 6. **Hybrid Config**: Use YAML for infrastructure definitions (Source of Truth) and SQLite for runtime state/overrides.
 
 ## Roadmap
-
-- [ ] Core engine implementation with YAML config loader.
+- [X] Core engine implementation with YAML config loader.
 - [X] Core Database utility (SQLite).
 - [X] Core SSH utility for remote access.
 - [ ] OpenTelemetry/OpenMetrics export module.
