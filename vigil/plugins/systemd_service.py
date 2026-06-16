@@ -15,10 +15,10 @@ class SystemdPlugin(BasePlugin):
         self.lines = config.get('lines', 10)
         
         # Access internal modules
-        self.ssh_collector = internal_modules['collectors'].get('ssh')
-        self.ssh_controller = internal_modules['controllers'].get('ssh')
-        self.db_logger = internal_modules['loggers'].get('db_logs')
-        self.db_metrics = internal_modules['loggers'].get('db_metrics')
+        self.ssh_collector = self.internal_modules['collectors'].get('ssh')
+        self.ssh_controller = self.internal_modules['controllers'].get('ssh')
+        self.db_logger = self.internal_modules['loggers'].get('db_logs')
+        self.db_metrics = self.internal_modules['loggers'].get('db_metrics')
 
     async def on_collect(self):
         """Fetches recent journalctl logs."""

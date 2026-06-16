@@ -69,3 +69,5 @@ class VigilEngine:
                 logging.info(f"Processed {len(results)} collection tasks.")
             else:
                 logging.debug("No plugins configured.")
+            
+            await asyncio.sleep(60)

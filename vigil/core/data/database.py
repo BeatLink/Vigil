@@ -33,6 +33,24 @@ class Setting(BaseModel):
     value = TextField()
 
 
+# DATABASE HELPERS ##################################################################################################################################
+class InternalDatabaseLogger:
+    """A helper class for plugins to write logs and metrics back to the database."""
+    def __init__(self, db_manager: 'DatabaseManager', target: str, plugin_name: str):
+        self.db = db_manager
+        self.target = target
+        self.plugin_name = plugin_name
+
+    def write(self, message: str, level: str = "INFO"):
+        """Writes a formatted log entry into the Event table."""
+        # Prefix the message with the plugin name for global context
+        formatted_message = f"[{self.plugin_name}] {message}"
+        self.db.insert_event(level, formatted_message, self.target)
+
+    def metric(self, name: str, value: float, metadata: Optional[str] = None):
+        """Writes a metric entry into the Metric table."""
+        self.db.insert_metric(self.target, self.plugin_name, name, value, metadata)
+
 # DATABASE MANAGER ##################################################################################################################################
 class DatabaseManager:
     """Manages the Peewee ORM connection and schema for Vigil."""
@@ -79,3 +97,7 @@ class DatabaseManager:
         with db.connection_context():
             Setting.insert(key=key, value=value).on_conflict_replace().execute()
             logging.debug(f"Updated setting: {key}")
+
+    def get_logger(self, target: str, plugin_name: str) -> InternalDatabaseLogger:
+        """Factory method to provide a scoped logger for a specific plugin instance."""
+        return InternalDatabaseLogger(self, target, plugin_name)

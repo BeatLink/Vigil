@@ -1,12 +1,24 @@
 import paramiko
 import logging
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, Any
 
 class SSHConnection:
     """
     A core utility for managing SSH connections to remote nodes.
     Supports both command execution and metric retrieval.
     """
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]):
+        """Factory method to create a connection from a plugin configuration dictionary."""
+        ssh_cfg = config.get('ssh_config', {})
+        return cls(
+            host=ssh_cfg.get('host', config.get('target_host', 'localhost')),
+            username=ssh_cfg.get('username'),
+            key_path=ssh_cfg.get('key_path'),
+            password=ssh_cfg.get('password'),
+            port=ssh_cfg.get('port')
+        )
+
     def __init__(self, host: str, username: Optional[str] = None, key_path: Optional[str] = None, password: Optional[str] = None, port: Optional[int] = 22):
         self.host = host
         self.username = username
