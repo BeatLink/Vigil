@@ -16,20 +16,15 @@
             system:
             let
                 pkgs = import nixpkgs { inherit system; };
-                python = pkgs.python312;
 
-                vigil-pkg = python.pkgs.buildPythonApplication {
+                vigil-pkg = pkgs.python312Packages.buildPythonApplication {
                     pname = "vigil";
                     version = "0.1.0";
                     format = "pyproject";
-
                     src = ./.;
 
-                    nativeBuildInputs = with python.pkgs; [
-                        setuptools
-                    ];
-
-                    propagatedBuildInputs = with python.pkgs; [
+                    nativeBuildInputs = [ pkgs.python312Packages.setuptools ];
+                    propagatedBuildInputs = with pkgs.python312Packages; [
                         paramiko
                         requests
                         pyyaml
@@ -39,6 +34,12 @@
 
                     pythonImportsCheck = [ "vigil" ];
                 };
+
+                vigil-run = pkgs.writeShellScriptBin "vigil-run" ''
+                    export PYTHONPATH="$PYTHONPATH:$(pwd)"
+                    echo "Starting Vigil on http://localhost:8080"
+                    exec python3 vigil/core/main.py --config config.yaml --port 8080 "$@"
+                '';
             in
             {
                 packages.default = vigil-pkg;
@@ -51,23 +52,24 @@
                 apps.default = self.apps.${system}.vigil;
 
                 devShells.default = pkgs.mkShell {
-                    buildInputs = with pkgs; [
-                        (python.withPackages (
-                            ps: with ps; [
-                                paramiko
-                                requests
-                                pyyaml
-                                peewee
-                                nicegui
-                                pip
-                                setuptools
+                    buildInputs = [
+                        (pkgs.python312.withPackages (
+                            ps:
+                            vigil-pkg.propagatedBuildInputs
+                            ++ [
+                                ps.pip
+                                ps.setuptools
                             ]
                         ))
+                        vigil-run
                     ];
 
                     shellHook = ''
-                        echo "Welcome to the Vigil development environment"
-                        echo "Python: $(python --version)"
+                        export PYTHONPATH="$PYTHONPATH:$(pwd)"
+                        echo "Vigil development environment loaded."
+                        echo "Python: $(python3 --version)"
+                        echo ""
+                        echo "Type 'vigil-run' to start the application."
                     '';
                 };
             }
