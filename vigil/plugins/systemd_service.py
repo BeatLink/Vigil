@@ -49,7 +49,7 @@ class SystemdPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         """Remediates service issues (e.g., restart)."""
         if action_id == "restart_service":
-            command = f"systemctl restart {self.service_name}"
+            command = f"sudo systemctl restart {self.service_name}"
             status, _, stderr = await self.ssh_controller.execute_action(command)
             if status != 0:
                 self.db_logger.write(f"Restart failed: {stderr}", level="ERROR")
