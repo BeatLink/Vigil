@@ -8,7 +8,6 @@ database:
 plugins:
   - name: "bluetooth"
     type: "systemd_service"
-    target_host: "localhost"
     interval: 60
     service_name: "bluetooth.service"
     lines: 20

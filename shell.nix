@@ -13,7 +13,20 @@ let
             setuptools
         ]
     );
+
+    vigil-run = pkgs.writeShellScriptBin "vigil-run" ''
+        export PYTHONPATH="$PYTHONPATH:$(pwd)"
+        echo "Starting Vigil on http://localhost:8080"
+        exec python3 vigil/core/main.py --config config.yaml --port 8080 "$@"
+    '';
 in
 pkgs.mkShell {
-    buildInputs = [ pythonEnv ];
+    buildInputs = [
+        pythonEnv
+        vigil-run
+    ];
+    shellHook = ''
+        export PYTHONPATH="$PYTHONPATH:$(pwd)"
+        echo "Vigil development environment loaded. Type 'vigil-run' to start the application."
+    '';
 }
