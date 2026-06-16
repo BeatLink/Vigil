@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-vigil = "vigil.core.engine:main"
+vigil = "vigil.core.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

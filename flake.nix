@@ -16,21 +16,24 @@
             system:
             let
                 pkgs = import nixpkgs { inherit system; };
+                pyproject = builtins.fromTOML (builtins.readFile ./pyproject.toml);
+
+                pythonDeps = with pkgs.python312Packages; [
+                    paramiko
+                    requests
+                    pyyaml
+                    peewee
+                    nicegui
+                ];
 
                 vigil-pkg = pkgs.python312Packages.buildPythonApplication {
-                    pname = "vigil";
-                    version = "0.1.0";
+                    pname = pyproject.project.name;
+                    version = pyproject.project.version;
                     format = "pyproject";
                     src = ./.;
 
                     nativeBuildInputs = [ pkgs.python312Packages.setuptools ];
-                    propagatedBuildInputs = with pkgs.python312Packages; [
-                        paramiko
-                        requests
-                        pyyaml
-                        peewee
-                        nicegui
-                    ];
+                    propagatedBuildInputs = pythonDeps;
 
                     pythonImportsCheck = [ "vigil" ];
                 };
@@ -55,7 +58,7 @@
                     buildInputs = [
                         (pkgs.python312.withPackages (
                             ps:
-                            vigil-pkg.propagatedBuildInputs
+                            pythonDeps
                             ++ [
                                 ps.pip
                                 ps.setuptools

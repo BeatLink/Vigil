@@ -7,6 +7,7 @@ from typing import List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.config_file import ConfigFileManager as VigilConfig
 from vigil.core.data.database import DatabaseManager as VigilDatabase
+from vigil.core.ui.main_dashboard import init_gui
 # Note: The following modules are referenced but not present in the current context
 from vigil.core.common.ssh_connector import SSHConnection
 from vigil.core.modules.collectors.ssh_collector import SSHCollector
