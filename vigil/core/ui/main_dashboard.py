@@ -34,15 +34,26 @@ def init_gui(engine: Any, port: int = 8080):
         with ui.list().classes('w-full mt-4'):
             ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable').classes('text-lg font-semibold border-b')
             ui.item_label('MONITORS').classes('text-xs text-gray-500 mt-4 px-4')
+
+            def render_sidebar_tree(plugins, level=0):
+                for plugin in plugins:
+                    info = plugin.present()
+                    is_group = plugin.config.get('type') == 'group'
+                    
+                    if is_group:
+                        with ui.expansion(info['name'], icon='folder').classes('w-full').props('header-class="font-medium"'):
+                            render_sidebar_tree(plugin.children, level + 1)
+                            # Groups can also be clicked to see their summary
+                            with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable dense').classes('ml-4'):
+                                ui.item_section().label('Group Dashboard').classes('text-xs italic')
+                    else:
+                        with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable').classes(f'ml-{level*2}'):
+                            with ui.item_section().props('avatar'):
+                                ui.icon('sensors', color='green' if info.get('actions') else 'blue', size='sm')
+                            with ui.item_section():
+                                ui.item_label(info['name']).classes('text-sm')
             
-            for plugin in engine.plugins:
-                info = plugin.present()
-                with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable'):
-                    with ui.item_section().props('avatar'):
-                        ui.icon('sensors', color='green' if info.get('actions') else 'blue')
-                    with ui.item_section():
-                        ui.item_label(info['name'])
-                        ui.item_label(info['target']).props('caption')
+            render_sidebar_tree(engine.plugins)
 
     main_container = ui.column().classes('w-full p-6 bg-transparent')
 
@@ -108,37 +119,8 @@ def init_gui(engine: Any, port: int = 8080):
                                   type='positive' if success else 'negative')
                     ui.button(action['name'], on_click=do_action).props('outline rounded icon=play_arrow')
 
-        with ui.grid(columns=2).classes('w-full gap-4'):
-            # Monitor Metrics
-            with ui.card().classes('p-4'):
-                ui.label('Monitor Metrics').classes('font-bold mb-2')
-                p_metric_table = ui.table(columns=[
-                    {'name': 'ts', 'label': 'Time', 'field': 'timestamp'},
-                    {'name': 'name', 'label': 'Metric', 'field': 'metric_name'},
-                    {'name': 'val', 'label': 'Value', 'field': 'value'},
-                ], rows=[]).classes('w-full')
-                
-                def update_pm():
-                    query = Metric.select().where(Metric.collector == plugin.name).order_by(Metric.timestamp.desc()).limit(15)
-                    p_metric_table.rows[:] = [m.__data__ for m in query]
-                ui.timer(5.0, update_pm)
-
-            # Monitor Logs/Events
-            with ui.card().classes('p-4'):
-                ui.label('Recent Logs').classes('font-bold mb-2')
-                p_event_table = ui.table(columns=[
-                    {'name': 'ts', 'label': 'Time', 'field': 'timestamp'},
-                    {'name': 'lvl', 'label': 'Level', 'field': 'level'},
-                    {'name': 'msg', 'label': 'Message', 'field': 'message'},
-                ], rows=[]).classes('w-full')
-
-                def update_pe():
-                    # Search for logs prefixed with the plugin name or matching target
-                    query = Event.select().where(
-                        (Event.target == info['target']) & (Event.message.contains(f"[{plugin.name}]"))
-                    ).order_by(Event.timestamp.desc()).limit(15)
-                    p_event_table.rows[:] = [e.__data__ for e in query]
-                ui.timer(5.0, update_pe)
+        # Delegate specific UI rendering to the plugin instance
+        plugin.render_ui()
 
     # Initial render
     render_main()

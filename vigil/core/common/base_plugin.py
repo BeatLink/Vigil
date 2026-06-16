@@ -11,8 +11,10 @@ class BasePlugin(ABC):
     """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         self.name = name
+        self.id = config.get('id', name)  # Unique identifier for the tree
         self.config = config
         self.interval = config.get('interval', 60)
+        self.children: List['BasePlugin'] = []
 
         # Initialize SSH infrastructure via the common library
         # The settings are passed down to allow the library to handle its own setup
@@ -54,3 +56,39 @@ class BasePlugin(ABC):
     async def run_cycle(self):
         """Main execution entry point for the plugin's polling interval."""
         await self.on_collect()
+
+    def render_ui(self):
+        """Default UI implementation showing metrics and events. Override this in subclasses."""
+        from nicegui import ui
+        from vigil.core.data.database import Metric, Event
+
+        with ui.grid(columns=2).classes('w-full gap-4'):
+            # Monitor Metrics
+            with ui.card().classes('p-4 shadow-sm'):
+                ui.label('Monitor Metrics').classes('font-bold mb-2 text-primary')
+                p_metric_table = ui.table(columns=[
+                    {'name': 'ts', 'label': 'Time', 'field': 'timestamp'},
+                    {'name': 'name', 'label': 'Metric', 'field': 'metric_name'},
+                    {'name': 'val', 'label': 'Value', 'field': 'value'},
+                ], rows=[]).classes('w-full border-none')
+                
+                def update_pm():
+                    query = Metric.select().where(Metric.collector == self.name).order_by(Metric.timestamp.desc()).limit(15)
+                    p_metric_table.rows[:] = [m.__data__ for m in query]
+                ui.timer(5.0, update_pm)
+
+            # Monitor Logs/Events
+            with ui.card().classes('p-4 shadow-sm'):
+                ui.label('Recent Logs').classes('font-bold mb-2 text-primary')
+                p_event_table = ui.table(columns=[
+                    {'name': 'ts', 'label': 'Time', 'field': 'timestamp'},
+                    {'name': 'lvl', 'label': 'Level', 'field': 'level'},
+                    {'name': 'msg', 'label': 'Message', 'field': 'message'},
+                ], rows=[]).classes('w-full border-none')
+
+                def update_pe():
+                    query = Event.select().where(
+                        (Event.target == self.target) & (Event.message.contains(f"[{self.name}]"))
+                    ).order_by(Event.timestamp.desc()).limit(15)
+                    p_event_table.rows[:] = [e.__data__ for e in query]
+                ui.timer(5.0, update_pe)
