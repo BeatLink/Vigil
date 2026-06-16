@@ -30,13 +30,14 @@ Vigil is a Python-based, pull-based monitoring system. It aims to be the "Swiss 
 - [ ] Ping/ICMP module.
 - [ ] Basic Alerting (Email, Slack, or Webhook).
 - [ ] Control module for service remediation.
-- [ ] Web Dashboard for real-time visualization.
+- [X] Web Dashboard for real-time visualization (NiceGUI).
 
 ## Instructions for AI Agents
 
 When adding new features, follow the functional directory structure:
 
 - `vigil/core/database/`: Database package with `models.py` (schemas) and `manager.py` (logic).
+- `vigil/gui/`: Web-based user interface logic.
 - `vigil/modules/collectors/`: Data acquisition logic.
 - `vigil/modules/alerting/`: Notification and threshold logic.
 - `vigil/modules/control/`: Remote execution and remediation logic.
