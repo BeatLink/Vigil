@@ -56,8 +56,8 @@ class VigilEngine:
                 'collectors': {'ssh': SSHCollector(ssh_conn)},
                 'controllers': {'ssh': SSHController(ssh_conn)},
                 'loggers': {
-                    'db_logs': InternalDatabaseLogger(self.db, target, name),
-                    'db_metrics': InternalDatabaseLogger(self.db, target, name)
+                    'db_logs': self.db.get_logger(target, name),
+                    'db_metrics': self.db.get_logger(target, name)
                 }
             }
 
