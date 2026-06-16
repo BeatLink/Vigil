@@ -31,9 +31,9 @@ class VigilConfig:
         return self.data.get('database', {'path': 'vigil.db'})
 
     @property
-    def collectors(self) -> List[Dict[str, Any]]:
-        """Returns the list of collector configurations."""
-        return self.data.get('collectors', [])
+    def plugins(self) -> List[Dict[str, Any]]:
+        """Returns the list of plugin configurations."""
+        return self.data.get('plugins', [])
 
     @property
     def alert_handlers(self) -> List[Dict[str, Any]]:
