@@ -1,5 +1,5 @@
 import logging
-from nicegui import ui
+from nicegui import app, ui
 from vigil.core.database.manager import VigilDatabase
 from vigil.core.database.models import Metric, Event
 
@@ -13,7 +13,7 @@ def init_gui(db_path: str, port: int = 8080, engine_run_func=None):
 
     # If an engine loop is provided, schedule it in the background
     if engine_run_func:
-        ui.on_startup(engine_run_func)
+        app.on_startup(engine_run_func)
 
     ui.query('body').style('background-color: #f8f9fa')
 
@@ -68,4 +68,4 @@ def init_gui(db_path: str, port: int = 8080, engine_run_func=None):
             ui.timer(5.0, refresh_events)
 
     # Run the NiceGUI app
-    ui.run(title='Vigil Dashboard', port=port, reload=False)
+    ui.run(title='Vigil Dashboard', port=port, reload=False, show=False)
