@@ -39,9 +39,17 @@
                 };
 
                 vigil-run = pkgs.writeShellScriptBin "vigil-run" ''
-                    export PYTHONPATH="$PYTHONPATH:$(pwd)"
+                    # Find project root (where pyproject.toml is)
+                    VIGIL_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+                    while [ "$VIGIL_ROOT" != "/" ] && [ ! -f "$VIGIL_ROOT/pyproject.toml" ]; do
+                        VIGIL_ROOT=$(dirname "$VIGIL_ROOT")
+                    done
+
+                    export PYTHONPATH="$VIGIL_ROOT:$PYTHONPATH"
                     echo "Starting Vigil on http://localhost:8080"
-                    exec python3 vigil/core/main.py --config config.yaml --port 8080 "$@"
+
+                    # Use module execution to handle absolute imports correctly
+                    exec python3 -m vigil --config "$VIGIL_ROOT/config.yaml" --port 8080 "$@"
                 '';
             in
             {
@@ -68,7 +76,10 @@
                     ];
 
                     shellHook = ''
-                        export PYTHONPATH="$PYTHONPATH:$(pwd)"
+                        # Identify project root and set PYTHONPATH
+                        VIGIL_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)
+                        export PYTHONPATH="$VIGIL_ROOT:$PYTHONPATH"
+
                         echo "Vigil development environment loaded."
                         echo "Python: $(python3 --version)"
                         echo ""

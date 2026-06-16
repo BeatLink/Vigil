@@ -3,11 +3,10 @@ import logging
 import importlib
 import inspect
 import sys
-from typing import List
+from typing import List, Optional
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.config_file import ConfigFileManager as VigilConfig
 from vigil.core.data.database import DatabaseManager as VigilDatabase
-from vigil.core.ui.main_dashboard import init_gui
 # Note: The following modules are referenced but not present in the current context
 from vigil.core.common.ssh_connector import SSHConnection
 from vigil.core.modules.collectors.ssh_collector import SSHCollector
@@ -15,7 +14,7 @@ from vigil.core.modules.controllers.ssh_controller import SSHController
 from peewee import OperationalError
 
 class VigilEngine:
-    def __init__(self, config_path, db_path_override=None):
+    def __init__(self, config_path: str, db_path_override: Optional[str] = None):
         self.config_loader = VigilConfig(config_path)
         self.config = self.config_loader.data
         self.plugins: List[BasePlugin] = []
@@ -95,22 +94,3 @@ class VigilEngine:
                 logging.info(f"Processed {len(results)} collection tasks.")
             else:
                 logging.debug("No plugins configured.")
-
-            await asyncio.sleep(60)
-
-def main():
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Vigil Monitoring System")
-    parser.add_argument("--config", default="config.yaml", help="Path to config file")
-    parser.add_argument("--db", help="Path to the SQLite database file (overrides config)")
-    parser.add_argument("--port", type=int, default=8080, help="Port for the web dashboard / GUI")
-    args = parser.parse_args()
-
-    logging.basicConfig(level=logging.INFO)
-    engine = VigilEngine(args.config, db_path_override=args.db)
-    
-    init_gui(db_path=engine.db_path, port=args.port, engine_run_func=engine.run)
-
-if __name__ == "__main__":
-    main()
