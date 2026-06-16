@@ -133,7 +133,6 @@ def init_gui(engine: Any, port: int = 8080):
         with ui.row().classes('w-full items-center justify-between mb-6'):
             with ui.column():
                 ui.label(info['name']).classes('text-3xl font-bold')
-                ui.label(f"Target Host: {info['target']}").classes('text-gray-500 italic')
             
             with ui.row():
                 for action in info.get('actions', []):
