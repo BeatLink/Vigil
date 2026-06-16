@@ -53,7 +53,6 @@ class VigilEngine:
     async def run(self):
         logging.info("Vigil Engine started...")
         self.db.insert_event("INFO", "Vigil Engine started polling loop.", "vigil_core")
-        self.setup_modules()
         
         while True:
             tasks = []

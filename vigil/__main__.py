@@ -14,8 +14,9 @@ def main():
     logging.basicConfig(level=logging.INFO)
     
     engine = VigilEngine(args.config, db_path_override=args.db)
+    engine.setup_modules()
     
-    init_gui(db_path=engine.db_path, port=args.port, engine_run_func=engine.run)
+    init_gui(engine=engine, port=args.port)
 
 if __name__ == "__main__":
     main()
