@@ -22,6 +22,7 @@ Vigil is a Python-based, pull-based monitoring system. It aims to be the "Swiss 
 6. **Hybrid Config**: Use YAML for infrastructure definitions (Source of Truth) and SQLite for runtime state/overrides.
 
 ## Roadmap
+
 - [X] Core engine implementation with YAML config loader.
 - [X] Core Database utility (SQLite).
 - [X] Core SSH utility for remote access.
@@ -35,8 +36,10 @@ Vigil is a Python-based, pull-based monitoring system. It aims to be the "Swiss 
 ## Instructions for AI Agents
 
 When adding new features, follow the domain-based directory structure:
-- `vigil/modules/<domain>/`: Contains the `Plugin` class inheriting from `BasePlugin`.
+
+- `vigil/plugins/<domain>/`: Contains the `Plugin` class inheriting from `BasePlugin`.
 
 Internal components for plugin developers are available in:
-- `vigil/core/collectors/`: Generic collection helpers (e.g., SSHCollector).
-- `vigil/core/controllers/`: Generic control/execution helpers (e.g., SSHController).
+
+- `vigil/core/modules/collectors/`: Generic collection helpers (e.g., SSHCollector).
+- `vigil/core/modules/controllers/`: Generic control/execution helpers (e.g., SSHController).
