@@ -3,7 +3,7 @@
 }:
 
 let
-    pythonEnv = pkgs.python3.withPackages (
+    pythonEnv = pkgs.python312.withPackages (
         ps: with ps; [
             paramiko
             requests
