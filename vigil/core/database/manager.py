@@ -37,13 +37,12 @@ class VigilDatabase:
             Event.create(level=level, message=message, target=target)
             logging.debug(f"Inserted event: {level} - {message}")
 
-    def get_setting(self, key: str) -> Optional[str]:
-         """Retrieves a runtime setting from the database."""
+    def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
+        """Retrieves a runtime setting from the database."""
         with db.connection_context():
             try:
                 return Setting.get(Setting.key == key).value
             except DoesNotExist:
-                return None
                 return default
 
     def set_setting(self, key: str, value: str):
