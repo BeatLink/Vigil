@@ -100,11 +100,11 @@ def init_gui(engine: Any, port: int = 8080):
         with ui.card().classes('w-full p-4 mb-6'):
             ui.label('Recent System Metrics').classes('text-lg font-bold mb-2')
             metric_columns = [
-                {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp'},
-                {'name': 'target', 'label': 'Host', 'field': 'target'},
-                {'name': 'collector', 'label': 'Plugin', 'field': 'collector'},
-                {'name': 'metric_name', 'label': 'Metric', 'field': 'metric_name'},
-                {'name': 'value', 'label': 'Value', 'field': 'value'},
+                {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
+                {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
+                {'name': 'collector', 'label': 'Plugin', 'field': 'collector', 'align': 'left'},
+                {'name': 'metric_name', 'label': 'Metric', 'field': 'metric_name', 'align': 'left'},
+                {'name': 'value', 'label': 'Value', 'field': 'value', 'align': 'left'},
             ]
             m_table = ui.table(columns=metric_columns, rows=[]).classes('w-full')
             
@@ -116,10 +116,10 @@ def init_gui(engine: Any, port: int = 8080):
         with ui.card().classes('w-full p-4'):
             ui.label('Recent Events').classes('text-lg font-bold mb-2')
             event_columns = [
-                {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp'},
-                {'name': 'level', 'label': 'Level', 'field': 'level'},
-                {'name': 'target', 'label': 'Host', 'field': 'target'},
-                {'name': 'message', 'label': 'Message', 'field': 'message'},
+                {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
+                {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left'},
+                {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
+                {'name': 'message', 'label': 'Message', 'field': 'message', 'align': 'left'},
             ]
             e_table = ui.table(columns=event_columns, rows=[]).classes('w-full')
             

@@ -72,9 +72,9 @@ class BasePlugin(ABC):
             with ui.card().classes('p-4 shadow-sm'):
                 ui.label('Monitor Metrics').classes('font-bold mb-2 text-primary')
                 p_metric_table = ui.table(columns=[
-                    {'name': 'ts', 'label': 'Time', 'field': 'timestamp'},
-                    {'name': 'name', 'label': 'Metric', 'field': 'metric_name'},
-                    {'name': 'val', 'label': 'Value', 'field': 'value'},
+                    {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
+                    {'name': 'name', 'label': 'Metric', 'field': 'metric_name', 'align': 'left'},
+                    {'name': 'val', 'label': 'Value', 'field': 'value', 'align': 'left'},
                 ], rows=[]).classes('w-full border-none')
                 
                 def update_pm():
@@ -86,9 +86,9 @@ class BasePlugin(ABC):
             with ui.card().classes('p-4 shadow-sm'):
                 ui.label('Recent Logs').classes('font-bold mb-2 text-primary')
                 p_event_table = ui.table(columns=[
-                    {'name': 'ts', 'label': 'Time', 'field': 'timestamp'},
-                    {'name': 'lvl', 'label': 'Level', 'field': 'level'},
-                    {'name': 'msg', 'label': 'Message', 'field': 'message'},
+                    {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
+                    {'name': 'lvl', 'label': 'Level', 'field': 'level', 'align': 'left'},
+                    {'name': 'msg', 'label': 'Message', 'field': 'message', 'align': 'left'},
                 ], rows=[]).classes('w-full border-none')
 
                 def update_pe():
