@@ -3,7 +3,7 @@ import logging
 import importlib
 import inspect
 import sys
-from typing import List, Optional
+from typing import List, Optional, Dict
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.config_file import ConfigFileManager as VigilConfig
 from vigil.core.data.database import DatabaseManager as VigilDatabase
@@ -68,9 +68,18 @@ class VigilEngine:
         self.db.insert_event("INFO", "Vigil Engine started polling loop.", "vigil_core")
         
         while True:
-            tasks = []
-            for plugin in self.plugins:
-                tasks.append(plugin.run_cycle())
+            # Recursively collect all plugins to be polled
+            all_pollable = []
+            
+            def collect_recursive(plugins):
+                for p in plugins:
+                    # Only poll plugins that aren't just groups/containers
+                    if p.config.get('type') != 'group':
+                        all_pollable.append(p)
+                    collect_recursive(p.children)
+            
+            collect_recursive(self.plugins)
+            tasks = [p.run_cycle() for p in all_pollable]
             
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)

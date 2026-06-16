@@ -45,7 +45,8 @@ def init_gui(engine: Any, port: int = 8080):
                             render_sidebar_tree(plugin.children, level + 1)
                             # Groups can also be clicked to see their summary
                             with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable dense').classes('ml-4'):
-                                ui.item_section().label('Group Dashboard').classes('text-xs italic')
+                                with ui.item_section():
+                                    ui.label('Group Dashboard').classes('text-xs italic')
                     else:
                         with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable').classes(f'ml-{level*2}'):
                             with ui.item_section().props('avatar'):
