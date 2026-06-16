@@ -10,16 +10,16 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {file = "LICENSE"}
 dependencies = [
-    "paramiko==3.4.0",
-    "requests==2.31.0",
-    "PyYAML==6.0.1",
-    "peewee==3.17.1",
-    "nicegui==1.4.12",
+    "paramiko>=3.4.0",
+    "requests>=2.31.0",
+    "PyYAML>=6.0.1",
+    "peewee>=3.17.1",
+    "nicegui>=1.4.12",
 ]
 
 [project.scripts]
 vigil = "vigil.core.engine:main"
-vigil-gui = "vigil.gui.app:main"
+vigil-gui = "vigil.core.gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
