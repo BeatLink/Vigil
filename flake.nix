@@ -48,11 +48,6 @@
                     program = "${vigil-pkg}/bin/vigil";
                 };
 
-                apps.vigil-gui = {
-                    type = "app";
-                    program = "${vigil-pkg}/bin/vigil-gui";
-                };
-
                 apps.default = self.apps.${system}.vigil;
 
                 devShells.default = pkgs.mkShell {

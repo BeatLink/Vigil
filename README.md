@@ -44,13 +44,12 @@ pip install .
 ### Quick Start
 
 1. **Configure**: Define your targets and collectors in `config.yaml`.
-2. **Monitor**: Start the collection engine: `vigil --config config.yaml`
-3. **Visualize**: Launch the dashboard: `vigil-gui`
+2. **Run**: Start the system: `vigil --config config.yaml`
+3. **Access**: Open your browser to `http://localhost:8080`.
 
 ## Usage
 
-### Monitoring Engine
-The core engine handles the polling logic and data storage. It requires a configuration file to define targets and intervals.
+The `vigil` command starts both the monitoring engine and the web dashboard.
 
 ```bash
 vigil --config config.yaml

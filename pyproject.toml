@@ -19,7 +19,6 @@ dependencies = [
 
 [project.scripts]
 vigil = "vigil.core.engine:main"
-vigil-gui = "vigil.core.engine:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
