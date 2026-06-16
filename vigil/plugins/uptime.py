@@ -38,6 +38,7 @@ class UptimePlugin(BasePlugin):
                 output = stdout.decode()
                 self.db_logger.write(f"Host {host} is reachable.", level="INFO")
                 self.db_metrics.metric("up", 1.0)
+                self.set_status('success')
                 
                 # Attempt to extract latency from output (e.g., "time=12.3 ms")
                 latency_match = re.search(r'time=([\d.]+)\s*ms', output)
@@ -48,11 +49,13 @@ class UptimePlugin(BasePlugin):
                 err_msg = stderr.decode().strip() or "Request timed out"
                 self.db_logger.write(f"Host {host} is unreachable: {err_msg}", level="ERROR")
                 self.db_metrics.metric("up", 0.0)
+                self.set_status('fail')
 
         except Exception as e:
             logging.error(f"Uptime plugin error for {host}: {e}")
             self.db_logger.write(f"Ping execution failed: {str(e)}", level="ERROR")
             self.db_metrics.metric("up", 0.0)
+            self.set_status('fail')
 
     async def on_action(self, action_id: str, **kwargs) -> bool:
         """Basic uptime monitoring does not currently support remediation actions."""

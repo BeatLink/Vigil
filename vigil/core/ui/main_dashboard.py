@@ -1,6 +1,6 @@
 import logging
 from nicegui import app, ui
-from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event
+from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory
 from typing import Any, Dict, Optional
 
 def init_gui(engine: Any, port: int = 8080):
@@ -34,6 +34,13 @@ def init_gui(engine: Any, port: int = 8080):
         with ui.list().classes('w-full mt-4'):
             ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable').classes('text-lg font-semibold border-b')
             ui.item_label('MONITORS').classes('text-xs text-gray-500 mt-4 px-4')
+            
+            COLOR_MAP = {
+                'success': '#22c55e',
+                'warning': '#f59e0b',
+                'fail': '#ef4444',
+                'inactive': '#94a3b8'
+            }
 
             def render_sidebar_tree(plugins, level=0):
                 for plugin in plugins:
@@ -51,6 +58,20 @@ def init_gui(engine: Any, port: int = 8080):
                         with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable').classes(f'ml-{level*2}'):
                             with ui.item_section().props('avatar'):
                                 ui.icon('sensors', color='green' if info.get('actions') else 'blue', size='sm')
+                            
+                            # Status dots
+                            with ui.item_section():
+                                with ui.row().classes('gap-1 items-center no-wrap overflow-hidden'):
+                                    def get_dots(pid=plugin.id):
+                                        history = StatusHistory.select().where(StatusHistory.collector_id == pid).order_by(StatusHistory.timestamp.desc()).limit(15)
+                                        return reversed([h.state for h in history])
+                                    
+                                    states = list(get_dots())
+                                    for state in states:
+                                        ui.label().classes('w-2 h-2 rounded-full').style(f'background-color: {COLOR_MAP.get(state, "#ccc")}')
+                                    if not states:
+                                        ui.label('No data').classes('text-[10px] text-gray-400')
+
                             with ui.item_section():
                                 ui.item_label(info['name']).classes('text-sm')
             

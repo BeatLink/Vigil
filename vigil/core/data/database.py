@@ -32,6 +32,11 @@ class Setting(BaseModel):
     key = CharField(primary_key=True)
     value = TextField()
 
+class StatusHistory(BaseModel):
+    """Model for tracking the historical state of monitors."""
+    timestamp = DateTimeField(default=datetime.now, index=True)
+    collector_id = CharField(index=True)
+    state = CharField()  # 'success', 'warning', 'fail', 'inactive'
 
 # DATABASE HELPERS ##################################################################################################################################
 class InternalDatabaseLogger:
@@ -63,7 +68,7 @@ class DatabaseManager:
         try:
             db.init(self.db_path)
             db.connect()
-            db.create_tables([Metric, Event, Setting])
+            db.create_tables([Metric, Event, Setting, StatusHistory])
             logging.info(f"Database initialized and connected at {self.db_path}")
         except OperationalError as e:
             logging.error(f"Failed to connect or initialize database at {self.db_path}: {e}")
@@ -77,6 +82,12 @@ class DatabaseManager:
         with db.connection_context():
             Metric.create(target=target, collector=collector, metric_name=metric_name, value=value, metadata=metadata)
             logging.debug(f"Inserted metric: {metric_name}={value} for {target}")
+
+    def insert_status(self, collector_id: str, state: str):
+        """Inserts a new status history record."""
+        with db.connection_context():
+            StatusHistory.create(collector_id=collector_id, state=state)
+            logging.debug(f"Recorded status for {collector_id}: {state}")
 
     def insert_event(self, level: str, message: str, target: Optional[str] = None):
         """Inserts a new event record."""

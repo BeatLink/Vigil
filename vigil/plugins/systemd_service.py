@@ -30,8 +30,10 @@ class SystemdPlugin(BasePlugin):
                 if any(k in line.upper() for k in ["ERROR", "FAIL", "CRITICAL"]):
                     level = "ERROR"
                 self.db_logger.write(line, level=level)
+            self.set_status('success')
         else:
             self.db_logger.write(f"Collection failed: {stderr}", level="ERROR")
+            self.set_status('fail')
 
     def get_actions(self) -> List[Dict[str, str]]:
         """Exposes available actions to the engine/UI."""

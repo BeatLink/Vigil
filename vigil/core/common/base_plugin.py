@@ -15,6 +15,7 @@ class BasePlugin(ABC):
         self.config = config
         self.interval = config.get('interval', 60)
         self.children: List['BasePlugin'] = []
+        self.db = db
 
         # Initialize SSH infrastructure via the common library
         # The settings are passed down to allow the library to handle its own setup
@@ -30,6 +31,10 @@ class BasePlugin(ABC):
                 'db_metrics': db.get_logger(self.target, self.name)
             }
         }
+
+    def set_status(self, state: str):
+        """Sets the current state of the plugin (success, warning, fail, inactive)."""
+        self.db.insert_status(self.id, state)
 
     @abstractmethod
     async def on_collect(self):
