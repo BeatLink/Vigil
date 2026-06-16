@@ -13,8 +13,4 @@ plugins:
     service_name: "bluetooth.service"
     lines: 20
     ssh_config:
-      target_host: "localhost" # Should be the only mandatory field for ssh collector and controller. 
-      #username: "monitor"  # if username is omitted run ssh command without user e.g. ssh localhost instead of ssh user@localhost 
-      #key_path: "~/.ssh/id_rsa"  # if not specified, assume system keys
-      # password: "securepassword" # Alternatively use password auth # if ommitted, assume passwordless login
-      #port: 22 # if ommitted assume default port
+      host: "localhost"

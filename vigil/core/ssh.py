@@ -7,12 +7,12 @@ class SSHConnection:
     A core utility for managing SSH connections to remote nodes.
     Supports both command execution and metric retrieval.
     """
-    def __init__(self, host: str, username: str, key_path: Optional[str] = None, password: Optional[str] = None, port: int = 22):
+    def __init__(self, host: str, username: Optional[str] = None, key_path: Optional[str] = None, password: Optional[str] = None, port: Optional[int] = 22):
         self.host = host
         self.username = username
         self.key_path = key_path
         self.password = password
-        self.port = port
+        self.port = port if port is not None else 22
         self.client = None
 
     def connect(self):
