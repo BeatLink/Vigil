@@ -86,9 +86,8 @@ class VigilEngine:
                 # Handle potential exceptions from gathered tasks
                 for res in results:
                     if isinstance(res, Exception):
-                        # If we had a direct mapping to the plugin here, we could set_status('fail')
                         logging.error(f"Plugin execution error: {res}")
-                logging.info(f"Processed {len(results)} collection tasks.")
+                logging.info(f"Engine Cycle: Processed {len(results)} monitors.")
             else:
                 logging.debug("No plugins configured.")
             

@@ -34,57 +34,49 @@ def init_gui(engine: Any, port: int = 8080):
         with ui.list().classes('w-full').props('dense'):
             ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b')
             ui.item_label('MONITORS').classes('text-xs text-gray-500 mt-2 px-4')
-            
-            COLOR_MAP = {
-                'success': '#22c55e',
-                'warning': '#f59e0b',
-                'fail': '#ef4444',
-                'inactive': '#94a3b8'
-            }
 
-            def render_sidebar_tree(plugins, level=0):
-                for plugin in plugins:
-                    info = plugin.present()
-                    is_group = plugin.config.get('type') == 'group'
-                    
-                    if is_group:
-                        # Restored standard expansion header and moved dots to a description column
-                        with ui.expansion().classes('w-full').props(f'expand-icon-toggle dense header-class="font-medium ml-{level*2}"') as exp:
-                            with exp.add_slot('header'):
-                                with ui.column().classes('w-full cursor-pointer justify-center').on('click', lambda p=plugin: switch_view('plugin', p)):
-                                    ui.label(info['name']).classes('text-left truncate')
-                                    # Status dots for the group aggregated history in the "description"
-                                    with ui.row().classes('gap-1 items-center no-wrap mt-1'):
-                                        def get_dots_for_group(pid=plugin.id):
-                                            history = StatusHistory.select().where(StatusHistory.collector_id == pid).order_by(StatusHistory.timestamp.desc()).limit(15)
-                                            return reversed([h.state for h in history])
-                                        
-                                        states = list(get_dots_for_group())
-                                        for state in states:
-                                            ui.label().classes('w-2 h-2 rounded-full').style(f'background-color: {COLOR_MAP.get(state, "#ccc")}')
-                                        if not states:
-                                            ui.label('No data').classes('text-[10px] text-gray-400')
-                            
-                            render_sidebar_tree(plugin.children, level + 1)
-                    else:
-                        # Restored standard item title and moved dots to the caption (description) section
-                        with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable dense').classes(f'ml-{level*2} no-wrap'):
-                            with ui.item_section():
-                                ui.item_label(info['name']).classes('text-sm text-left truncate')
-                                
-                                with ui.item_label().props('caption'):
-                                    with ui.row().classes('gap-1 items-center no-wrap mt-1'):
-                                        def get_dots(pid=plugin.id):
-                                            history = StatusHistory.select().where(StatusHistory.collector_id == pid).order_by(StatusHistory.timestamp.desc()).limit(15)
-                                            return reversed([h.state for h in history])
-                                        
-                                        states = list(get_dots())
-                                        for state in states:
-                                            ui.label().classes('w-2 h-2 rounded-full').style(f'background-color: {COLOR_MAP.get(state, "#ccc")}')
-                                        if not states:
-                                            ui.label('No data').classes('text-[10px] text-gray-400')
-            
-            render_sidebar_tree(engine.plugins)
+        COLOR_MAP = {
+            'success': '#22c55e',
+            'warning': '#f59e0b',
+            'fail': '#ef4444',
+            'inactive': '#94a3b8'
+        }
+
+        def build_tree_nodes(plugins):
+            """Recursive helper to build data structure for ui.tree."""
+            with StatusHistory._meta.database.connection_context():
+                nodes = []
+                for p in plugins:
+                    node = {
+                        'id': p.id,
+                        'label': p.name,
+                    }
+                    if p.children:
+                        node['children'] = build_tree_nodes(p.children)
+                    nodes.append(node)
+                return nodes
+
+        def find_plugin_by_id(plugins, target_id):
+            """Helper to locate a plugin instance by its unique ID."""
+            for p in plugins:
+                if p.id == target_id:
+                    return p
+                found = find_plugin_by_id(p.children, target_id)
+                if found:
+                    return found
+            return None
+
+        def handle_select(e):
+            if e.value:
+                target_plugin = find_plugin_by_id(engine.plugins, e.value)
+                if target_plugin:
+                    switch_view('plugin', target_plugin)
+
+        # Initialize the built-in tree component
+        tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).props('dense no-connectors')
+        
+        # Periodically refresh tree data (dots and nodes)
+        ui.timer(5.0, lambda: setattr(tree, 'nodes', build_tree_nodes(engine.plugins)))
 
     main_container = ui.column().classes('w-full p-6 bg-transparent')
 

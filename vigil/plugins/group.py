@@ -32,36 +32,37 @@ class GroupPlugin(BasePlugin):
         """
         Recursively determines the most severe status among all direct and nested children.
         """
-        current_max_severity = SEVERITY_ORDER['success'] # Start with the least severe
+        with StatusHistory._meta.database.connection_context():
+            current_max_severity = SEVERITY_ORDER['success'] # Start with the least severe
 
-        # Helper to get the latest status for a given plugin ID
-        def get_latest_status(plugin_id: str) -> str:
-            latest_status_record = StatusHistory.select(StatusHistory.state).where(
-                StatusHistory.collector_id == plugin_id
-            ).order_by(StatusHistory.timestamp.desc()).first()
-            return latest_status_record.state if latest_status_record else 'inactive' # Default to inactive if no status yet
+            # Helper to get the latest status for a given plugin ID
+            def get_latest_status(plugin_id: str) -> str:
+                latest_status_record = StatusHistory.select(StatusHistory.state).where(
+                    StatusHistory.collector_id == plugin_id
+                ).order_by(StatusHistory.timestamp.desc()).first()
+                return latest_status_record.state if latest_status_record else 'inactive' # Default to inactive if no status yet
 
-        # Iterate through all children (and their children recursively)
-        def check_children_status(plugins_list: List[BasePlugin]):
-            nonlocal current_max_severity
-            for child in plugins_list:
-                if child.config.get('type') == 'group':
-                    # Recursively check nested groups
-                    check_children_status(child.children)
-                else:
-                    # Get the latest status for non-group children
-                    child_status = get_latest_status(child.id)
-                    child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['inactive'])
-                    if child_severity > current_max_severity:
-                        current_max_severity = child_severity
+            # Iterate through all children (and their children recursively)
+            def check_children_status(plugins_list: List[BasePlugin]):
+                nonlocal current_max_severity
+                for child in plugins_list:
+                    if child.config.get('type') == 'group':
+                        # Recursively check nested groups
+                        check_children_status(child.children)
+                    else:
+                        # Get the latest status for non-group children
+                        child_status = get_latest_status(child.id)
+                        child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['inactive'])
+                        if child_severity > current_max_severity:
+                            current_max_severity = child_severity
 
-        check_children_status(self.children)
+            check_children_status(self.children)
 
-        # Convert the max severity back to a status string
-        for status, severity in SEVERITY_ORDER.items():
-            if severity == current_max_severity:
-                return status
-        return 'inactive' # Fallback
+            # Convert the max severity back to a status string
+            for status, severity in SEVERITY_ORDER.items():
+                if severity == current_max_severity:
+                    return status
+            return 'inactive' # Fallback
 
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
