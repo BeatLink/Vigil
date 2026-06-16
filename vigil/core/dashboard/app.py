@@ -1,4 +1,3 @@
-import argparse
 import logging
 from nicegui import ui
 from vigil.core.database.manager import VigilDatabase
@@ -70,15 +69,3 @@ def init_gui(db_path: str, port: int = 8080, engine_run_func=None):
 
     # Run the NiceGUI app
     ui.run(title='Vigil Dashboard', port=port, reload=False)
-
-def main():
-    parser = argparse.ArgumentParser(description="Vigil Web Dashboard")
-    parser.add_argument("--db", default="vigil.db", help="Path to the SQLite database file")
-    parser.add_argument("--port", type=int, default=8080, help="Port to run the dashboard on")
-    args = parser.parse_args()
-    
-    init_gui(args.db, args.port)
-
-if __name__ in {"__main__", "gui"}:
-    logging.basicConfig(level=logging.INFO)
-    main()
