@@ -92,7 +92,7 @@ class DatabaseManager:
     def insert_event(self, level: str, message: str, target: Optional[str] = None):
         """Inserts a new event record."""
         with db.connection_context():
-            Event.create(level=level, message=message, target=target)
+            Event.create(level=level, message=message, target=target) # Ensure target is passed
             logging.debug(f"Inserted event: {level} - {message}")
 
     def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:

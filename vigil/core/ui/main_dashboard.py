@@ -52,9 +52,19 @@ def init_gui(engine: Any, port: int = 8080):
                         with ui.expansion().classes('w-full').props(f'expand-icon-toggle dense header-class="font-medium ml-{level*2} h-9 p-0"') as exp:
                             with exp.add_slot('header'):
                                 with ui.row().classes('items-center w-full h-full cursor-pointer').on('click', lambda p=plugin: switch_view('plugin', p)):
-                                    with ui.grid(columns='160px 1fr').classes('w-full items-center no-wrap gap-2'):
+                                    with ui.grid(columns='160px 1fr').classes('w-full items-center no-wrap gap-2 px-4'):
                                         ui.label(info['name']).classes('text-left truncate')
-                                        ui.label('') # Second column remains empty for group headers
+                                        # Status dots for the group itself
+                                        with ui.row().classes('gap-1 items-center no-wrap justify-start'):
+                                            def get_dots_for_group(pid=plugin.id):
+                                                history = StatusHistory.select().where(StatusHistory.collector_id == pid).order_by(StatusHistory.timestamp.desc()).limit(15)
+                                                return reversed([h.state for h in history])
+                                            
+                                            states = list(get_dots_for_group())
+                                            for state in states:
+                                                ui.label().classes('w-2 h-2 rounded-full').style(f'background-color: {COLOR_MAP.get(state, "#ccc")}')
+                                            if not states:
+                                                ui.label('No data').classes('text-[10px] text-gray-400')
                             
                             render_sidebar_tree(plugin.children, level + 1)
                     else:

@@ -73,9 +73,9 @@ class VigilEngine:
             
             def collect_recursive(plugins):
                 for p in plugins:
-                    # Only poll plugins that aren't just groups/containers
-                    if p.config.get('type') != 'group':
-                        all_pollable.append(p)
+                    # All plugins (including groups) should have their on_collect called
+                    # GroupPlugin's on_collect will perform aggregation
+                    all_pollable.append(p) 
                     collect_recursive(p.children)
             
             collect_recursive(self.plugins)

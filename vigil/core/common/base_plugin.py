@@ -67,7 +67,6 @@ class BasePlugin(ABC):
         from nicegui import ui
         from vigil.core.data.database import Metric, Event
 
-        ui.label(f"Target Host: {self.target}").classes('text-gray-500 italic mb-4')
         with ui.grid(columns=2).classes('w-full gap-4'):
             # Monitor Metrics
             with ui.card().classes('p-4 shadow-sm'):
