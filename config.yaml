@@ -20,3 +20,21 @@ plugins:
     type: "uptime"
     target_host: "8.8.8.8"
     interval: 30
+
+  - name: "Heimdall Services"
+    type: "group"
+    children:
+      - name: "Unbound"
+        id: "heimdall-unbound"
+        type: "systemd_service"
+        interval: 60
+        service_name: "unbound.service"
+        ssh_config:
+          host: "heimdall.technet"
+      - name: "VLC"
+        id: "heimdall-vlc"
+        type: "systemd_service"
+        interval: 60
+        service_name: "vlc-audio.service"
+        ssh_config:
+          host: "heimdall.technet"
