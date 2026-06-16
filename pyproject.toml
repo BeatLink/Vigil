@@ -14,10 +14,12 @@ dependencies = [
     "requests==2.31.0",
     "PyYAML==6.0.1",
     "peewee==3.17.1",
+    "nicegui==1.4.12",
 ]
 
 [project.scripts]
 vigil = "vigil.core.engine:main"
+vigil-gui = "vigil.gui.app:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
