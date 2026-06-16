@@ -6,13 +6,16 @@ database:
 
 # Domain-based Plugins
 plugins:
-  - name: "bluetooth"
-    type: "systemd_service"
-    interval: 60
-    service_name: "bluetooth.service"
-    lines: 20
-    ssh_config:
-      host: "localhost"
+  - name: "Local Infrastructure"
+    type: "group"
+    children:
+      - name: "bluetooth"
+        id: "local-bluetooth"
+        type: "systemd_service"
+        interval: 60
+        service_name: "bluetooth.service"
+        ssh_config:
+          host: "localhost"
   - name: "google-dns"
     type: "uptime"
     target_host: "8.8.8.8"

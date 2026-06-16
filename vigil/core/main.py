@@ -25,16 +25,17 @@ class VigilEngine:
             logging.critical(f"Failed to initialize database: {e}. Exiting.")
             sys.exit(1)
 
-    def setup_modules(self):
+    def setup_modules(self, plugins_cfg: Optional[List[Dict]] = None) -> List[BasePlugin]:
         """
         Dynamically instantiates plugins and injects internal modules.
+        Supports recursive loading for nested group structures.
         """
-        logging.info("Building plugin registry and injecting dependencies...")
-        
-        for plugin_cfg in self.config_loader.plugins:
+        current_level_plugins = []
+        target_cfg = plugins_cfg if plugins_cfg is not None else self.config_loader.plugins
+
+        for plugin_cfg in target_cfg:
             name = plugin_cfg.get('name')
             p_type = plugin_cfg.get('type')
-
             # Dynamically load the plugin class and inject dependencies
             try:
                 module_path = f"vigil.plugins.{p_type}"
@@ -44,11 +45,23 @@ class VigilEngine:
                 for _, obj in inspect.getmembers(module, inspect.isclass):
                     if issubclass(obj, BasePlugin) and obj is not BasePlugin:
                         plugin_instance = obj(name, plugin_cfg, self.db)
-                        self.plugins.append(plugin_instance)
+                        
+                        # Recursively setup children if they exist
+                        if 'children' in plugin_cfg:
+                            plugin_instance.children = self.setup_modules(plugin_cfg['children'])
+                        
+                        current_level_plugins.append(plugin_instance)
                         logging.info(f"Loaded plugin '{name}' of type '{p_type}'")
                         break
             except Exception as e:
                 logging.error(f"Failed to load plugin '{name}' ({p_type}): {e}")
+        
+        # If this is the root call, store the root-level plugins in the engine
+        if plugins_cfg is None:
+            self.plugins = current_level_plugins
+            logging.info(f"Plugin registry built with {len(self.plugins)} root-level monitors.")
+
+        return current_level_plugins
 
     async def run(self):
         logging.info("Vigil Engine started...")
