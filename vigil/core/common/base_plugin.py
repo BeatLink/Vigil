@@ -1,17 +1,33 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
+from vigil.core.common.ssh_connector import SSHConnection
+from vigil.core.modules.collectors.ssh_collector import SSHCollector
+from vigil.core.modules.controllers.ssh_controller import SSHController
 
 class BasePlugin(ABC):
     """
     Standardized base class for all Vigil plugins.
     Encapsulates collection, alerting, presentation, and control logic for a specific domain.
     """
-    def __init__(self, name: str, config: Dict[str, Any], internal_modules: Dict[str, Any]):
+    def __init__(self, name: str, config: Dict[str, Any], db: Any):
         self.name = name
         self.config = config
-        self.target = config.get('target_host', 'localhost')
         self.interval = config.get('interval', 60)
-        self.internal_modules = internal_modules
+
+        # Initialize SSH infrastructure via the common library
+        # The settings are passed down to allow the library to handle its own setup
+        self.ssh_conn = SSHConnection.from_config(config)
+        self.target = getattr(self.ssh_conn, 'host', config.get('target_host', 'localhost'))
+
+        # Build the internal modules registry for use by subclasses
+        self.internal_modules = {
+            'collectors': {'ssh': SSHCollector(self.ssh_conn)},
+            'controllers': {'ssh': SSHController(self.ssh_conn)},
+            'loggers': {
+                'db_logs': db.get_logger(self.target, self.name),
+                'db_metrics': db.get_logger(self.target, self.name)
+            }
+        }
 
     @abstractmethod
     async def on_collect(self):

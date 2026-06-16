@@ -7,8 +7,8 @@ class SystemdPlugin(BasePlugin):
     A unified plugin for Systemd. 
     Handles log collection, status monitoring, and service control.
     """
-    def __init__(self, name: str, config: Dict[str, Any], internal_modules: Dict[str, Any]):
-        super().__init__(name, config, internal_modules)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any):
+        super().__init__(name, config, db)
         
         # Extract settings from config
         self.service_name = config.get('service_name')
