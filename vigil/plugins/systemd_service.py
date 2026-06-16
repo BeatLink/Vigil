@@ -49,6 +49,16 @@ class SystemdPlugin(BasePlugin):
         from vigil.core.data.database import Metric, Event, StatusHistory
 
         with ui.row().classes('w-full gap-4 mb-4'):
+            # Target Host Card
+            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-sm'):
+                ui.label('TARGET HOST').classes('text-xs text-gray-400 font-bold')
+                ui.label(self.target).classes('text-3xl font-black text-slate-500')
+
+            # Service Name Card
+            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-sm'):
+                ui.label('SERVICE NAME').classes('text-xs text-gray-400 font-bold')
+                ui.label(self.service_name).classes('text-3xl font-black text-slate-500')
+
             # Service Status Card
             with ui.card().classes('flex-1 p-6 items-center justify-center shadow-sm'):
                 ui.label('SERVICE STATUS').classes('text-xs text-gray-400 font-bold')
@@ -79,7 +89,7 @@ class SystemdPlugin(BasePlugin):
 
         # Log Area (Occupies the majority of the view)
         with ui.card().classes('w-full p-0 shadow-sm overflow-hidden flex-grow'):
-            ui.label(f'JOURNALCTL LOGS: {self.service_name}').classes('font-bold p-4 text-primary bg-slate-50 w-full border-b')
+            ui.label('LOGS').classes('font-bold p-4 text-primary bg-slate-50 w-full border-b')
             
             log_table = ui.table(columns=[
                 {'name': 'ts', 'label': 'Timestamp', 'field': 'timestamp', 'align': 'left', 'sortable': True},
