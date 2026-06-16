@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
-class VigilConfig:
+class ConfigFileManager:
     """
     Handles loading and processing of the Vigil YAML configuration file.
     """
