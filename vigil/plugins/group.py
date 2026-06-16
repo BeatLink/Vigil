@@ -2,6 +2,7 @@ import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.database import StatusHistory # Needed for querying child statuses
+from vigil.core.ui.main_dashboard import COLOR_MAP
 
 # Define severity order for status aggregation
 SEVERITY_ORDER = {
@@ -75,16 +76,11 @@ class GroupPlugin(BasePlugin):
         
         # Display aggregated status at the top
         aggregated_status = self._get_aggregated_status()
-        status_color = {
-            'success': 'text-green-500',
-            'warning': 'text-yellow-500',
-            'fail': 'text-red-500',
-            'inactive': 'text-gray-500'
-        }.get(aggregated_status, 'text-gray-500')
+        status_hex = COLOR_MAP.get(aggregated_status, COLOR_MAP['inactive'])
 
         with ui.card().classes('w-full p-4 mb-6 items-center justify-center shadow-sm'):
             ui.label('AGGREGATED STATUS').classes('text-xs text-gray-400 font-bold')
-            ui.label(aggregated_status.upper()).classes(f'text-4xl font-black {status_color}')
+            ui.label(aggregated_status.upper()).classes('text-4xl font-black').style(f'color: {status_hex}')
 
         ui.label('Group Members').classes('text-xl font-bold mb-4')
         with ui.grid(columns=3).classes('w-full gap-4'):
@@ -96,16 +92,11 @@ class GroupPlugin(BasePlugin):
                         StatusHistory.collector_id == child.id
                     ).order_by(StatusHistory.timestamp.desc()).first()
                     child_status_text = latest_child_status.state.upper() if latest_child_status else 'N/A'
-                    child_status_color = {
-                        'success': 'text-green-500',
-                        'warning': 'text-yellow-500',
-                        'fail': 'text-red-500',
-                        'inactive': 'text-gray-500'
-                    }.get(latest_child_status.state if latest_child_status else 'inactive', 'text-gray-500')
+                    child_status_hex = COLOR_MAP.get(latest_child_status.state if latest_child_status else 'inactive', COLOR_MAP['inactive'])
 
                     ui.label(info['name']).classes('font-bold')
                     ui.label(info['target']).classes('text-xs text-gray-400')
-                    ui.label(child_status_text).classes(f'text-sm font-semibold {child_status_color}')
+                    ui.label(child_status_text).classes('text-sm font-semibold').style(f'color: {child_status_hex}')
 
         with ui.card().classes('w-full mt-6 p-4'):
             ui.label('Group Configuration').classes('font-bold text-gray-500 mb-2')

@@ -3,6 +3,13 @@ from nicegui import app, ui
 from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory
 from typing import Any, Dict, Optional
 
+COLOR_MAP = {
+    'success': '#22c55e',
+    'warning': '#f59e0b',
+    'fail': '#ef4444',
+    'inactive': '#94a3b8'
+}
+
 def init_gui(engine: Any, port: int = 8080):
     db_path = engine.db_path
     engine_run_func = engine.run
@@ -34,13 +41,6 @@ def init_gui(engine: Any, port: int = 8080):
         with ui.list().classes('w-full').props('dense'):
             ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4')
             ui.item_label('MONITORS').classes('text-xs text-gray-500 mt-6 mb-2 px-4')
-
-        COLOR_MAP = {
-            'success': '#22c55e',
-            'warning': '#f59e0b',
-            'fail': '#ef4444',
-            'inactive': '#94a3b8'
-        }
 
         def build_tree_nodes(plugins):
             """Recursive helper to build data structure for ui.tree."""

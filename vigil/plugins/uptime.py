@@ -4,6 +4,7 @@ import re
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
+from vigil.core.ui.main_dashboard import COLOR_MAP
 
 class UptimePlugin(BasePlugin):
     """
@@ -84,7 +85,8 @@ class UptimePlugin(BasePlugin):
                     if last:
                         is_up = last.value > 0.5
                         status_label.text = 'ONLINE' if is_up else 'OFFLINE'
-                        status_label.style('color: #22c55e' if is_up else 'color: #ef4444')
+                        status_color = COLOR_MAP['success'] if is_up else COLOR_MAP['fail']
+                        status_label.style(f'color: {status_color}')
                 ui.timer(2.0, update_status)
 
             # Latency Card
