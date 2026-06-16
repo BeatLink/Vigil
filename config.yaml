@@ -13,3 +13,7 @@ plugins:
     lines: 20
     ssh_config:
       host: "localhost"
+  - name: "google-dns"
+    type: "uptime"
+    target_host: "8.8.8.8"
+    interval: 30
