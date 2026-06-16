@@ -1,0 +1,40 @@
+# Vigil Configuration Sample
+
+# Database settings
+database:
+  path: "vigil.db"
+
+# Data collection modules
+collectors:
+  - name: "nginx-logs"
+    type: "systemd_log" # This maps to the SystemdLogCollector
+    target_host: "192.168.1.10"
+    interval: 60
+    service_name: "nginx"
+    lines: 20
+    ssh_config:
+      username: "monitor"
+      key_path: "~/.ssh/id_rsa"
+      # password: "securepassword" # Alternatively use password auth
+      port: 22
+
+  - name: "system-uptime"
+    type: "ssh_command"
+    target_host: "192.168.1.11"
+    interval: 300
+    command: "uptime -p"
+    ssh_config:
+      username: "admin"
+      key_path: "~/.ssh/id_rsa"
+
+# Alerting handlers (Placeholders for future implementation)
+alerting:
+  - name: "email-admin"
+    type: "email"
+    receiver: "admin@example.com"
+
+# Remote control actions (Placeholders for future implementation)
+control:
+  - name: "restart-nginx"
+    type: "service_restart"
+    target_host: "192.168.1.10"
