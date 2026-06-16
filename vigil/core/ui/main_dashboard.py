@@ -32,8 +32,8 @@ def init_gui(engine: Any, port: int = 8080):
 
     with ui.left_drawer(value=True).classes('bg-slate-100 p-0 shadow-lg').props('width=300') as left_drawer:
         with ui.list().classes('w-full').props('dense'):
-            ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b')
-            ui.item_label('MONITORS').classes('text-xs text-gray-500 mt-2 px-4')
+            ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4')
+            ui.item_label('MONITORS').classes('text-xs text-gray-500 mt-6 mb-2 px-4')
 
         COLOR_MAP = {
             'success': '#22c55e',
@@ -47,9 +47,20 @@ def init_gui(engine: Any, port: int = 8080):
             with StatusHistory._meta.database.connection_context():
                 nodes = []
                 for p in plugins:
+                    # Fetch the latest status to determine the icon color
+                    latest = StatusHistory.select().where(StatusHistory.collector_id == p.id).order_by(StatusHistory.timestamp.desc()).first()
+                    state = latest.state if latest else 'inactive'
+
                     node = {
                         'id': p.id,
                         'label': p.name,
+                        'icon': 'circle',
+                        'icon_color': {
+                            'success': 'positive',
+                            'warning': 'warning',
+                            'fail': 'negative',
+                            'inactive': 'grey'
+                        }.get(state, 'grey')
                     }
                     if p.children:
                         node['children'] = build_tree_nodes(p.children)
@@ -73,7 +84,7 @@ def init_gui(engine: Any, port: int = 8080):
                     switch_view('plugin', target_plugin)
 
         # Initialize the built-in tree component
-        tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).props('dense no-connectors')
+        tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).props('').classes('w-full px-6 text-lg')
         
         # Periodically refresh tree data (dots and nodes)
         ui.timer(5.0, lambda: setattr(tree, 'nodes', build_tree_nodes(engine.plugins)))
