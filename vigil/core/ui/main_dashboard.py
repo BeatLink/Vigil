@@ -48,21 +48,23 @@ def init_gui(engine: Any, port: int = 8080):
                     is_group = plugin.config.get('type') == 'group'
                     
                     if is_group:
-                        # Only toggle expansion on arrow click; clicking the header title navigates to the group dashboard
-                        with ui.expansion().classes('w-full').props(f'expand-icon-toggle dense header-class="font-medium ml-{level*2}"') as exp:
+                        # Force fixed height and remove padding for group headers
+                        with ui.expansion().classes('w-full').props(f'expand-icon-toggle dense header-class="font-medium ml-{level*2} h-9 p-0"') as exp:
                             with exp.add_slot('header'):
                                 with ui.row().classes('items-center w-full h-full cursor-pointer').on('click', lambda p=plugin: switch_view('plugin', p)):
-                                    ui.label(info['name']).classes('flex-grow text-left truncate')
+                                    with ui.grid(columns='160px 1fr').classes('w-full items-center no-wrap gap-2'):
+                                        ui.label(info['name']).classes('text-left truncate')
+                                        ui.label('') # Second column remains empty for group headers
                             
                             render_sidebar_tree(plugin.children, level + 1)
                     else:
-                        with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable dense').classes(f'ml-{level*2} no-wrap items-center'):
-                            with ui.item_section():
+                        # Force fixed height and remove padding for monitor items
+                        with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable dense').classes(f'ml-{level*2} h-9 p-0 no-wrap items-center'):
+                            with ui.grid(columns='160px 1fr').classes('w-full items-center no-wrap gap-2 px-4'):
                                 ui.item_label(info['name']).classes('text-sm text-left truncate')
 
-                            # Status dots
-                            with ui.item_section().props('side').classes('self-center'):
-                                with ui.row().classes('gap-1 items-center no-wrap'):
+                                # Status dots in the second column, left-aligned
+                                with ui.row().classes('gap-1 items-center no-wrap justify-start'):
                                     def get_dots(pid=plugin.id):
                                         history = StatusHistory.select().where(StatusHistory.collector_id == pid).order_by(StatusHistory.timestamp.desc()).limit(15)
                                         return reversed([h.state for h in history])
