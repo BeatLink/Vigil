@@ -30,7 +30,7 @@ def init_gui(engine: Any, port: int = 8080):
         ui.icon('security', size='md')
         ui.label('Vigil System Monitor').classes('text-2xl font-bold ml-2')
 
-    with ui.left_drawer(value=True).classes('bg-slate-100 p-0 shadow-lg') as left_drawer:
+    with ui.left_drawer(value=True).classes('bg-slate-100 p-0 shadow-lg').props('width=400') as left_drawer:
         with ui.list().classes('w-full mt-4'):
             ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable').classes('text-lg font-semibold border-b')
             ui.item_label('MONITORS').classes('text-xs text-gray-500 mt-4 px-4')
@@ -53,17 +53,20 @@ def init_gui(engine: Any, port: int = 8080):
                             with exp.add_slot('header'):
                                 with ui.row().classes('items-center w-full h-full cursor-pointer').on('click', lambda p=plugin: switch_view('plugin', p)):
                                     ui.icon('folder').classes('mr-2')
-                                    ui.label(info['name']).classes('flex-grow')
+                                    ui.label(info['name']).classes('flex-grow text-left truncate')
                             
                             render_sidebar_tree(plugin.children, level + 1)
                     else:
-                        with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable').classes(f'ml-{level*2}'):
-                            with ui.item_section().props('avatar'):
+                        with ui.item(on_click=lambda p=plugin: switch_view('plugin', p)).props('clickable').classes(f'ml-{level*2} no-wrap items-center'):
+                            with ui.item_section().props('side'):
                                 ui.icon('sensors', color='green' if info.get('actions') else 'blue', size='sm')
                             
-                            # Status dots
                             with ui.item_section():
-                                with ui.row().classes('gap-1 items-center no-wrap overflow-hidden'):
+                                ui.item_label(info['name']).classes('text-sm text-left truncate')
+
+                            # Status dots
+                            with ui.item_section().props('side').classes('self-center'):
+                                with ui.row().classes('gap-1 items-center no-wrap'):
                                     def get_dots(pid=plugin.id):
                                         history = StatusHistory.select().where(StatusHistory.collector_id == pid).order_by(StatusHistory.timestamp.desc()).limit(15)
                                         return reversed([h.state for h in history])
@@ -73,9 +76,6 @@ def init_gui(engine: Any, port: int = 8080):
                                         ui.label().classes('w-2 h-2 rounded-full').style(f'background-color: {COLOR_MAP.get(state, "#ccc")}')
                                     if not states:
                                         ui.label('No data').classes('text-[10px] text-gray-400')
-
-                            with ui.item_section():
-                                ui.item_label(info['name']).classes('text-sm')
             
             render_sidebar_tree(engine.plugins)
 
