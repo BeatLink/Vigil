@@ -1,19 +1,17 @@
 import asyncio
-import yaml
 import logging
 import sys
 from typing import List
-from vigil.core.collector import BaseCollector
+from vigil.core.plugin import BasePlugin
 from vigil.core.config import VigilConfig
 from vigil.core.database import VigilDatabase
 from peewee import OperationalError
+
 class VigilEngine:
     def __init__(self, config_path):
         self.config_loader = VigilConfig(config_path)
         self.config = self.config_loader.data
-        self.collectors: List[BaseCollector] = []
-        self.alert_handlers = []
-        self.controllers = []
+        self.plugins: List[BasePlugin] = []
         try:
             self.db = VigilDatabase(self.config_loader.database_settings.get('path', 'vigil.db'))
             self.db.insert_event("INFO", "Vigil Engine initialized.", "vigil_core")
@@ -23,15 +21,12 @@ class VigilEngine:
 
     def setup_modules(self):
         """
-        Dynamically loads modules based on the configuration.
-        In a full implementation, this would use importlib to load 
-        classes from vigil.modules.collectors, etc.
+        Dynamically loads domain-based plugins based on the configuration.
         """
-        logging.info("Initializing modules by type...")
+        logging.info("Initializing plugins by domain...")
         # Placeholder for dynamic loading logic
-        # Example:
-        # for collector_cfg in self.config.get('collectors', []):
-        #     self.collectors.append(load_plugin('collectors', collector_cfg))
+        # for plugin_cfg in self.config_loader.plugins:
+        #     self.plugins.append(load_domain_plugin(plugin_cfg))
         pass
 
     async def run(self):
@@ -41,16 +36,18 @@ class VigilEngine:
         
         while True:
             tasks = []
-            for collector in self.collectors:
-                tasks.append(collector.collect())
+            for plugin in self.plugins:
+                tasks.append(plugin.run_cycle())
             
             if tasks:
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                # Process results and trigger alerting/control logic
-                # TODO: Store results in DB
+                # Handle potential exceptions from gathered tasks
+                for res in results:
+                    if isinstance(res, Exception):
+                        logging.error(f"Plugin execution error: {res}")
                 logging.info(f"Processed {len(results)} collection tasks.")
             else:
-                logging.debug("No collectors configured.")
+                logging.debug("No plugins configured.")
 
             await asyncio.sleep(60)
 
