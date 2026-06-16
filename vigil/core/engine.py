@@ -4,28 +4,22 @@ import logging
 import sys
 from typing import List
 from vigil.core.collector import BaseCollector
+from vigil.core.config import VigilConfig
 from vigil.core.database import VigilDatabase
 from peewee import OperationalError
 class VigilEngine:
     def __init__(self, config_path):
-        self.config = self._load_config(config_path)
+        self.config_loader = VigilConfig(config_path)
+        self.config = self.config_loader.data
         self.collectors: List[BaseCollector] = []
         self.alert_handlers = []
         self.controllers = []
         try:
-            self.db = VigilDatabase(self.config.get('database', {}).get('path', 'vigil.db'))
+            self.db = VigilDatabase(self.config_loader.database_settings.get('path', 'vigil.db'))
             self.db.insert_event("INFO", "Vigil Engine initialized.", "vigil_core")
         except OperationalError as e:
             logging.critical(f"Failed to initialize database: {e}. Exiting.")
             sys.exit(1)
-
-    def _load_config(self, path):
-        try:
-            with open(path, 'r') as f:
-                return yaml.safe_load(f)
-        except FileNotFoundError:
-            logging.error(f"Configuration file not found: {path}")
-            return {}
 
     def setup_modules(self):
         """
