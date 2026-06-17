@@ -170,36 +170,37 @@ def init_gui(engine: Any, port: int = 8080):
         update_charts()
         ui.timer(10.0, update_charts)
 
-        with ui.card().classes('w-full p-4 mb-6'):
-            ui.label('Recent System Metrics').classes('text-lg font-bold mb-2')
-            metric_columns = [
-                {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
-                {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
-                {'name': 'collector', 'label': 'Plugin', 'field': 'collector', 'align': 'left'},
-                {'name': 'metric_name', 'label': 'Metric', 'field': 'metric_name', 'align': 'left'},
-                {'name': 'value', 'label': 'Value', 'field': 'value', 'align': 'left'},
-            ]
-            m_table = ui.table(columns=metric_columns, rows=[]).classes('w-full')
-            
-            def update_m():
-                query = Metric.select().order_by(Metric.timestamp.desc()).limit(20)
-                m_table.rows[:] = [m.__data__ for m in query]
-            ui.timer(5.0, update_m)
+        with ui.row().classes('w-full gap-4'):
+            with ui.card().classes('flex-1 p-4 shadow-md'):
+                ui.label('Recent System Metrics').classes('text-lg font-bold mb-2')
+                metric_columns = [
+                    {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
+                    {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
+                    {'name': 'collector', 'label': 'Plugin', 'field': 'collector', 'align': 'left'},
+                    {'name': 'metric_name', 'label': 'Metric', 'field': 'metric_name', 'align': 'left'},
+                    {'name': 'value', 'label': 'Value', 'field': 'value', 'align': 'left'},
+                ]
+                m_table = ui.table(columns=metric_columns, rows=[]).classes('w-full')
+                
+                def update_m():
+                    query = Metric.select().order_by(Metric.timestamp.desc()).limit(20)
+                    m_table.rows[:] = [m.__data__ for m in query]
+                ui.timer(5.0, update_m)
 
-        with ui.card().classes('w-full p-4'):
-            ui.label('Recent Events').classes('text-lg font-bold mb-2')
-            event_columns = [
-                {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
-                {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left'},
-                {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
-                {'name': 'message', 'label': 'Message', 'field': 'message', 'align': 'left'},
-            ]
-            e_table = ui.table(columns=event_columns, rows=[]).classes('w-full')
-            
-            def update_e():
-                query = Event.select().order_by(Event.timestamp.desc()).limit(20)
-                e_table.rows[:] = [e.__data__ for e in query]
-            ui.timer(5.0, update_e)
+            with ui.card().classes('flex-1 p-4 shadow-md'):
+                ui.label('Recent Events').classes('text-lg font-bold mb-2')
+                event_columns = [
+                    {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
+                    {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left'},
+                    {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
+                    {'name': 'message', 'label': 'Message', 'field': 'message', 'align': 'left'},
+                ]
+                e_table = ui.table(columns=event_columns, rows=[]).classes('w-full')
+                
+                def update_e():
+                    query = Event.select().order_by(Event.timestamp.desc()).limit(20)
+                    e_table.rows[:] = [e.__data__ for e in query]
+                ui.timer(5.0, update_e)
 
     def render_plugin_detail(plugin: Any):
         info = plugin.present()
