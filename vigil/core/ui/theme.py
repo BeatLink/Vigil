@@ -18,15 +18,6 @@ STATUS_COLORS = {
     'offline': "gray",
 }
 
-
-# ── Status severity (for aggregation logic) ─────────────
-STATUS_SEVERITY = {
-    'online':  0,
-    'offline': 1,
-    'warning': 2,
-    'failed':  3,
-}
-
 # Logic for status aggregation
 SEVERITY_ORDER = {
     'online': 0,
