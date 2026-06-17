@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 from vigil.core.common.ssh_connector import SSHConnection
 from functools import partial
-from vigil.core.ui.components import render_host_card, render_standard_tables, render_status_card
+from vigil.core.ui.components import render_host_card, render_status_card, metric_table, log_table
 from vigil.core.modules.collectors.ssh_collector import SSHCollector
 from vigil.core.modules.controllers.ssh_controller import SSHController
 
@@ -34,7 +34,8 @@ class BasePlugin(ABC):
             },
             'ui': {
                 'host_card': partial(render_host_card, self.target),
-                'tables': partial(render_standard_tables, self.name, self.target),
+                'metrics_table': partial(metric_table, self.name),
+                'logs_table': partial(log_table, self.target, filter_prefix=self.name),
                 'status_card': partial(render_status_card, self.name)
             }
         }
@@ -69,11 +70,7 @@ class BasePlugin(ABC):
         """Main execution entry point for the plugin's polling interval."""
         await self.on_collect()
 
+    @abstractmethod
     def render_ui(self):
         """Default UI implementation showing metrics and events. Override this in subclasses."""
-        from nicegui import ui
-
-        with ui.row().classes('w-full gap-4 mb-4'):
-            self.internal_modules['ui']['host_card']()
-
-        self.internal_modules['ui']['tables']()
+        pass

@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.ui.theme import COLOR_MAP, TEXT_4XL, FONT_BLACK
-from vigil.core.ui.components import info_card, log_table
+from vigil.core.ui.components import info_card
 
 class SystemdPlugin(BasePlugin):
     """
@@ -77,7 +77,7 @@ class SystemdPlugin(BasePlugin):
             ui.timer(2.0, update_time)
 
         # Log Area (Occupies the majority of the view)
-        log_table(self.target, filter_prefix=self.name, title='LOGS', limit=100, full_height=True)
+        self.internal_modules['ui']['logs_table'](title='LOGS', limit=100, full_height=True)
 
     def get_actions(self) -> List[Dict[str, str]]:
         """Exposes available actions to the engine/UI."""

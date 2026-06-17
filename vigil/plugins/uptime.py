@@ -94,4 +94,6 @@ class UptimePlugin(BasePlugin):
         # Latency History Chart
         history_chart('RESPONSE TIME HISTORY (ms)', self.name, 'latency_ms')
 
-        self.internal_modules['ui']['tables']()
+        # Explicitly render metrics and logs in a grid
+        with ui.grid(columns=1).classes('w-full gap-4'):
+            self.internal_modules['ui']['logs_table']()

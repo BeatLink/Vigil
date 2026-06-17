@@ -110,13 +110,6 @@ def render_host_card(target: str):
     """Renders the standard target host information card."""
     return info_card('TARGET HOST', target)
 
-def render_standard_tables(name: str, target: str):
-    """Renders the default metrics and logs tables in a grid."""
-    from nicegui import ui
-    with ui.grid(columns=2).classes('w-full gap-4'):
-        metric_table(name)
-        log_table(target, filter_prefix=name)
-
 def render_status_card(collector: str, metric_name: str, title: str = 'STATUS', 
                        on_text: str = 'ACTIVE', off_text: str = 'INACTIVE', 
                        value_classes: str = VALUE_CLASS):
