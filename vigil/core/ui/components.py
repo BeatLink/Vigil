@@ -1,5 +1,5 @@
 from nicegui import ui
-from .theme import TEXT, TEXT_MUTED, PRIMARY, ACCENT, STATUS_COLORS, BACKGROUND_MUTED
+from .theme import TEXT, TEXT_MUTED, PRIMARY, ACCENT, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
 
 # Standardized UI Sizing Constants
 LABEL_CLASS = 'text-xs font-bold'
@@ -18,9 +18,9 @@ def info_card(title: str, value: str = '--', value_classes: str = VALUE_CLASS, c
         ui.label(title.upper()).classes(LABEL_CLASS).style(f'color: {TEXT_MUTED}')
         return ui.label(value).classes(value_classes).style(f'color: {PRIMARY}')
 
-def action_button(text: str, on_click=None, icon: str = 'play_arrow', color: str = PRIMARY):
-    """A standardized button for control actions."""
-    return ui.button(text, on_click=on_click, color=color).props(f'outline icon={icon}')
+def action_chip(text: str, on_click=None, icon: str = 'play_arrow', color: str = PRIMARY):
+    """A standardized chip for control actions."""
+    return ui.chip(text, icon=icon, on_click=on_click, color=color, text_color=BACKGROUND).props('clickable')
 
 def section_title(text: str, classes: str = ''):
     """A standardized heading for dashboard sections."""

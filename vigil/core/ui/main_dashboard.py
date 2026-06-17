@@ -3,7 +3,7 @@ from nicegui import app, ui
 from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory
 from typing import Any, Dict, Optional
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
-from .components import action_button, card, section_title
+from .components import action_chip, card, section_title
 
 # Global state/helper for cross-component navigation
 _navigation_state = {'switch_func': None}
@@ -231,10 +231,10 @@ def init_gui(engine: Any, port: int = 8080):
                                 ui.notify('Action completed successfully' if success else 'Action failed', 
                                           type='positive' if success else 'negative')
                             
-                            # Color logic: Destructive actions use the offline/gray color
+                            # Color logic: Primary for normal actions, status failed (red) for danger actions
                             btn_color = PRIMARY if action.get('variant') != 'danger' else STATUS_COLORS['failed']
                             btn_icon = action.get('icon', 'play_arrow')
-                            action_button(action['name'], on_click=do_action, color=btn_color, icon=btn_icon)
+                            action_chip(action['name'], on_click=do_action, color=btn_color, icon=btn_icon)
 
         # Delegate specific UI rendering to the plugin instance
         plugin.render_ui()
