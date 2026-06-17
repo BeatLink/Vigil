@@ -2,7 +2,7 @@ import logging
 from nicegui import app, ui
 from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory
 from typing import Any, Dict, Optional
-from .theme import COLOR_MAP, BG_PAGE, HEADER_BG, HEADER_TEXT
+from .theme import COLOR_MAP, BG_PAGE, HEADER_BG, HEADER_TEXT, SIDEBAR_BG, SIDEBAR_TEXT, SIDEBAR_LABEL
 
 def init_gui(engine: Any, port: int = 8080):
     db_path = engine.db_path
@@ -31,10 +31,10 @@ def init_gui(engine: Any, port: int = 8080):
         ui.icon('security', size='md')
         ui.label('Vigil System Monitor').classes('text-2xl font-bold ml-2')
 
-    with ui.left_drawer(value=True).classes('bg-slate-100 p-0 shadow-lg').props('width=300') as left_drawer:
+    with ui.left_drawer(value=True).classes('p-0 shadow-lg').props('width=350').style(f'background-color: {SIDEBAR_BG}') as left_drawer:
         with ui.list().classes('w-full').props('dense'):
-            ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4')
-            ui.item_label('MONITORS').classes('text-xs text-gray-500 mt-6 mb-2 px-4')
+            ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {SIDEBAR_TEXT}')
+            ui.item_label('MONITORS').classes('text-xs mt-6 mb-2 px-4').style(f'color: {SIDEBAR_LABEL}')
 
         def build_tree_nodes(plugins):
             """Recursive helper to build data structure for ui.tree."""
@@ -73,12 +73,12 @@ def init_gui(engine: Any, port: int = 8080):
                     switch_view('plugin', target_plugin)
 
         # Initialize the built-in tree component
-        tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).props('').classes('w-full px-6 text-lg')
+        tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).props('').classes('w-full px-6 text-lg').style(f'color: {SIDEBAR_TEXT}')
 
-        tree.add_slot('default-header', '''
-            <span class="flex items-center gap-2">
-                <q-icon name="circle" :style="{ color: props.node.color }" size="12px" />
-                {{ props.node.label }}
+        tree.add_slot('default-header', f'''
+            <span class="flex items-center gap-2" style="color: {SIDEBAR_TEXT}">
+                <q-icon name="circle" :style="{{ color: props.node.color }}" size="12px" />
+                {{{{ props.node.label }}}}
             </span>
         ''')
         

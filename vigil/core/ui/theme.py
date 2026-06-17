@@ -24,3 +24,6 @@ CHART_PRIMARY = '#00acff'
 TEXT_MUTED = 'text-gray-400'
 HEADER_BG = "#00ACFF" #'#1e293b'  # Slate-800
 HEADER_TEXT = '#ffffff'
+SIDEBAR_BG = '#FFFFFF'  # Slate-100
+SIDEBAR_TEXT = '#000000' #'#334155' # Slate-700
+SIDEBAR_LABEL = '#64748b' # Slate-500
