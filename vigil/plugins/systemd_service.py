@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, card
+from vigil.core.ui.components import info_card, log_table
 
 class SystemdPlugin(BasePlugin):
     """
@@ -47,7 +47,7 @@ class SystemdPlugin(BasePlugin):
     def render_ui(self):
         """Custom UI for Systemd services with status header and large log view."""
         from nicegui import ui
-        from vigil.core.data.database import Metric, Event, StatusHistory
+        from vigil.core.data.database import Metric, StatusHistory
 
         with ui.row().classes('w-full gap-4 mb-4'):
             # Target Host Card
@@ -81,23 +81,7 @@ class SystemdPlugin(BasePlugin):
             ui.timer(2.0, update_time)
 
         # Log Area (Occupies the majority of the view)
-        with card('w-full overflow-hidden flex-grow', padding=False):
-            ui.label('LOGS').classes('font-bold p-4 text-primary bg-slate-50 w-full border-b')
-            
-            log_table = ui.table(columns=[
-                {'name': 'ts', 'label': 'Timestamp', 'field': 'timestamp', 'align': 'left', 'sortable': True},
-                {'name': 'lvl', 'label': 'Level', 'field': 'level', 'align': 'left'},
-                {'name': 'msg', 'label': 'Message', 'field': 'message', 'align': 'left', 'classes': 'text-wrap font-mono text-xs'},
-            ], rows=[]).classes('w-full border-none h-[600px]')
-            log_table.props('virtual-scroll')
-
-            def update_logs():
-                # Filter logs specific to this plugin's target and name prefix
-                query = Event.select().where(
-                    (Event.target == self.target) & (Event.message.contains(f"[{self.name}]"))
-                ).order_by(Event.timestamp.desc()).limit(100)
-                log_table.rows[:] = [e.__data__ for e in query]
-            ui.timer(5.0, update_logs)
+        log_table(self.target, filter_prefix=self.name, title='LOGS', limit=100, full_height=True)
 
     def get_actions(self) -> List[Dict[str, str]]:
         """Exposes available actions to the engine/UI."""

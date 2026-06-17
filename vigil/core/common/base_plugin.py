@@ -65,40 +65,12 @@ class BasePlugin(ABC):
     def render_ui(self):
         """Default UI implementation showing metrics and events. Override this in subclasses."""
         from nicegui import ui
-        from vigil.core.data.database import Metric, Event
-        from vigil.core.ui.components import info_card, card
+        from vigil.core.ui.components import info_card, metric_table, log_table
 
         with ui.row().classes('w-full gap-4 mb-4'):
             # Target Host Card
             info_card('TARGET HOST', self.target)
 
         with ui.grid(columns=2).classes('w-full gap-4'):
-            # Monitor Metrics
-            with card():
-                ui.label('Monitor Metrics').classes('font-bold mb-2 text-primary')
-                p_metric_table = ui.table(columns=[
-                    {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
-                    {'name': 'name', 'label': 'Metric', 'field': 'metric_name', 'align': 'left'},
-                    {'name': 'val', 'label': 'Value', 'field': 'value', 'align': 'left'},
-                ], rows=[]).classes('w-full border-none')
-                
-                def update_pm():
-                    query = Metric.select().where(Metric.collector == self.name).order_by(Metric.timestamp.desc()).limit(15)
-                    p_metric_table.rows[:] = [m.__data__ for m in query]
-                ui.timer(5.0, update_pm)
-
-            # Monitor Logs/Events
-            with card():
-                ui.label('Recent Logs').classes('font-bold mb-2 text-primary')
-                p_event_table = ui.table(columns=[
-                    {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
-                    {'name': 'lvl', 'label': 'Level', 'field': 'level', 'align': 'left'},
-                    {'name': 'msg', 'label': 'Message', 'field': 'message', 'align': 'left'},
-                ], rows=[]).classes('w-full border-none')
-
-                def update_pe():
-                    query = Event.select().where(
-                        (Event.target == self.target) & (Event.message.contains(f"[{self.name}]"))
-                    ).order_by(Event.timestamp.desc()).limit(15)
-                    p_event_table.rows[:] = [e.__data__ for e in query]
-                ui.timer(5.0, update_pe)
+            metric_table(self.name)
+            log_table(self.target, filter_prefix=self.name)
