@@ -83,8 +83,8 @@ class SystemdPlugin(BasePlugin):
             {
                 "name": "Restart Service",
                 "action_id": "restart_service",
-                "variant": "primary"
-                "icon": "play_button"
+                "variant": "primary",
+                "icon": "play_arrow"
             },
             {
                 "name": "Stop Service",

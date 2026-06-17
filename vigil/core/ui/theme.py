@@ -5,7 +5,7 @@ Centralized theme and styling configuration for the Vigil UI.
 # Colors
 
 PRIMARY = "#00ACFF"
-ACCENT = "FF5500"
+ACCENT = "#FF5500"
 BACKGROUND_MUTED = "#FAFAFA"
 BACKGROUND = "#FFFFFF"
 TEXT = "#111827"
