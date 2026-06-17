@@ -33,9 +33,8 @@ def init_gui(engine: Any, port: int = 8080):
 
     with ui.left_drawer(value=True).classes('p-0 shadow-lg').props('width=350').style(f'background-color: {SIDEBAR_BG}') as left_drawer:
         with ui.list().classes('w-full').props('dense'):
-            ui.item('Overview', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {SIDEBAR_TEXT}')
-            ui.item_label('MONITORS').classes('text-xs mt-6 mb-2 px-4').style(f'color: {SIDEBAR_LABEL}')
-
+            ui.item('All Monitors', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {SIDEBAR_TEXT}')
+            
         def build_tree_nodes(plugins):
             """Recursive helper to build data structure for ui.tree."""
             with StatusHistory._meta.database.connection_context():
@@ -101,7 +100,7 @@ def init_gui(engine: Any, port: int = 8080):
                 render_plugin_detail(state['selected_plugin'])
 
     def render_overview():
-        ui.label('Infrastructure Reporting').classes('text-2xl mb-6 font-light')
+        ui.label('Monitors').classes('text-2xl mb-6 font-light')
 
         with ui.row().classes('w-full gap-4 mb-6'):
             # Status Distribution Chart
