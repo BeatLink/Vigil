@@ -8,16 +8,19 @@ Vigil is designed to provide high-visibility monitoring of remote systems using 
 
 * **Lightweight**: Minimal dependencies and low resource footprint.
 * **Agentless**: Uses standard SSH for data collection—no need to install software on target nodes.
-* **Pluggable Architecture**: Easily add new collectors, alert handlers, or control mechanisms.
+* **Hierarchical Organization**: Organize monitors into nested groups by location, service, or environment.
+* **Service Control**: Trigger remediation actions (like restarting systemd services) directly from the UI.
 * **Data Types**: Supports both structured metrics and log aggregation.
-* **Collection Modules**:
-  * **Ping / ICMP**: Basic reachability checks.
-  * **SSH commands**: Execute remote commands and parse output.
+* **Real-time Dashboard**: Interactive visualizations using NiceGUI and ECharts, featuring latency history and status distribution.
+* **Pluggable Architecture**: Easily add new collectors, alert handlers, or control mechanisms
+* **Pluggable Monitor Modules**:
+  * **Uptime**: ICMP-based reachability and latency tracking.
+  * **Systemd**: Monitor service status and aggregate `journalctl` logs via SSH.
   * **HTTP/Web APIs**: Monitor status codes and response content.
 * **Alerting**: Flexible alerting rules with multiple output channels.
-* **Control**: Ability to trigger remediation actions on remote systems.
 
-
+## Architecture
+ 
 Collecting
 
 Alerting
