@@ -3,6 +3,7 @@ from nicegui import app, ui
 from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory
 from typing import Any, Dict, Optional
 from .theme import COLOR_MAP, BG_PAGE, HEADER_BG, HEADER_TEXT, SIDEBAR_BG, SIDEBAR_TEXT, SIDEBAR_LABEL
+from .components import action_button, card, section_title
 
 def init_gui(engine: Any, port: int = 8080):
     db_path = engine.db_path
@@ -100,11 +101,11 @@ def init_gui(engine: Any, port: int = 8080):
                 render_plugin_detail(state['selected_plugin'])
 
     def render_overview():
-        ui.label('Monitors').classes('text-2xl mb-6 font-light')
+        section_title('Monitors', 'text-2xl mb-6 font-light')
 
         with ui.row().classes('w-full gap-4 mb-6'):
             # Status Distribution Chart
-            with ui.card().classes('flex-1 p-4 h-80 shadow-md'):
+            with card('flex-1 h-80'):
                 ui.label('MONITORS BY STATUS').classes('text-xs text-gray-400 font-bold mb-2')
                 status_chart = ui.echart({
                     'tooltip': {'trigger': 'item'},
@@ -120,7 +121,7 @@ def init_gui(engine: Any, port: int = 8080):
                 }).classes('w-full h-64')
 
             # Type Distribution Chart
-            with ui.card().classes('flex-1 p-4 h-80 shadow-md'):
+            with card('flex-1 h-80'):
                 ui.label('MONITORS BY TYPE').classes('text-xs text-gray-400 font-bold mb-2')
                 type_chart = ui.echart({
                     'tooltip': {'trigger': 'item'},
@@ -170,7 +171,7 @@ def init_gui(engine: Any, port: int = 8080):
         ui.timer(10.0, update_charts)
 
         with ui.row().classes('w-full gap-4'):
-            with ui.card().classes('flex-1 p-4 shadow-md'):
+            with card('flex-1'):
                 ui.label('Recent System Metrics').classes('text-lg font-bold mb-2')
                 metric_columns = [
                     {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
@@ -186,7 +187,7 @@ def init_gui(engine: Any, port: int = 8080):
                     m_table.rows[:] = [m.__data__ for m in query]
                 ui.timer(5.0, update_m)
 
-            with ui.card().classes('flex-1 p-4 shadow-md'):
+            with card('flex-1'):
                 ui.label('Recent Events').classes('text-lg font-bold mb-2')
                 event_columns = [
                     {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
@@ -213,7 +214,7 @@ def init_gui(engine: Any, port: int = 8080):
                         success = await plugin.on_action(aid)
                         ui.notify('Action completed successfully' if success else 'Action failed', 
                                   type='positive' if success else 'negative')
-                    ui.button(action['name'], on_click=do_action).props('outline rounded icon=play_arrow')
+                    action_button(action['name'], on_click=do_action)
 
         # Delegate specific UI rendering to the plugin instance
         plugin.render_ui()

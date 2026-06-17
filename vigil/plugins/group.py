@@ -3,6 +3,7 @@ from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.database import StatusHistory # Needed for querying child statuses
 from vigil.core.ui.theme import COLOR_MAP, SEVERITY_ORDER, TEXT_MUTED
+from vigil.core.ui.components import card, info_card, section_title
 
 class GroupPlugin(BasePlugin):
     """
@@ -68,15 +69,14 @@ class GroupPlugin(BasePlugin):
         aggregated_status = self._get_aggregated_status()
         status_hex = COLOR_MAP.get(aggregated_status, COLOR_MAP['offline'])
 
-        with ui.card().classes('w-full p-4 mb-6 items-center justify-center shadow-sm'):
-            ui.label('AGGREGATED STATUS').classes('text-xs text-gray-400 font-bold')
-            ui.label(aggregated_status.upper()).classes('text-4xl font-black').style(f'color: {status_hex}')
+        status_lbl = info_card('AGGREGATED STATUS', aggregated_status.upper(), value_classes='text-4xl font-black', card_classes='w-full mb-6')
+        status_lbl.style(f'color: {status_hex}')
 
-        ui.label('Group Members').classes('text-xl font-bold mb-4')
+        section_title('Group Members')
         with ui.grid(columns=3).classes('w-full gap-4'):
             for child in self.children:
                 info = child.present()
-                with ui.card().classes('p-4 items-center shadow-sm hover:bg-blue-50 cursor-pointer'):
+                with card('items-center hover:bg-blue-50 cursor-pointer'):
                     # For group children, we might want to show their latest status too
                     latest_child_status = StatusHistory.select(StatusHistory.state).where(
                         StatusHistory.collector_id == child.id

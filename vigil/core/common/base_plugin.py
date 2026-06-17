@@ -66,16 +66,15 @@ class BasePlugin(ABC):
         """Default UI implementation showing metrics and events. Override this in subclasses."""
         from nicegui import ui
         from vigil.core.data.database import Metric, Event
+        from vigil.core.ui.components import info_card, card
 
         with ui.row().classes('w-full gap-4 mb-4'):
             # Target Host Card
-            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-sm'):
-                ui.label('TARGET HOST').classes('text-xs text-gray-400 font-bold')
-                ui.label(self.target).classes('text-3xl font-black text-slate-500')
+            info_card('TARGET HOST', self.target)
 
         with ui.grid(columns=2).classes('w-full gap-4'):
             # Monitor Metrics
-            with ui.card().classes('p-4 shadow-sm'):
+            with card():
                 ui.label('Monitor Metrics').classes('font-bold mb-2 text-primary')
                 p_metric_table = ui.table(columns=[
                     {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
@@ -89,7 +88,7 @@ class BasePlugin(ABC):
                 ui.timer(5.0, update_pm)
 
             # Monitor Logs/Events
-            with ui.card().classes('p-4 shadow-sm'):
+            with card():
                 ui.label('Recent Logs').classes('font-bold mb-2 text-primary')
                 p_event_table = ui.table(columns=[
                     {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},

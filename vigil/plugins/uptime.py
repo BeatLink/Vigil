@@ -5,6 +5,7 @@ import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.ui.theme import COLOR_MAP, CHART_PRIMARY, TEXT_MUTED
+from vigil.core.ui.components import info_card, card
 
 class UptimePlugin(BasePlugin):
     """
@@ -69,14 +70,10 @@ class UptimePlugin(BasePlugin):
         
         with ui.row().classes('w-full gap-4 mb-4'):
             # Target Host Card
-            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-md'):
-                ui.label('TARGET HOST').classes(f'text-xs {TEXT_MUTED} font-bold')
-                ui.label(self.target).classes('text-3xl font-black text-slate-500')
+            info_card('TARGET HOST', self.target)
 
             # Status Card
-            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-md'):
-                ui.label('CURRENT STATUS').classes(f'text-xs {TEXT_MUTED} font-bold')
-                status_label = ui.label('Checking...').classes('text-5xl font-black')
+            status_label = info_card('CURRENT STATUS', 'Checking...', value_classes='text-5xl font-black')
                 
                 def update_status():
                     last = Metric.select().where(
@@ -90,9 +87,7 @@ class UptimePlugin(BasePlugin):
                 ui.timer(2.0, update_status)
 
             # Latency Card
-            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-md'):
-                ui.label('LAST LATENCY').classes(f'text-xs {TEXT_MUTED} font-bold')
-                latency_label = ui.label('-- ms').classes('text-5xl font-black text-blue-500')
+            latency_label = info_card('LAST LATENCY', '-- ms', value_classes='text-5xl font-black text-blue-500')
                 
                 def update_latency():
                     last = Metric.select().where(
@@ -103,7 +98,7 @@ class UptimePlugin(BasePlugin):
                 ui.timer(2.0, update_latency)
         
         # Latency History Chart
-        with ui.card().classes('w-full h-80 shadow-md mb-4 p-4'):
+        with card('w-full h-80 mb-4'):
             ui.label('RESPONSE TIME HISTORY (ms)').classes(f'text-xs {TEXT_MUTED} font-bold mb-2')
             chart = ui.echart({
                 'tooltip': {'trigger': 'axis'},

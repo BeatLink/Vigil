@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
+from vigil.core.ui.components import info_card, card
 
 class SystemdPlugin(BasePlugin):
     """
@@ -50,19 +51,13 @@ class SystemdPlugin(BasePlugin):
 
         with ui.row().classes('w-full gap-4 mb-4'):
             # Target Host Card
-            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-sm'):
-                ui.label('TARGET HOST').classes('text-xs text-gray-400 font-bold')
-                ui.label(self.target).classes('text-3xl font-black text-slate-500')
+            info_card('TARGET HOST', self.target)
 
             # Service Name Card
-            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-sm'):
-                ui.label('SERVICE NAME').classes('text-xs text-gray-400 font-bold')
-                ui.label(self.service_name).classes('text-3xl font-black text-slate-500')
+            info_card('SERVICE NAME', self.service_name)
 
             # Service Status Card
-            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-sm'):
-                ui.label('SERVICE STATUS').classes('text-xs text-gray-400 font-bold')
-                status_label = ui.label('Checking...').classes('text-4xl font-black')
+            status_label = info_card('SERVICE STATUS', 'Checking...', value_classes='text-4xl font-black')
                 
                 def update_status():
                     last = Metric.select().where(
@@ -75,9 +70,7 @@ class SystemdPlugin(BasePlugin):
                 ui.timer(2.0, update_status)
 
             # Last Collection Card
-            with ui.card().classes('flex-1 p-6 items-center justify-center shadow-sm'):
-                ui.label('LAST COLLECTION').classes('text-xs text-gray-400 font-bold')
-                time_label = ui.label('--:--:--').classes('text-4xl font-black text-blue-500')
+            time_label = info_card('LAST COLLECTION', '--:--:--', value_classes='text-4xl font-black text-blue-500')
                 
                 def update_time():
                     last = StatusHistory.select().where(
@@ -88,7 +81,7 @@ class SystemdPlugin(BasePlugin):
                 ui.timer(2.0, update_time)
 
         # Log Area (Occupies the majority of the view)
-        with ui.card().classes('w-full p-0 shadow-sm overflow-hidden flex-grow'):
+        with card('w-full overflow-hidden flex-grow', padding=False):
             ui.label('LOGS').classes('font-bold p-4 text-primary bg-slate-50 w-full border-b')
             
             log_table = ui.table(columns=[
