@@ -1,23 +1,70 @@
 # Vigil
 
-A lightweight, pluggable network and system monitor for Linux.
+Vigil is web based network and systems monitor for Linux systems, homelabs and small networks. It is inspired by software such as Uptime-Kuma, Prometheus, Grafana and Loki. 
 
-Vigil is designed to provide high-visibility monitoring of remote systems using a pull-based architecture over SSH. It focuses on simplicity, low overhead, and ease of extensibility.
 
 ## Features
-
-* **Lightweight**: Minimal dependencies and low resource footprint.
-* **Agentless**: Uses standard SSH for data collection—no need to install software on target nodes.
+* **Pull Based Agentless Collection**: Uses a pull based design over protocols such as SSH and ICMP to collect data such as events, logs, and metrics from various targets — no need to install software on target nodes.
+* **Web Dashboard**: Provides a web based dashboard built using NiceGUI for showing events, metrics and logs as well as tables and charts built around those datapoints.
+* **Alerting and Notifications**: WIP: Sends alerts and notifications to various channels once certain events or metric thresholds are detected
+* **Target Control**: Trigger actions on monitored targets (like restarting systemd services) directly from the UI.
+* **Plugin Architecture**: Core features are implemented through plugins called "monitors" which perform CPAC functions for specific domains (e.g. systemd services, network host uptime, hardware parameters etc.)
 * **Hierarchical Organization**: Organize monitors into nested groups by location, service, or environment.
-* **Service Control**: Trigger remediation actions (like restarting systemd services) directly from the UI.
+* **Lightweight**: Minimal dependencies and low resource footprint.
+* **Easy Development**: Everything is coded in Python for easy development
+
+
+
+## Main Functions (CPAC)
+* **Collection**: Collection of events, logs and metrics from various targets
+* **Presentation**: Presentation of data and reports to a web dashboard
+* **Alerting**: Sending alerts to various notification channels once certain events or metric thresholds are detected
+* **Control**: Sending commands to targets directly from the platform to make changes and resolve issues
+
+
+
+ highly extensible and agentless. Additionally, unlike most network and system monitors it is designed to be able to perform actions on monitored targets. 
+
+
+
+
+
+Easily add new collectors, alert handlers, or control mechanisms
+
+
+a highly extensible, 
+
+ provides high-visibility monitoring of remote systems using a pull-based architecture. It focuses on simplicity, low overhead, and ease of extensibility without requiring remote agents.
+
+
 * **Data Types**: Supports both structured metrics and log aggregation.
 * **Real-time Dashboard**: Interactive visualizations using NiceGUI and ECharts, featuring latency history and status distribution.
-* **Pluggable Architecture**: Easily add new collectors, alert handlers, or control mechanisms
 * **Pluggable Monitor Modules**:
   * **Uptime**: ICMP-based reachability and latency tracking.
   * **Systemd**: Monitor service status and aggregate `journalctl` logs via SSH.
   * **HTTP/Web APIs**: Monitor status codes and response content.
 * **Alerting**: Flexible alerting rules with multiple output channels.
+
+* Service Control: Restart or stop systemd services directly from the dashboard.
+* Real-time Dashboard: Interactive visualizations featuring latency history and status distribution.
+* Pluggable Modules: Support for Uptime (Ping), Systemd (SSH), and Groups.
+
+
+
+
+
+
+## Architecture
+Vigil's architecture is based around various "monitors", which are plugins designed around the 4 main features
+
+* **Collection**: Collection of events, metrics and logs from specific targets
+* **Presenting**: Presentation of collected data on the web dashboard and/or other forms
+* **Alerting**: Monitoring configured thresholds and events and sending notifications through various channels once criteria are met
+* **Control**: 
+
+
+
+
 
 ## Architecture
  
@@ -87,3 +134,163 @@ For users with the Nix package manager, Vigil supports Flakes for reproducible e
 ## License
 
 GPL 3.0 License
+
+
+
+FEATURES
+
+
+GETTING STARTED
+
+Prerequisites:
+* Python 3.9+
+* SSH access to target machines (SSH keys recommended)
+
+Installation:
+pip install .
+
+Quick Start:
+1. Create a config.yaml (see Configuration below).
+2. Start the system: vigil --config config.yaml
+3. Open your browser to http://localhost:8080.
+
+CONFIGURATION
+
+Vigil uses a YAML structure for defining the hierarchy of your infrastructure.
+
+Example config.yaml:
+
+database:
+  path: "vigil.db"
+
+plugins:
+  - name: "Internal Network"
+    type: "group"
+    children:
+      - name: "Core Gateway"
+        id: "gateway-ping"
+        type: "uptime"
+        target_host: "192.168.1.1"
+        interval: 30
+
+  - name: "Web Servers"
+    type: "group"
+    children:
+      - name: "Nginx Service"
+        type: "systemd_service"
+        service_name: "nginx.service"
+        ssh_config:
+          host: "web-01.example.com"
+          user: "vigil"
+
+PLUGIN TYPES
+
+1. uptime
+Checks host availability using ICMP ping.
+* target_host: The IP or hostname to ping.
+* interval: Polling frequency in seconds (default: 60).
+Metrics: up (1/0), latency_ms.
+
+2. systemd_service
+Monitors status and logs for a systemd unit over SSH.
+* service_name: The name of the unit (e.g., docker.service).
+* lines: Number of journalctl log lines to fetch per cycle.
+* ssh_config: SSH connection details (host, user, etc.).
+Actions: Restart Service, Stop Service.
+
+3. group
+A logical container for other monitors. It aggregates the status of all its children.
+* children: A list of nested plugin definitions.
+
+USAGE
+
+The primary entry point starts both the background engine and the web dashboard.
+
+vigil --config config.yaml
+
+To run just the dashboard (connecting to an existing database):
+vigil-gui --db vigil.db --port 8080
+
+NIX INTEGRATION
+
+Vigil supports Flakes for reproducible environments:
+* Enter Dev Shell: nix develop
+* Run via Nix: nix run . -- --config config.yaml
+
+PROJECT STRUCTURE
+
+* vigil/core/main.py: Main engine orchestrator and plugin loader.
+* vigil/core/data/: SQLite persistence layer and config parsing.
+* vigil/core/common/: Base classes and shared SSH utilities.
+* vigil/core/modules/: Reusable logic for collection and control.
+* vigil/core/ui/: NiceGUI-based dashboard logic.
+* vigil/plugins/: Specific monitoring implementations (Uptime, Systemd).
+
+LICENSE
+
+GPL 3.0
+
+
+# Vigil Project Context
+
+## Vision
+
+Vigil is a Python-based, pull-based monitoring system. It aims to be the "Swiss Army Knife" of system monitoring for small to medium environments where agent-based solutions like Prometheus or Zabbix might be too heavy.
+
+Similar to **Uptime Kuma**, Vigil provides a centralized dashboard to configure and manage various types of monitors, allowing users to oversee diverse infrastructure from a single pane of glass.
+
+## Repository Structure
+
+- **`vigil/core/main.py`**: The application entry point and orchestrator. It manages the lifecycle of the engine, plugin instantiation, and the main execution loop.
+- **`vigil/core/data/`**: Handles all persistence-related logic. This includes SQLite database management (via Peewee) and YAML configuration parsing.
+- **`vigil/core/modules/`**: Contains the core business logic and shared libraries. This includes:
+    - **Collectors**: Helpers to abstract data gathering (SSH, HTTP, etc.).
+    - **Controllers**: Logic for sending remediation or control commands back to services.
+    - **Alerting**: Modules for notifications (Email, Slack, Webhooks).
+    - **UI Helpers**: Libraries used by the dashboard to present data.
+- **`vigil/core/common/`**: Stores shared models and base classes, including the `BasePlugin` class and common utility libraries used across the core modules.
+- **`vigil/core/ui/`**: Responsible for the web-based user interface, built using **NiceGUI**.
+- **`vigil/plugins/`**: Domain-specific monitoring logic. Each directory here represents a plugin type (e.g., `systemd`, `hardware`, `network`).
+    - *Note*: Plugins support hierarchical nesting via `GroupPlugin`, allowing for complex infrastructure organization.
+
+## Data Flow
+
+1.  **Initialization**: `main.py` loads definitions.
+2.  **Registry Building**: The Engine recursively instantiates plugins. `GroupPlugin` instances act as containers for nested monitors.
+3.  **Polling Loop**: The Engine runs an asynchronous loop, recursively gathering and triggering `run_cycle()` for all non-group plugin instances.
+4.  **Collection & Processing**: Plugins use modules in `core/modules/collectors` to gather metrics or logs from targets.
+5.  **Persistence**: Results are processed and stored in the SQLite database via the persistence layer in `core/data`.
+6.  **Visualization**: The Dashboard renders a recursive sidebar. Each plugin is responsible for its own detail view via the `render_ui()` method.
+7.  **Alerting & Control**: If a plugin detects a failure state, it utilizes `core/modules` to trigger alerts or execute remediation commands via controllers.
+
+## Technical Stack
+
+- **Language**: Python 3.9+
+- **Connectivity**: Paramiko (SSH), Requests/Httpx (HTTP)
+- **Configuration**: YAML
+- **Concurrency**: `asyncio` for non-blocking I/O
+- **Storage**: SQLite (managed by Peewee ORM)
+- **Frontend**: NiceGUI
+
+## Design Principles
+
+1. **Simplicity First**: Configuration should be intuitive.
+2. **No Remote Agent**: All logic stays on the Vigil server; remote hosts only need SSH.
+3. **Domain Encapsulation**: Plugins are grouped by domain (e.g., Systemd, HTTP, Hardware). Each plugin handles its own collection, alerting, and control logic.
+4. **Hierarchical Organization**: Supports nested groups for organizing monitors by location, service, or environment.
+4. **Fail-Safe Control**: Control actions must be logged and confirmable.
+5. **Standard-Aware**: While the core is lightweight, it aims for OpenTelemetry compatibility in data naming and export capability.
+6. **Hybrid Config**: Use YAML for infrastructure definitions (Source of Truth) and SQLite for runtime state/overrides.
+
+## Roadmap
+
+- [X] Core engine implementation with YAML config loader.
+- [X] Core Database utility (SQLite).
+- [X] Core SSH utility for remote access.
+- [X] Hierarchical Plugin/Group support.
+- [ ] OpenTelemetry/OpenMetrics export module.
+- [ ] SSH Collector module with standard metric parsing (CPU, RAM, Disk).
+- [X] Ping/ICMP module (Uptime).
+- [ ] Basic Alerting (Email, Slack, or Webhook).
+- [ ] Control module for service remediation.
+- [X] Web Dashboard for real-time visualization (NiceGUI).
