@@ -82,11 +82,15 @@ class SystemdPlugin(BasePlugin):
         return [
             {
                 "name": "Restart Service",
-                "action_id": "restart_service"
+                "action_id": "restart_service",
+                "variant": "primary"
+                "icon": "play_button"
             },
             {
                 "name": "Stop Service",
-                "action_id": "stop_service"
+                "action_id": "stop_service",
+                "variant": "danger",
+                "icon": "stop"
             }
         ]
 

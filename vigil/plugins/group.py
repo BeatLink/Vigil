@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.database import StatusHistory # Needed for querying child statuses
-from vigil.core.ui.theme import STATUS_COLORS, SEVERITY_ORDER, TEXT_MUTED
+from vigil.core.ui.theme import STATUS_COLORS, TEXT_MUTED
 from vigil.core.ui.components import card, info_card, section_title, HOVER_STYLE
 
 # Logic for status aggregation

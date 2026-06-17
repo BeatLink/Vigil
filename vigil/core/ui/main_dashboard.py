@@ -222,13 +222,18 @@ def init_gui(engine: Any, port: int = 8080):
             with ui.column():
                 ui.label(info['name']).classes('text-3xl font-bold').style(f'color: {TEXT}')
             
-            with ui.row():
-                for action in info.get('actions', []):
-                    async def do_action(aid=action['action_id']):
-                        success = await plugin.on_action(aid)
-                        ui.notify('Action completed successfully' if success else 'Action failed', 
-                                  type='positive' if success else 'negative')
-                    action_button(action['name'], on_click=do_action)
+            if info.get('actions'):
+                with card('p-2'):
+                    with ui.row().classes('gap-2 items-center'):
+                        for action in info.get('actions', []):
+                            async def do_action(aid=action['action_id']):
+                                success = await plugin.on_action(aid)
+                                ui.notify('Action completed successfully' if success else 'Action failed', 
+                                          type='positive' if success else 'negative')
+                            
+                            # Color logic: Destructive actions use the offline/gray color
+                            btn_color = PRIMARY if action.get('variant') != 'danger' else STATUS_COLORS['failed']
+                            action_button(action['name'], on_click=do_action, color=btn_color)
 
         # Delegate specific UI rendering to the plugin instance
         plugin.render_ui()
