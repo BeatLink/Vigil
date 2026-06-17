@@ -102,5 +102,31 @@ class UptimePlugin(BasePlugin):
                         latency_label.text = f"{last.value:.1f} ms"
                 ui.timer(2.0, update_latency)
         
+        # Latency History Chart
+        with ui.card().classes('w-full h-80 shadow-md mb-4 p-4'):
+            ui.label('RESPONSE TIME HISTORY (ms)').classes('text-xs text-gray-400 font-bold mb-2')
+            chart = ui.echart({
+                'tooltip': {'trigger': 'axis'},
+                'xAxis': {'type': 'category', 'data': []},
+                'yAxis': {'type': 'value', 'splitLine': {'show': False}},
+                'series': [{
+                    'data': [],
+                    'type': 'line',
+                    'smooth': True,
+                    'color': '#3b82f6',
+                    'areaStyle': {'opacity': 0.1}
+                }]
+            }).classes('w-full h-64')
+
+            def update_chart():
+                history = Metric.select().where(
+                    (Metric.collector == self.name) & (Metric.metric_name == 'latency_ms')
+                ).order_by(Metric.timestamp.desc()).limit(30)
+                history = list(reversed(history))
+                chart.options['xAxis']['data'] = [m.timestamp.strftime('%H:%M:%S') for m in history]
+                chart.options['series'][0]['data'] = [m.value for m in history]
+                chart.update()
+            ui.timer(5.0, update_chart)
+
         # Call the base implementation to show the logs table below the status cards
         super().render_ui()
