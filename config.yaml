@@ -6,35 +6,113 @@ database:
 
 # Domain-based Plugins
 plugins:
-  - name: "Local Infrastructure"
+  - name: "Device Availability"
     type: "group"
     children:
-      - name: "bluetooth"
-        id: "local-bluetooth"
-        type: "systemd_service"
-        interval: 60
-        service_name: "bluetooth.service"
-        ssh_config:
-          host: "localhost"
-  - name: "google-dns"
-    type: "uptime"
-    target_host: "8.8.8.8"
-    interval: 30
+      - name: "Core Devices"
+        type: "group"
+        children:
+          - name: "Ragnarok"
+            id: "ragnarok"
+            type: "uptime"
+            target_host: "ragnarok.technet"
+            interval: 30
+          - name: "Heimdall"
+            id: "heimdall"
+            type: "uptime"
+            target_host: "heimdall.technet"
+            interval: 30
+          - name: "Odin"
+            id: "odin"
+            type: "uptime"
+            target_host: "odin.technet"
+            interval: 30
+          - name: "Thor"
+            id: "thor"
+            type: "uptime"
+            target_host: "thorx.technet"
+      - name: "IoT Sensors"
+        type: "group"
+        children:
+          - name: "Bedroom Light"
+            id: "bedroom-light"
+            type: "uptime"
+            target_host: "light-bedroom.lan"
+          - name: "Bedroom Desk Light"
+            id: "bedroom-desk-light"
+            type: "uptime"
+            target_host: "light-bedroom-desk.lan"
+          - name: "Kitchen Light"
+            id: "kitchen-light"
+            type: "uptime"
+            target_host: "light-kitchen.lan"
+          - name: "Bathroom Light"
+            id: "bathroom-light"
+            type: "uptime"
+            target_host: "light-bathroom.lan"
+          - name: "Outside Light"
+            id: "outside-light"
+            type: "uptime"
+            target_host: "light-outside.lan"
+          - name: "Fan Socket"
+            id: "fan-socket"
+            type: "uptime"
+            target_host: "socket-fan.lan"
+          - name: "Ragnarok Socket"
+            id: "ragnarok-socket"
+            type: "uptime"
+            target_host: "socket-ragnarok.technet"
+          - name: "Fan IR"
+            id: "fan-ir"
+            type: "uptime"
+            target_host: "ir-fan.lan"
+          - name: "Bedroom Sensor"
+            id: "bedroom-sensor"
+            type: "uptime"
+            target_host: "sensor-bedroom.lan"
+          - name: "Bathroom Sensor"
+            id: "bathroom-sensor"
+            type: "uptime"
+            target_host: "sensor-bathroom.lan"
 
-  - name: "Heimdall Services"
+
+  - name: "Running Services"
     type: "group"
     children:
-      - name: "Unbound"
-        id: "heimdall-unbound"
-        type: "systemd_service"
-        interval: 60
-        service_name: "unbound.service"
-        ssh_config:
-          host: "heimdall.technet"
-      - name: "VLC"
-        id: "heimdall-vlc"
-        type: "systemd_service"
-        interval: 60
-        service_name: "vlc-audio.service"
-        ssh_config:
-          host: "heimdall.technet"
+      - name: "Heimdall Services"
+        id: "heimdall-services"
+        type: "group"
+        children:
+          - name: "Unbound"
+            id: "heimdall-unbound"
+            type: "systemd_service"
+            interval: 60
+            service_name: "unbound.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "VLC"
+            id: "heimdall-vlc"
+            type: "systemd_service"
+            interval: 60
+            service_name: "vlc-audio.service"
+            ssh_config:
+              host: "heimdall.technet"
+      - name: "Odin Services"
+        id: "odin-services"
+        type: "group"
+        children:
+          - name: "Networking"
+            id: "odin-networking"
+            type: "systemd_service"
+            interval: 60
+            service_name: "NetworkManager.service"
+            ssh_config:
+              host: "odin.technet"
+          - name: "Bluetooth"
+            id: "local-bluetooth"
+            type: "systemd_service"
+            interval: 60
+            service_name: "bluetooth.service"
+            ssh_config:
+              host: "odin.technet"
+
