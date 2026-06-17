@@ -22,3 +22,5 @@ SEVERITY_ORDER = {
 BG_PAGE = '#f8f9fa'
 CHART_PRIMARY = '#00acff'
 TEXT_MUTED = 'text-gray-400'
+HEADER_BG = "#00ACFF" #'#1e293b'  # Slate-800
+HEADER_TEXT = '#ffffff'

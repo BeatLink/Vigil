@@ -2,7 +2,7 @@ import logging
 from nicegui import app, ui
 from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory
 from typing import Any, Dict, Optional
-from .theme import COLOR_MAP, BG_PAGE
+from .theme import COLOR_MAP, BG_PAGE, HEADER_BG, HEADER_TEXT
 
 def init_gui(engine: Any, port: int = 8080):
     db_path = engine.db_path
@@ -26,7 +26,7 @@ def init_gui(engine: Any, port: int = 8080):
 
     ui.query('body').style(f'background-color: {BG_PAGE}')
 
-    with ui.header().classes('items-center bg-primary text-white p-4'):
+    with ui.header().classes('items-center p-4').style(f'background-color: {HEADER_BG}; color: {HEADER_TEXT}'):
         ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
         ui.icon('security', size='md')
         ui.label('Vigil System Monitor').classes('text-2xl font-bold ml-2')
