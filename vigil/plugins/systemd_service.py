@@ -103,4 +103,11 @@ class SystemdPlugin(BasePlugin):
                 self.db_logger.write(f"Restart failed: {stderr}", level="ERROR")
             return status == 0
             
+        elif action_id == "stop_service":
+            command = f"sudo systemctl stop {self.service_name}"
+            status, _, stderr = await self.ssh_controller.execute_action(command)
+            if status != 0:
+                self.db_logger.write(f"Stop failed: {stderr}", level="ERROR")
+            return status == 0
+            
         return False
