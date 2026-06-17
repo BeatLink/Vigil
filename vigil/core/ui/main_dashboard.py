@@ -223,7 +223,7 @@ def init_gui(engine: Any, port: int = 8080):
                 ui.label(info['name']).classes('text-3xl font-bold').style(f'color: {TEXT}')
             
             if info.get('actions'):
-                with card('p-2'):
+                #with card('p-2'):
                     with ui.row().classes('gap-2 items-center'):
                         for action in info.get('actions', []):
                             async def do_action(aid=action['action_id']):
@@ -232,7 +232,7 @@ def init_gui(engine: Any, port: int = 8080):
                                           type='positive' if success else 'negative')
                             
                             # Color logic: Destructive actions use the offline/gray color
-                            btn_color = PRIMARY if action.get('variant') != 'danger' else STATUS_COLORS['offline']
+                            btn_color = PRIMARY if action.get('variant') != 'danger' else STATUS_COLORS['failed']
                             btn_icon = action.get('icon', 'play_arrow')
                             action_button(action['name'], on_click=do_action, color=btn_color, icon=btn_icon)
 

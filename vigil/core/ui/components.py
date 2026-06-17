@@ -20,7 +20,7 @@ def info_card(title: str, value: str = '--', value_classes: str = VALUE_CLASS, c
 
 def action_button(text: str, on_click=None, icon: str = 'play_arrow', color: str = PRIMARY):
     """A standardized button for control actions."""
-    return ui.button(text, on_click=on_click).props(f'outline icon={icon}').style(f'color: {color}; border-color: {color}')
+    return ui.button(text, on_click=on_click, color=color).props(f'outline icon={icon}')
 
 def section_title(text: str, classes: str = ''):
     """A standardized heading for dashboard sections."""

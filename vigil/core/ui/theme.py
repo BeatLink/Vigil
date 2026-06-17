@@ -14,5 +14,5 @@ STATUS_COLORS = {
     'online': "lime",
     'warning': "gold",
     'failed': "red",
-    'offline': "gray",
+    'offline': "lightgray",
 }
