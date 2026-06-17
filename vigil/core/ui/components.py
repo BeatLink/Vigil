@@ -8,9 +8,10 @@ def card(classes: str = '', padding: bool = True):
 
 def info_card(title: str, value: str = '--', value_classes: str = VALUE_CLASS, card_classes: str = 'flex-1'):
     """A card component for displaying a label and a large value."""
+    from .theme import INFO_CARD_VALUE_COLOR
     with card(f'{card_classes} items-center justify-center'):
         ui.label(title.upper()).classes(LABEL_CLASS)
-        return ui.label(value).classes(value_classes)
+        return ui.label(value).classes(value_classes).style(f'color: {INFO_CARD_VALUE_COLOR}')
 
 def action_button(text: str, on_click=None, icon: str = 'play_arrow'):
     """A standardized button for control actions."""

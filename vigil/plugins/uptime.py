@@ -4,7 +4,6 @@ import re
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.theme import COLOR_MAP, TEXT_5XL, FONT_BLACK
 from vigil.core.ui.components import info_card, history_chart
 
 class UptimePlugin(BasePlugin):
@@ -76,12 +75,11 @@ class UptimePlugin(BasePlugin):
                 metric_name='up',
                 title='CURRENT STATUS',
                 on_text='ONLINE',
-                off_text='OFFLINE',
-                value_classes=f'{TEXT_5XL} {FONT_BLACK}'
+                off_text='OFFLINE'
             )
 
             # Latency Card
-            latency_label = info_card('LAST LATENCY', '-- ms', value_classes=f'{TEXT_5XL} {FONT_BLACK} text-blue-500')
+            latency_label = info_card('LAST LATENCY', '-- ms')
                 
             def update_latency():
                 last = Metric.select().where(

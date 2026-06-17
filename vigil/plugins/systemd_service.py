@@ -1,7 +1,6 @@
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.theme import COLOR_MAP, TEXT_4XL, FONT_BLACK
 from vigil.core.ui.components import info_card
 
 class SystemdPlugin(BasePlugin):
@@ -61,12 +60,11 @@ class SystemdPlugin(BasePlugin):
                 metric_name='active',
                 title='SERVICE STATUS',
                 on_text='ACTIVE',
-                off_text='INACTIVE',
-                value_classes=f'{TEXT_4XL} {FONT_BLACK}'
+                off_text='INACTIVE'
             )
 
             # Last Collection Card
-            time_label = info_card('LAST COLLECTION', '--:--:--', value_classes=f'{TEXT_4XL} {FONT_BLACK} text-blue-500')
+            time_label = info_card('LAST COLLECTION', '--:--:--')
                 
             def update_time():
                 last = StatusHistory.select().where(
