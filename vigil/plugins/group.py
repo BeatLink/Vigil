@@ -26,14 +26,14 @@ class GroupPlugin(BasePlugin):
         Recursively determines the most severe status among all direct and nested children.
         """
         with StatusHistory._meta.database.connection_context():
-            current_max_severity = SEVERITY_ORDER['success'] # Start with the least severe
+            current_max_severity = SEVERITY_ORDER['online'] # Start with the least severe
 
             # Helper to get the latest status for a given plugin ID
             def get_latest_status(plugin_id: str) -> str:
                 latest_status_record = StatusHistory.select(StatusHistory.state).where(
                     StatusHistory.collector_id == plugin_id
                 ).order_by(StatusHistory.timestamp.desc()).first()
-                return latest_status_record.state if latest_status_record else 'inactive' # Default to inactive if no status yet
+                return latest_status_record.state if latest_status_record else 'offline' # Default to offline if no status yet
 
             # Iterate through all children (and their children recursively)
             def check_children_status(plugins_list: List[BasePlugin]):
@@ -45,7 +45,7 @@ class GroupPlugin(BasePlugin):
                     else:
                         # Get the latest status for non-group children
                         child_status = get_latest_status(child.id)
-                        child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['inactive'])
+                        child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['offline'])
                         if child_severity > current_max_severity:
                             current_max_severity = child_severity
 
@@ -55,7 +55,7 @@ class GroupPlugin(BasePlugin):
             for status, severity in SEVERITY_ORDER.items():
                 if severity == current_max_severity:
                     return status
-            return 'inactive' # Fallback
+            return 'offline' # Fallback
 
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
@@ -66,7 +66,7 @@ class GroupPlugin(BasePlugin):
         
         # Display aggregated status at the top
         aggregated_status = self._get_aggregated_status()
-        status_hex = COLOR_MAP.get(aggregated_status, COLOR_MAP['inactive'])
+        status_hex = COLOR_MAP.get(aggregated_status, COLOR_MAP['offline'])
 
         with ui.card().classes('w-full p-4 mb-6 items-center justify-center shadow-sm'):
             ui.label('AGGREGATED STATUS').classes('text-xs text-gray-400 font-bold')
@@ -81,8 +81,8 @@ class GroupPlugin(BasePlugin):
                     latest_child_status = StatusHistory.select(StatusHistory.state).where(
                         StatusHistory.collector_id == child.id
                     ).order_by(StatusHistory.timestamp.desc()).first()
-                    child_status_text = latest_child_status.state.upper() if latest_child_status else 'N/A'
-                    child_status_hex = COLOR_MAP.get(latest_child_status.state if latest_child_status else 'inactive', COLOR_MAP['inactive'])
+                    child_status_text = latest_child_status.state.upper() if latest_child_status else 'OFFLINE'
+                    child_status_hex = COLOR_MAP.get(latest_child_status.state if latest_child_status else 'offline', COLOR_MAP['offline'])
 
                     ui.label(info['name']).classes('font-bold')
                     ui.label(info['target']).classes('text-xs text-gray-400')

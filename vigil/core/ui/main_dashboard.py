@@ -43,7 +43,7 @@ def init_gui(engine: Any, port: int = 8080):
                 for p in plugins:
                     # Fetch the latest status to determine the icon color
                     latest = StatusHistory.select().where(StatusHistory.collector_id == p.id).order_by(StatusHistory.timestamp.desc()).first()
-                    state = latest.state if latest else 'inactive'
+                    state = latest.state if latest else 'offline'
 
                     node = {
                         'id': p.id,
@@ -144,23 +144,23 @@ def init_gui(engine: Any, port: int = 8080):
                     else: collect_leafs(p.children)
             collect_leafs(engine.plugins)
 
-            status_counts = {'success': 0, 'fail': 0, 'warning': 0, 'inactive': 0}
+            status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'offline': 0}
             type_counts = {}
             
             with StatusHistory._meta.database.connection_context():
                 for m in all_monitors:
                     latest = StatusHistory.select().where(StatusHistory.collector_id == m.id).order_by(StatusHistory.timestamp.desc()).first()
-                    st = latest.state if latest else 'inactive'
+                    st = latest.state if latest else 'offline'
                     status_counts[st] = status_counts.get(st, 0) + 1
                     
                     mtype = m.config.get('type', 'unknown')
                     type_counts[mtype] = type_counts.get(mtype, 0) + 1
 
             status_chart.options['series'][0]['data'] = [
-                {'value': status_counts['success'], 'name': 'Success', 'itemStyle': {'color': COLOR_MAP['success']}},
-                {'value': status_counts['fail'], 'name': 'Failed', 'itemStyle': {'color': COLOR_MAP['fail']}},
+                {'value': status_counts['online'], 'name': 'Online', 'itemStyle': {'color': COLOR_MAP['online']}},
+                {'value': status_counts['failed'], 'name': 'Failed', 'itemStyle': {'color': COLOR_MAP['failed']}},
                 {'value': status_counts['warning'], 'name': 'Warning', 'itemStyle': {'color': COLOR_MAP['warning']}},
-                {'value': status_counts['inactive'], 'name': 'Inactive', 'itemStyle': {'color': COLOR_MAP['inactive']}},
+                {'value': status_counts['offline'], 'name': 'Offline', 'itemStyle': {'color': COLOR_MAP['offline']}},
             ]
             type_chart.options['series'][0]['data'] = [{'value': v, 'name': k.upper()} for k, v in type_counts.items()]
             status_chart.update()
