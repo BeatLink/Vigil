@@ -5,6 +5,18 @@ from typing import Any, Dict, Optional
 from .theme import COLOR_MAP, BG_PAGE, HEADER_BG, HEADER_TEXT, SIDEBAR_BG, SIDEBAR_TEXT, SIDEBAR_LABEL
 from .components import action_button, card, section_title
 
+# Global state/helper for cross-component navigation
+_navigation_state = {'switch_func': None}
+
+def navigate_to(plugin_instance: Any):
+    """External helper to trigger dashboard navigation from within plugins."""
+    if _navigation_state['switch_func']:
+        if plugin_instance is None:
+            _navigation_state['switch_func']('overview')
+        else:
+            _navigation_state['switch_func']('plugin', plugin_instance)
+
+
 def init_gui(engine: Any, port: int = 8080):
     db_path = engine.db_path
     engine_run_func = engine.run
@@ -24,6 +36,13 @@ def init_gui(engine: Any, port: int = 8080):
         'current_view': 'overview',
         'selected_plugin': None
     }
+
+    def switch_view(view_type: str, plugin: Optional[Any] = None):
+        state['current_view'] = view_type
+        state['selected_plugin'] = plugin
+        render_main()
+
+    _navigation_state['switch_func'] = switch_view
 
     ui.query('body').style(f'background-color: {BG_PAGE}')
 
@@ -86,11 +105,6 @@ def init_gui(engine: Any, port: int = 8080):
         ui.timer(5.0, lambda: setattr(tree, 'nodes', build_tree_nodes(engine.plugins)))
 
     main_container = ui.column().classes('w-full p-6 bg-transparent')
-
-    def switch_view(view_type: str, plugin: Optional[Any] = None):
-        state['current_view'] = view_type
-        state['selected_plugin'] = plugin
-        render_main()
 
     def render_main():
         main_container.clear()

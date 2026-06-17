@@ -29,30 +29,19 @@ class GroupPlugin(BasePlugin):
         with StatusHistory._meta.database.connection_context():
             current_max_severity = SEVERITY_ORDER['online'] # Start with the least severe
 
-            # Helper to get the latest status for a given plugin ID
-            def get_latest_status(plugin_id: str) -> str:
-                latest_status_record = StatusHistory.select(StatusHistory.state).where(
-                    StatusHistory.collector_id == plugin_id
+            for child in self.children:
+                # Fetch the latest status for every immediate child (group or leaf)
+                # This naturally handles infinite nesting as each level aggregates its own.
+                latest = StatusHistory.select(StatusHistory.state).where(
+                    StatusHistory.collector_id == child.id
                 ).order_by(StatusHistory.timestamp.desc()).first()
-                return latest_status_record.state if latest_status_record else 'offline' # Default to offline if no status yet
+                
+                child_status = latest.state if latest else 'offline'
+                child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['offline'])
+                
+                if child_severity > current_max_severity:
+                    current_max_severity = child_severity
 
-            # Iterate through all children (and their children recursively)
-            def check_children_status(plugins_list: List[BasePlugin]):
-                nonlocal current_max_severity
-                for child in plugins_list:
-                    if child.config.get('type') == 'group':
-                        # Recursively check nested groups
-                        check_children_status(child.children)
-                    else:
-                        # Get the latest status for non-group children
-                        child_status = get_latest_status(child.id)
-                        child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['offline'])
-                        if child_severity > current_max_severity:
-                            current_max_severity = child_severity
-
-            check_children_status(self.children)
-
-            # Convert the max severity back to a status string
             for status, severity in SEVERITY_ORDER.items():
                 if severity == current_max_severity:
                     return status
@@ -76,7 +65,12 @@ class GroupPlugin(BasePlugin):
         with ui.grid(columns=3).classes('w-full gap-4'):
             for child in self.children:
                 info = child.present()
-                with card('items-center hover:bg-blue-50 cursor-pointer'):
+                # Clicking a card now triggers navigation to that child's detail view
+                def navigate_to_child(c=child):
+                    from vigil.core.ui.main_dashboard import navigate_to
+                    navigate_to(c)
+
+                with card('items-center hover:bg-blue-50 cursor-pointer').on('click', navigate_to_child):
                     # For group children, we might want to show their latest status too
                     latest_child_status = StatusHistory.select(StatusHistory.state).where(
                         StatusHistory.collector_id == child.id
