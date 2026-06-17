@@ -36,7 +36,7 @@ class StatusHistory(BaseModel):
     """Model for tracking the historical state of monitors."""
     timestamp = DateTimeField(default=datetime.now, index=True)
     collector_id = CharField(index=True)
-    state = CharField()  # 'success', 'warning', 'fail', 'inactive'
+    state = CharField()  # 'online', 'warning', 'failed', 'offline'
 
 # DATABASE HELPERS ##################################################################################################################################
 class InternalDatabaseLogger:

@@ -33,7 +33,7 @@ class BasePlugin(ABC):
         }
 
     def set_status(self, state: str):
-        """Sets the current state of the plugin (success, warning, fail, inactive)."""
+        """Sets the current state of the plugin (online, warning, failed, offline)."""
         self.db.insert_status(self.id, state)
 
     @abstractmethod

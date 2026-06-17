@@ -38,10 +38,10 @@ class SystemdPlugin(BasePlugin):
                 if any(k in line.upper() for k in ["ERROR", "FAIL", "CRITICAL"]):
                     level = "ERROR"
                 self.db_logger.write(line, level=level)
-            self.set_status('success' if is_active else 'warning')
+            self.set_status('online' if is_active else 'warning')
         else:
             self.db_logger.write(f"Collection failed: {stderr}", level="ERROR")
-            self.set_status('fail')
+            self.set_status('failed')
 
     def render_ui(self):
         """Custom UI for Systemd services with status header and large log view."""
