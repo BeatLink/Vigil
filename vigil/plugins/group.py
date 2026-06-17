@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.database import StatusHistory # Needed for querying child statuses
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.core.ui.theme import STATUS_COLORS, SEVERITY_ORDER, TEXT_MUTED
 from vigil.core.ui.components import card, info_card, section_title, HOVER_STYLE
 
 # Logic for status aggregation
@@ -87,6 +87,6 @@ class GroupPlugin(BasePlugin):
                     child_status_text = latest_child_status.state.upper() if latest_child_status else 'OFFLINE'
                     child_status_hex = STATUS_COLORS.get(latest_child_status.state if latest_child_status else 'offline', STATUS_COLORS['offline'])
 
-                    ui.label(info['name']).classes('font-bold')
-                    ui.label(info['target']).classes('text-xs text-gray-400')
+                    ui.label(info['name']).classes('font-bold').style(f'color: {TEXT_MUTED}')
+                    ui.label(info['target']).classes('text-xs').style(f'color: {TEXT_MUTED}')
                     ui.label(child_status_text).classes('text-sm font-semibold').style(f'color: {child_status_hex}')

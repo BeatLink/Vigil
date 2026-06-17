@@ -1,5 +1,5 @@
 from nicegui import ui
-from .theme import TEXT, TEXT_MUTED, PRIMARY, STATUS_COLORS
+from .theme import TEXT, TEXT_MUTED, PRIMARY, STATUS_COLORS, BACKGROUND_MUTED
 
 # Standardized UI Sizing Constants
 LABEL_CLASS = 'text-xs font-bold'
@@ -15,7 +15,7 @@ def card(classes: str = '', padding: bool = True):
 def info_card(title: str, value: str = '--', value_classes: str = VALUE_CLASS, card_classes: str = 'flex-1'):
     """A card component for displaying a label and a large value."""
     with card(f'{card_classes} items-center justify-center'):
-        ui.label(title.upper()).classes(f'{LABEL_CLASS} text-gray-400')
+        ui.label(title.upper()).classes(LABEL_CLASS).style(f'color: {TEXT_MUTED}')
         return ui.label(value).classes(value_classes).style(f'color: {TEXT}')
 
 def action_button(text: str, on_click=None, icon: str = 'play_arrow'):
@@ -51,7 +51,7 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
     
     with card(card_classes, padding=not full_height):
         if full_height:
-            ui.label(title).classes('font-bold p-4 bg-slate-50 w-full border-b').style(f'color: {PRIMARY}')
+            ui.label(title).classes('font-bold p-4 w-full border-b').style(f'background-color: {BACKGROUND_MUTED}; color: {PRIMARY}')
         else:
             ui.label(title).classes('font-bold mb-2').style(f'color: {PRIMARY}')
 

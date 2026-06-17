@@ -120,7 +120,7 @@ def init_gui(engine: Any, port: int = 8080):
         with ui.row().classes('w-full gap-4 mb-6'):
             # Status Distribution Chart
             with card('flex-1 h-80'):
-                ui.label('MONITORS BY STATUS').classes('text-xs font-bold mb-2 text-gray-400')
+                ui.label('MONITORS BY STATUS').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
                 status_chart = ui.echart({
                     'tooltip': {'trigger': 'item'},
                     'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
@@ -136,7 +136,7 @@ def init_gui(engine: Any, port: int = 8080):
 
             # Type Distribution Chart
             with card('flex-1 h-80'):
-                ui.label('MONITORS BY TYPE').classes('text-xs font-bold mb-2 text-gray-400')
+                ui.label('MONITORS BY TYPE').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
                 type_chart = ui.echart({
                     'tooltip': {'trigger': 'item'},
                     'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
