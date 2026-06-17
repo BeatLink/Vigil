@@ -18,6 +18,23 @@ SEVERITY_ORDER = {
     'failed': 3
 }
 
+# Typography Constants
+TEXT_XS = 'text-xs'
+TEXT_SM = 'text-sm'
+TEXT_LG = 'text-lg'
+TEXT_XL = 'text-xl'
+TEXT_2XL = 'text-2xl'
+TEXT_3XL = 'text-3xl'
+TEXT_4XL = 'text-4xl'
+TEXT_5XL = 'text-5xl'
+
+FONT_BOLD = 'font-bold'
+FONT_BLACK = 'font-black'
+
+LABEL_CLASS = f'{TEXT_XS} {FONT_BOLD} text-gray-400'
+VALUE_CLASS = f'{TEXT_3XL} {FONT_BLACK} text-slate-500'
+HOVER_STYLE = 'hover:bg-blue-50 cursor-pointer'
+
 # Layout and Brand Colors
 BG_PAGE = '#f8f9fa'
 CHART_PRIMARY = '#00acff'

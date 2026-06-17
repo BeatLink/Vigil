@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
+from vigil.core.ui.theme import COLOR_MAP, TEXT_4XL, FONT_BLACK
 from vigil.core.ui.components import info_card, log_table
 
 class SystemdPlugin(BasePlugin):
@@ -57,7 +58,7 @@ class SystemdPlugin(BasePlugin):
             info_card('SERVICE NAME', self.service_name)
 
             # Service Status Card
-            status_label = info_card('SERVICE STATUS', 'Checking...', value_classes='text-4xl font-black')
+            status_label = info_card('SERVICE STATUS', 'Checking...', value_classes=f'{TEXT_4XL} {FONT_BLACK}')
                 
             def update_status():
                 last = Metric.select().where(
@@ -66,11 +67,11 @@ class SystemdPlugin(BasePlugin):
                 if last:
                     is_active = last.value > 0.5
                     status_label.text = 'ACTIVE' if is_active else 'INACTIVE'
-                    status_label.style('color: #22c55e' if is_active else 'color: #ef4444')
+                    status_label.style(f"color: {COLOR_MAP['online'] if is_active else COLOR_MAP['failed']}")
             ui.timer(2.0, update_status)
 
             # Last Collection Card
-            time_label = info_card('LAST COLLECTION', '--:--:--', value_classes='text-4xl font-black text-blue-500')
+            time_label = info_card('LAST COLLECTION', '--:--:--', value_classes=f'{TEXT_4XL} {FONT_BLACK} text-blue-500')
                 
             def update_time():
                 last = StatusHistory.select().where(

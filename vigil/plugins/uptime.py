@@ -4,8 +4,8 @@ import re
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.theme import COLOR_MAP, CHART_PRIMARY, TEXT_MUTED
-from vigil.core.ui.components import info_card, card
+from vigil.core.ui.theme import COLOR_MAP, TEXT_5XL, FONT_BLACK
+from vigil.core.ui.components import info_card, history_chart
 
 class UptimePlugin(BasePlugin):
     """
@@ -73,7 +73,7 @@ class UptimePlugin(BasePlugin):
             info_card('TARGET HOST', self.target)
 
             # Status Card
-            status_label = info_card('CURRENT STATUS', 'Checking...', value_classes='text-5xl font-black')
+            status_label = info_card('CURRENT STATUS', 'Checking...', value_classes=f'{TEXT_5XL} {FONT_BLACK}')
                 
             def update_status():
                 last = Metric.select().where(
@@ -87,7 +87,7 @@ class UptimePlugin(BasePlugin):
             ui.timer(2.0, update_status)
 
             # Latency Card
-            latency_label = info_card('LAST LATENCY', '-- ms', value_classes='text-5xl font-black text-blue-500')
+            latency_label = info_card('LAST LATENCY', '-- ms', value_classes=f'{TEXT_5XL} {FONT_BLACK} text-blue-500')
                 
             def update_latency():
                 last = Metric.select().where(
@@ -98,30 +98,7 @@ class UptimePlugin(BasePlugin):
             ui.timer(2.0, update_latency)
         
         # Latency History Chart
-        with card('w-full h-80 mb-4'):
-            ui.label('RESPONSE TIME HISTORY (ms)').classes(f'text-xs {TEXT_MUTED} font-bold mb-2')
-            chart = ui.echart({
-                'tooltip': {'trigger': 'axis'},
-                'xAxis': {'type': 'category', 'data': []},
-                'yAxis': {'type': 'value', 'splitLine': {'show': False}},
-                'series': [{
-                    'data': [],
-                    'type': 'line',
-                    'smooth': True,
-                    'color': CHART_PRIMARY,
-                    'areaStyle': {'opacity': 0.1}
-                }]
-            }).classes('w-full h-64')
-
-            def update_chart():
-                history = Metric.select().where(
-                    (Metric.collector == self.name) & (Metric.metric_name == 'latency_ms')
-                ).order_by(Metric.timestamp.desc()).limit(30)
-                history = list(reversed(history))
-                chart.options['xAxis']['data'] = [m.timestamp.strftime('%H:%M:%S') for m in history]
-                chart.options['series'][0]['data'] = [m.value for m in history]
-                chart.update()
-            ui.timer(5.0, update_chart)
+        history_chart('RESPONSE TIME HISTORY (ms)', self.name, 'latency_ms')
 
         # Call the base implementation to show the logs table below the status cards
         super().render_ui()

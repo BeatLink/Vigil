@@ -1,15 +1,15 @@
 from nicegui import ui
-from .theme import TEXT_MUTED
+from .theme import TEXT_MUTED, LABEL_CLASS, VALUE_CLASS
 
 def card(classes: str = '', padding: bool = True):
     """A standard container with consistent padding and shadow."""
     p = 'p-4' if padding else 'p-0'
     return ui.card().classes(f'{p} shadow-sm {classes}')
 
-def info_card(title: str, value: str = '--', value_classes: str = 'text-3xl font-black text-slate-500', card_classes: str = 'flex-1'):
+def info_card(title: str, value: str = '--', value_classes: str = VALUE_CLASS, card_classes: str = 'flex-1'):
     """A card component for displaying a label and a large value."""
     with card(f'{card_classes} items-center justify-center'):
-        ui.label(title.upper()).classes(f'text-xs {TEXT_MUTED} font-bold')
+        ui.label(title.upper()).classes(LABEL_CLASS)
         return ui.label(value).classes(value_classes)
 
 def action_button(text: str, on_click=None, icon: str = 'play_arrow'):
@@ -73,3 +73,35 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
 
         ui.timer(5.0, update_logs)
         return table
+
+def history_chart(title: str, collector: str, metric_name: str, limit: int = 30):
+    """A standardized EChart for displaying metric history over time."""
+    from vigil.core.data.database import Metric
+    from .theme import CHART_PRIMARY
+    with card('w-full h-80 mb-4'):
+        ui.label(title.upper()).classes(f'{LABEL_CLASS} mb-2')
+        chart = ui.echart({
+            'tooltip': {'trigger': 'axis'},
+            'xAxis': {'type': 'category', 'data': []},
+            'yAxis': {'type': 'value', 'splitLine': {'show': False}},
+            'series': [{
+                'data': [],
+                'type': 'line',
+                'smooth': True,
+                'color': CHART_PRIMARY,
+                'areaStyle': {'opacity': 0.1}
+            }]
+        }).classes('w-full h-64')
+
+        def update():
+            history = Metric.select().where(
+                (Metric.collector == collector) & (Metric.metric_name == metric_name)
+            ).order_by(Metric.timestamp.desc()).limit(limit)
+            history = list(reversed(history))
+            chart.options['xAxis']['data'] = [m.timestamp.strftime('%H:%M:%S') for m in history]
+            chart.options['series'][0]['data'] = [m.value for m in history]
+            chart.update()
+
+        ui.timer(5.0, update)
+        update()
+        return chart

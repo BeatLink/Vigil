@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.database import StatusHistory # Needed for querying child statuses
-from vigil.core.ui.theme import COLOR_MAP, SEVERITY_ORDER, TEXT_MUTED
+from vigil.core.ui.theme import COLOR_MAP, SEVERITY_ORDER, TEXT_XS, TEXT_SM, HOVER_STYLE, TEXT_3XL, FONT_BLACK
 from vigil.core.ui.components import card, info_card, section_title
 
 class GroupPlugin(BasePlugin):
@@ -58,7 +58,7 @@ class GroupPlugin(BasePlugin):
         aggregated_status = self._get_aggregated_status()
         status_hex = COLOR_MAP.get(aggregated_status, COLOR_MAP['offline'])
 
-        status_lbl = info_card('AGGREGATED STATUS', aggregated_status.upper(), value_classes='text-4xl font-black', card_classes='w-full mb-6')
+        status_lbl = info_card('AGGREGATED STATUS', aggregated_status.upper(), value_classes=f'{TEXT_3XL} {FONT_BLACK}', card_classes='w-full mb-6')
         status_lbl.style(f'color: {status_hex}')
 
         section_title('Group Members')
@@ -70,7 +70,7 @@ class GroupPlugin(BasePlugin):
                     from vigil.core.ui.main_dashboard import navigate_to
                     navigate_to(c)
 
-                with card('items-center hover:bg-blue-50 cursor-pointer').on('click', navigate_to_child):
+                with card(f'items-center {HOVER_STYLE}').on('click', navigate_to_child):
                     # For group children, we might want to show their latest status too
                     latest_child_status = StatusHistory.select(StatusHistory.state).where(
                         StatusHistory.collector_id == child.id
@@ -79,5 +79,5 @@ class GroupPlugin(BasePlugin):
                     child_status_hex = COLOR_MAP.get(latest_child_status.state if latest_child_status else 'offline', COLOR_MAP['offline'])
 
                     ui.label(info['name']).classes('font-bold')
-                    ui.label(info['target']).classes('text-xs text-gray-400')
-                    ui.label(child_status_text).classes('text-sm font-semibold').style(f'color: {child_status_hex}')
+                    ui.label(info['target']).classes(f'{TEXT_XS} text-gray-400')
+                    ui.label(child_status_text).classes(f'{TEXT_SM} font-semibold').style(f'color: {child_status_hex}')

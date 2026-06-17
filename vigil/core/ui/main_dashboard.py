@@ -2,7 +2,7 @@ import logging
 from nicegui import app, ui
 from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory
 from typing import Any, Dict, Optional
-from .theme import COLOR_MAP, BG_PAGE, HEADER_BG, HEADER_TEXT, SIDEBAR_BG, SIDEBAR_TEXT, SIDEBAR_LABEL
+from .theme import COLOR_MAP, BG_PAGE, HEADER_BG, HEADER_TEXT, SIDEBAR_BG, SIDEBAR_TEXT, LABEL_CLASS, TEXT_LG, TEXT_2XL, TEXT_3XL
 from .components import action_button, card, section_title
 
 # Global state/helper for cross-component navigation
@@ -115,12 +115,12 @@ def init_gui(engine: Any, port: int = 8080):
                 render_plugin_detail(state['selected_plugin'])
 
     def render_overview():
-        section_title('Monitors', 'text-2xl mb-6 font-light')
+        section_title('Monitors', f'{TEXT_2XL} mb-6 font-light')
 
         with ui.row().classes('w-full gap-4 mb-6'):
             # Status Distribution Chart
             with card('flex-1 h-80'):
-                ui.label('MONITORS BY STATUS').classes('text-xs text-gray-400 font-bold mb-2')
+                ui.label('MONITORS BY STATUS').classes(f'{LABEL_CLASS} mb-2')
                 status_chart = ui.echart({
                     'tooltip': {'trigger': 'item'},
                     'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
@@ -136,7 +136,7 @@ def init_gui(engine: Any, port: int = 8080):
 
             # Type Distribution Chart
             with card('flex-1 h-80'):
-                ui.label('MONITORS BY TYPE').classes('text-xs text-gray-400 font-bold mb-2')
+                ui.label('MONITORS BY TYPE').classes(f'{LABEL_CLASS} mb-2')
                 type_chart = ui.echart({
                     'tooltip': {'trigger': 'item'},
                     'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
@@ -186,7 +186,7 @@ def init_gui(engine: Any, port: int = 8080):
 
         with ui.row().classes('w-full gap-4'):
             with card('flex-1'):
-                ui.label('Recent System Metrics').classes('text-lg font-bold mb-2')
+                ui.label('Recent System Metrics').classes(f'{TEXT_LG} font-bold mb-2')
                 metric_columns = [
                     {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
                     {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
@@ -202,7 +202,7 @@ def init_gui(engine: Any, port: int = 8080):
                 ui.timer(5.0, update_m)
 
             with card('flex-1'):
-                ui.label('Recent Events').classes('text-lg font-bold mb-2')
+                ui.label('Recent Events').classes(f'{TEXT_LG} font-bold mb-2')
                 event_columns = [
                     {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
                     {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left'},
@@ -220,7 +220,7 @@ def init_gui(engine: Any, port: int = 8080):
         info = plugin.present()
         with ui.row().classes('w-full items-center justify-between mb-6'):
             with ui.column():
-                ui.label(info['name']).classes('text-3xl font-bold')
+                ui.label(info['name']).classes(f'{TEXT_3XL} font-bold')
             
             with ui.row():
                 for action in info.get('actions', []):
