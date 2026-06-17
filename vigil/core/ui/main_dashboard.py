@@ -2,13 +2,7 @@ import logging
 from nicegui import app, ui
 from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory
 from typing import Any, Dict, Optional
-
-COLOR_MAP = {
-    'success': 'lime',
-    'warning': 'gold',
-    'fail': 'red',
-    'inactive': 'gray'
-}
+from .theme import COLOR_MAP, BG_PAGE
 
 def init_gui(engine: Any, port: int = 8080):
     db_path = engine.db_path
@@ -30,7 +24,7 @@ def init_gui(engine: Any, port: int = 8080):
         'selected_plugin': None
     }
 
-    ui.query('body').style('background-color: #f8f9fa')
+    ui.query('body').style(f'background-color: {BG_PAGE}')
 
     with ui.header().classes('items-center bg-primary text-white p-4'):
         ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')

@@ -4,7 +4,7 @@ import re
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.main_dashboard import COLOR_MAP
+from vigil.core.ui.theme import COLOR_MAP, CHART_PRIMARY, TEXT_MUTED
 
 class UptimePlugin(BasePlugin):
     """
@@ -70,12 +70,12 @@ class UptimePlugin(BasePlugin):
         with ui.row().classes('w-full gap-4 mb-4'):
             # Target Host Card
             with ui.card().classes('flex-1 p-6 items-center justify-center shadow-md'):
-                ui.label('TARGET HOST').classes('text-xs text-gray-400 font-bold')
+                ui.label('TARGET HOST').classes(f'text-xs {TEXT_MUTED} font-bold')
                 ui.label(self.target).classes('text-3xl font-black text-slate-500')
 
             # Status Card
             with ui.card().classes('flex-1 p-6 items-center justify-center shadow-md'):
-                ui.label('CURRENT STATUS').classes('text-xs text-gray-400 font-bold')
+                ui.label('CURRENT STATUS').classes(f'text-xs {TEXT_MUTED} font-bold')
                 status_label = ui.label('Checking...').classes('text-5xl font-black')
                 
                 def update_status():
@@ -91,7 +91,7 @@ class UptimePlugin(BasePlugin):
 
             # Latency Card
             with ui.card().classes('flex-1 p-6 items-center justify-center shadow-md'):
-                ui.label('LAST LATENCY').classes('text-xs text-gray-400 font-bold')
+                ui.label('LAST LATENCY').classes(f'text-xs {TEXT_MUTED} font-bold')
                 latency_label = ui.label('-- ms').classes('text-5xl font-black text-blue-500')
                 
                 def update_latency():
@@ -104,7 +104,7 @@ class UptimePlugin(BasePlugin):
         
         # Latency History Chart
         with ui.card().classes('w-full h-80 shadow-md mb-4 p-4'):
-            ui.label('RESPONSE TIME HISTORY (ms)').classes('text-xs text-gray-400 font-bold mb-2')
+            ui.label('RESPONSE TIME HISTORY (ms)').classes(f'text-xs {TEXT_MUTED} font-bold mb-2')
             chart = ui.echart({
                 'tooltip': {'trigger': 'axis'},
                 'xAxis': {'type': 'category', 'data': []},
@@ -113,7 +113,7 @@ class UptimePlugin(BasePlugin):
                     'data': [],
                     'type': 'line',
                     'smooth': True,
-                    'color': '#3b82f6',
+                    'color': CHART_PRIMARY,
                     'areaStyle': {'opacity': 0.1}
                 }]
             }).classes('w-full h-64')

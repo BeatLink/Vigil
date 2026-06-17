@@ -2,15 +2,7 @@ import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.database import StatusHistory # Needed for querying child statuses
-from vigil.core.ui.main_dashboard import COLOR_MAP
-
-# Define severity order for status aggregation
-SEVERITY_ORDER = {
-    'success': 0,
-    'inactive': 1,
-    'warning': 2,
-    'fail': 3
-}
+from vigil.core.ui.theme import COLOR_MAP, SEVERITY_ORDER, TEXT_MUTED
 
 class GroupPlugin(BasePlugin):
     """
