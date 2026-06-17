@@ -2,8 +2,17 @@ import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.database import StatusHistory # Needed for querying child statuses
-from vigil.core.ui.theme import COLOR_MAP, SEVERITY_ORDER, TEXT_XS, TEXT_SM, HOVER_STYLE
-from vigil.core.ui.components import card, info_card, section_title
+from vigil.core.ui.theme import STATUS_COLORS
+from vigil.core.ui.components import card, info_card, section_title, HOVER_STYLE
+
+# Logic for status aggregation
+SEVERITY_ORDER = {
+    'online': 0,
+    'offline': 1,
+    'warning': 2,
+    'failed': 3
+}
+
 
 class GroupPlugin(BasePlugin):
     """
@@ -56,7 +65,7 @@ class GroupPlugin(BasePlugin):
         
         # Display aggregated status at the top
         aggregated_status = self._get_aggregated_status()
-        status_hex = COLOR_MAP.get(aggregated_status, COLOR_MAP['offline'])
+        status_hex = STATUS_COLORS.get(aggregated_status, STATUS_COLORS['offline'])
 
         status_lbl = info_card('AGGREGATED STATUS', aggregated_status.upper(), card_classes='w-full mb-6')
         status_lbl.style(f'color: {status_hex}')
@@ -76,8 +85,8 @@ class GroupPlugin(BasePlugin):
                         StatusHistory.collector_id == child.id
                     ).order_by(StatusHistory.timestamp.desc()).first()
                     child_status_text = latest_child_status.state.upper() if latest_child_status else 'OFFLINE'
-                    child_status_hex = COLOR_MAP.get(latest_child_status.state if latest_child_status else 'offline', COLOR_MAP['offline'])
+                    child_status_hex = STATUS_COLORS.get(latest_child_status.state if latest_child_status else 'offline', STATUS_COLORS['offline'])
 
                     ui.label(info['name']).classes('font-bold')
-                    ui.label(info['target']).classes(f'{TEXT_XS} text-gray-400')
-                    ui.label(child_status_text).classes(f'{TEXT_SM} font-semibold').style(f'color: {child_status_hex}')
+                    ui.label(info['target']).classes('text-xs text-gray-400')
+                    ui.label(child_status_text).classes('text-sm font-semibold').style(f'color: {child_status_hex}')

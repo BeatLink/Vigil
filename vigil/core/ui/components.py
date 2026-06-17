@@ -1,5 +1,11 @@
 from nicegui import ui
-from .theme import TEXT_MUTED, LABEL_CLASS, VALUE_CLASS
+from .theme import TEXT, TEXT_MUTED, PRIMARY, STATUS_COLORS
+
+# Standardized UI Sizing Constants
+LABEL_CLASS = 'text-xs font-bold'
+VALUE_CLASS = 'text-4xl font-black'
+SECTION_CLASS = 'text-xl font-bold'
+HOVER_STYLE = 'hover:bg-blue-50 cursor-pointer'
 
 def card(classes: str = '', padding: bool = True):
     """A standard container with consistent padding and shadow."""
@@ -8,10 +14,9 @@ def card(classes: str = '', padding: bool = True):
 
 def info_card(title: str, value: str = '--', value_classes: str = VALUE_CLASS, card_classes: str = 'flex-1'):
     """A card component for displaying a label and a large value."""
-    from .theme import INFO_CARD_VALUE_COLOR
     with card(f'{card_classes} items-center justify-center'):
-        ui.label(title.upper()).classes(LABEL_CLASS)
-        return ui.label(value).classes(value_classes).style(f'color: {INFO_CARD_VALUE_COLOR}')
+        ui.label(title.upper()).classes(f'{LABEL_CLASS} text-gray-400')
+        return ui.label(value).classes(value_classes).style(f'color: {TEXT}')
 
 def action_button(text: str, on_click=None, icon: str = 'play_arrow'):
     """A standardized button for control actions."""
@@ -19,13 +24,13 @@ def action_button(text: str, on_click=None, icon: str = 'play_arrow'):
 
 def section_title(text: str, classes: str = ''):
     """A standardized heading for dashboard sections."""
-    return ui.label(text).classes(f'text-xl font-bold mb-4 {classes}')
+    return ui.label(text).classes(f'{SECTION_CLASS} mb-4 {classes}').style(f'color: {TEXT}')
 
 def metric_table(collector: str, title: str = 'Monitor Metrics', limit: int = 15):
     """A standardized table for displaying recent metrics for a specific collector."""
     from vigil.core.data.database import Metric
     with card():
-        ui.label(title).classes('font-bold mb-2 text-primary')
+        ui.label(title).classes('font-bold mb-2').style(f'color: {PRIMARY}')
         table = ui.table(columns=[
             {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
             {'name': 'name', 'label': 'Metric', 'field': 'metric_name', 'align': 'left'},
@@ -46,9 +51,9 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
     
     with card(card_classes, padding=not full_height):
         if full_height:
-            ui.label(title).classes('font-bold p-4 text-primary bg-slate-50 w-full border-b')
+            ui.label(title).classes('font-bold p-4 bg-slate-50 w-full border-b').style(f'color: {PRIMARY}')
         else:
-            ui.label(title).classes('font-bold mb-2 text-primary')
+            ui.label(title).classes('font-bold mb-2').style(f'color: {PRIMARY}')
 
         columns = [
             {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left', 'sortable': True},
@@ -78,7 +83,6 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
 def history_chart(title: str, collector: str, metric_name: str, limit: int = 30):
     """A standardized EChart for displaying metric history over time."""
     from vigil.core.data.database import Metric
-    from .theme import CHART_PRIMARY
     with card('w-full h-80 mb-4'):
         ui.label(title.upper()).classes(f'{LABEL_CLASS} mb-2')
         chart = ui.echart({
@@ -89,7 +93,7 @@ def history_chart(title: str, collector: str, metric_name: str, limit: int = 30)
                 'data': [],
                 'type': 'line',
                 'smooth': True,
-                'color': CHART_PRIMARY,
+                'color': PRIMARY,
                 'areaStyle': {'opacity': 0.1}
             }]
         }).classes('w-full h-64')
@@ -116,7 +120,6 @@ def render_status_card(collector: str, metric_name: str, title: str = 'STATUS',
                        value_classes: str = VALUE_CLASS):
     """A reusable card for monitoring a binary metric state with auto-refresh."""
     from vigil.core.data.database import Metric
-    from .theme import COLOR_MAP
     
     lbl = info_card(title, 'Checking...', value_classes=value_classes)
     
@@ -127,6 +130,6 @@ def render_status_card(collector: str, metric_name: str, title: str = 'STATUS',
         if last:
             is_on = last.value > 0.5
             lbl.text = on_text if is_on else off_text
-            lbl.style(f"color: {COLOR_MAP['online'] if is_on else COLOR_MAP['failed']}")
+            lbl.style(f"color: {STATUS_COLORS['online'] if is_on else STATUS_COLORS['failed']}")
     ui.timer(2.0, update)
     return lbl
