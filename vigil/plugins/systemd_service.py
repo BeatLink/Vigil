@@ -51,24 +51,19 @@ class SystemdPlugin(BasePlugin):
         from vigil.core.data.database import Metric, StatusHistory
 
         with ui.row().classes('w-full gap-4 mb-4'):
-            # Target Host Card
-            info_card('TARGET HOST', self.target)
+            self.internal_modules['ui']['host_card']()
 
             # Service Name Card
             info_card('SERVICE NAME', self.service_name)
 
             # Service Status Card
-            status_label = info_card('SERVICE STATUS', 'Checking...', value_classes=f'{TEXT_4XL} {FONT_BLACK}')
-                
-            def update_status():
-                last = Metric.select().where(
-                    (Metric.collector == self.name) & (Metric.metric_name == 'active')
-                ).order_by(Metric.timestamp.desc()).first()
-                if last:
-                    is_active = last.value > 0.5
-                    status_label.text = 'ACTIVE' if is_active else 'INACTIVE'
-                    status_label.style(f"color: {COLOR_MAP['online'] if is_active else COLOR_MAP['failed']}")
-            ui.timer(2.0, update_status)
+            self.internal_modules['ui']['status_card'](
+                metric_name='active',
+                title='SERVICE STATUS',
+                on_text='ACTIVE',
+                off_text='INACTIVE',
+                value_classes=f'{TEXT_4XL} {FONT_BLACK}'
+            )
 
             # Last Collection Card
             time_label = info_card('LAST COLLECTION', '--:--:--', value_classes=f'{TEXT_4XL} {FONT_BLACK} text-blue-500')

@@ -105,3 +105,34 @@ def history_chart(title: str, collector: str, metric_name: str, limit: int = 30)
         ui.timer(5.0, update)
         update()
         return chart
+
+def render_host_card(target: str):
+    """Renders the standard target host information card."""
+    return info_card('TARGET HOST', target)
+
+def render_standard_tables(name: str, target: str):
+    """Renders the default metrics and logs tables in a grid."""
+    from nicegui import ui
+    with ui.grid(columns=2).classes('w-full gap-4'):
+        metric_table(name)
+        log_table(target, filter_prefix=name)
+
+def render_status_card(collector: str, metric_name: str, title: str = 'STATUS', 
+                       on_text: str = 'ACTIVE', off_text: str = 'INACTIVE', 
+                       value_classes: str = VALUE_CLASS):
+    """A reusable card for monitoring a binary metric state with auto-refresh."""
+    from vigil.core.data.database import Metric
+    from .theme import COLOR_MAP
+    
+    lbl = info_card(title, 'Checking...', value_classes=value_classes)
+    
+    def update():
+        last = Metric.select().where(
+            (Metric.collector == collector) & (Metric.metric_name == metric_name)
+        ).order_by(Metric.timestamp.desc()).first()
+        if last:
+            is_on = last.value > 0.5
+            lbl.text = on_text if is_on else off_text
+            lbl.style(f"color: {COLOR_MAP['online'] if is_on else COLOR_MAP['failed']}")
+    ui.timer(2.0, update)
+    return lbl

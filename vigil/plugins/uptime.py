@@ -69,22 +69,16 @@ class UptimePlugin(BasePlugin):
         from vigil.core.data.database import Metric
         
         with ui.row().classes('w-full gap-4 mb-4'):
-            # Target Host Card
-            info_card('TARGET HOST', self.target)
+            self.internal_modules['ui']['host_card']()
 
             # Status Card
-            status_label = info_card('CURRENT STATUS', 'Checking...', value_classes=f'{TEXT_5XL} {FONT_BLACK}')
-                
-            def update_status():
-                last = Metric.select().where(
-                    (Metric.collector == self.name) & (Metric.metric_name == 'up')
-                ).order_by(Metric.timestamp.desc()).first()
-                if last:
-                    is_up = last.value > 0.5
-                    status_label.text = 'ONLINE' if is_up else 'OFFLINE'
-                    status_color = COLOR_MAP['online'] if is_up else COLOR_MAP['failed']
-                    status_label.style(f'color: {status_color}')
-            ui.timer(2.0, update_status)
+            self.internal_modules['ui']['status_card'](
+                metric_name='up',
+                title='CURRENT STATUS',
+                on_text='ONLINE',
+                off_text='OFFLINE',
+                value_classes=f'{TEXT_5XL} {FONT_BLACK}'
+            )
 
             # Latency Card
             latency_label = info_card('LAST LATENCY', '-- ms', value_classes=f'{TEXT_5XL} {FONT_BLACK} text-blue-500')
@@ -100,5 +94,4 @@ class UptimePlugin(BasePlugin):
         # Latency History Chart
         history_chart('RESPONSE TIME HISTORY (ms)', self.name, 'latency_ms')
 
-        # Call the base implementation to show the logs table below the status cards
-        super().render_ui()
+        self.internal_modules['ui']['tables']()
