@@ -101,8 +101,75 @@ def init_gui(engine: Any, port: int = 8080):
                 render_plugin_detail(state['selected_plugin'])
 
     def render_overview():
-        ui.label('Infrastructure Overview').classes('text-2xl mb-6 font-light')
-        
+        ui.label('Infrastructure Reporting').classes('text-2xl mb-6 font-light')
+
+        with ui.row().classes('w-full gap-4 mb-6'):
+            # Status Distribution Chart
+            with ui.card().classes('flex-1 p-4 h-80 shadow-md'):
+                ui.label('MONITORS BY STATUS').classes('text-xs text-gray-400 font-bold mb-2')
+                status_chart = ui.echart({
+                    'tooltip': {'trigger': 'item'},
+                    'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
+                    'series': [{
+                        'type': 'pie',
+                        'radius': ['40%', '70%'],
+                        'avoidLabelOverlap': False,
+                        'itemStyle': {'borderRadius': 10, 'borderColor': '#fff', 'borderWidth': 2},
+                        'label': {'show': False},
+                        'data': []
+                    }]
+                }).classes('w-full h-64')
+
+            # Type Distribution Chart
+            with ui.card().classes('flex-1 p-4 h-80 shadow-md'):
+                ui.label('MONITORS BY TYPE').classes('text-xs text-gray-400 font-bold mb-2')
+                type_chart = ui.echart({
+                    'tooltip': {'trigger': 'item'},
+                    'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
+                    'series': [{
+                        'type': 'pie',
+                        'radius': ['40%', '70%'],
+                        'avoidLabelOverlap': False,
+                        'itemStyle': {'borderRadius': 10, 'borderColor': '#fff', 'borderWidth': 2},
+                        'label': {'show': False},
+                        'data': []
+                    }]
+                }).classes('w-full h-64')
+
+        def update_charts():
+            all_monitors = []
+            def collect_leafs(plist):
+                for p in plist:
+                    if not p.children: all_monitors.append(p)
+                    else: collect_leafs(p.children)
+            collect_leafs(engine.plugins)
+
+            status_counts = {'success': 0, 'fail': 0, 'warning': 0, 'inactive': 0}
+            type_counts = {}
+            
+            with StatusHistory._meta.database.connection_context():
+                for m in all_monitors:
+                    latest = StatusHistory.select().where(StatusHistory.collector_id == m.id).order_by(StatusHistory.timestamp.desc()).first()
+                    st = latest.state if latest else 'inactive'
+                    status_counts[st] = status_counts.get(st, 0) + 1
+                    
+                    mtype = m.config.get('type', 'unknown')
+                    type_counts[mtype] = type_counts.get(mtype, 0) + 1
+
+            status_chart.options['series'][0]['data'] = [
+                {'value': status_counts['success'], 'name': 'Success', 'itemStyle': {'color': COLOR_MAP['success']}},
+                {'value': status_counts['fail'], 'name': 'Failed', 'itemStyle': {'color': COLOR_MAP['fail']}},
+                {'value': status_counts['warning'], 'name': 'Warning', 'itemStyle': {'color': COLOR_MAP['warning']}},
+                {'value': status_counts['inactive'], 'name': 'Inactive', 'itemStyle': {'color': COLOR_MAP['inactive']}},
+            ]
+            type_chart.options['series'][0]['data'] = [{'value': v, 'name': k.upper()} for k, v in type_counts.items()]
+            status_chart.update()
+            type_chart.update()
+
+        # Initial data load and refresh timer
+        update_charts()
+        ui.timer(10.0, update_charts)
+
         with ui.card().classes('w-full p-4 mb-6'):
             ui.label('Recent System Metrics').classes('text-lg font-bold mb-2')
             metric_columns = [
