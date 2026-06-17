@@ -4,10 +4,10 @@ from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, E
 from typing import Any, Dict, Optional
 
 COLOR_MAP = {
-    'success': '#22c55e',
-    'warning': '#f59e0b',
-    'fail': '#ef4444',
-    'inactive': '#94a3b8'
+    'success': 'lime',
+    'warning': 'gold',
+    'fail': 'red',
+    'inactive': 'gray'
 }
 
 def init_gui(engine: Any, port: int = 8080):
@@ -55,12 +55,7 @@ def init_gui(engine: Any, port: int = 8080):
                         'id': p.id,
                         'label': p.name,
                         'icon': 'circle',
-                        'icon_color': {
-                            'success': 'positive',
-                            'warning': 'warning',
-                            'fail': 'negative',
-                            'inactive': 'grey'
-                        }.get(state, 'grey')
+                        'color': COLOR_MAP[state]
                     }
                     if p.children:
                         node['children'] = build_tree_nodes(p.children)
@@ -85,6 +80,13 @@ def init_gui(engine: Any, port: int = 8080):
 
         # Initialize the built-in tree component
         tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).props('').classes('w-full px-6 text-lg')
+
+        tree.add_slot('default-header', '''
+            <span class="flex items-center gap-2">
+                <q-icon name="circle" :style="{ color: props.node.color }" size="12px" />
+                {{ props.node.label }}
+            </span>
+        ''')
         
         # Periodically refresh tree data (dots and nodes)
         ui.timer(5.0, lambda: setattr(tree, 'nodes', build_tree_nodes(engine.plugins)))
