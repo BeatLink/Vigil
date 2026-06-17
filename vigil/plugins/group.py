@@ -72,8 +72,6 @@ class GroupPlugin(BasePlugin):
         """Render a summary dashboard for the group members."""
         from nicegui import ui
         
-        ui.label(f"Group: {self.name}").classes('text-2xl font-bold mb-4')
-        
         # Display aggregated status at the top
         aggregated_status = self._get_aggregated_status()
         status_hex = COLOR_MAP.get(aggregated_status, COLOR_MAP['inactive'])
@@ -97,7 +95,3 @@ class GroupPlugin(BasePlugin):
                     ui.label(info['name']).classes('font-bold')
                     ui.label(info['target']).classes('text-xs text-gray-400')
                     ui.label(child_status_text).classes('text-sm font-semibold').style(f'color: {child_status_hex}')
-
-        with ui.card().classes('w-full mt-6 p-4'):
-            ui.label('Group Configuration').classes('font-bold text-gray-500 mb-2')
-            ui.json_editor({'content': {'json': self.config}}).props('readonly')
