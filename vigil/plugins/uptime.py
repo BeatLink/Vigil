@@ -75,27 +75,27 @@ class UptimePlugin(BasePlugin):
             # Status Card
             status_label = info_card('CURRENT STATUS', 'Checking...', value_classes='text-5xl font-black')
                 
-                def update_status():
-                    last = Metric.select().where(
-                        (Metric.collector == self.name) & (Metric.metric_name == 'up')
-                    ).order_by(Metric.timestamp.desc()).first()
-                    if last:
-                        is_up = last.value > 0.5
-                        status_label.text = 'ONLINE' if is_up else 'OFFLINE'
-                        status_color = COLOR_MAP['online'] if is_up else COLOR_MAP['failed']
-                        status_label.style(f'color: {status_color}')
-                ui.timer(2.0, update_status)
+            def update_status():
+                last = Metric.select().where(
+                    (Metric.collector == self.name) & (Metric.metric_name == 'up')
+                ).order_by(Metric.timestamp.desc()).first()
+                if last:
+                    is_up = last.value > 0.5
+                    status_label.text = 'ONLINE' if is_up else 'OFFLINE'
+                    status_color = COLOR_MAP['online'] if is_up else COLOR_MAP['failed']
+                    status_label.style(f'color: {status_color}')
+            ui.timer(2.0, update_status)
 
             # Latency Card
             latency_label = info_card('LAST LATENCY', '-- ms', value_classes='text-5xl font-black text-blue-500')
                 
-                def update_latency():
-                    last = Metric.select().where(
-                        (Metric.collector == self.name) & (Metric.metric_name == 'latency_ms')
-                    ).order_by(Metric.timestamp.desc()).first()
-                    if last:
-                        latency_label.text = f"{last.value:.1f} ms"
-                ui.timer(2.0, update_latency)
+            def update_latency():
+                last = Metric.select().where(
+                    (Metric.collector == self.name) & (Metric.metric_name == 'latency_ms')
+                ).order_by(Metric.timestamp.desc()).first()
+                if last:
+                    latency_label.text = f"{last.value:.1f} ms"
+            ui.timer(2.0, update_latency)
         
         # Latency History Chart
         with card('w-full h-80 mb-4'):

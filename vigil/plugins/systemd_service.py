@@ -59,26 +59,26 @@ class SystemdPlugin(BasePlugin):
             # Service Status Card
             status_label = info_card('SERVICE STATUS', 'Checking...', value_classes='text-4xl font-black')
                 
-                def update_status():
-                    last = Metric.select().where(
-                        (Metric.collector == self.name) & (Metric.metric_name == 'active')
-                    ).order_by(Metric.timestamp.desc()).first()
-                    if last:
-                        is_active = last.value > 0.5
-                        status_label.text = 'ACTIVE' if is_active else 'INACTIVE'
-                        status_label.style('color: #22c55e' if is_active else 'color: #ef4444')
-                ui.timer(2.0, update_status)
+            def update_status():
+                last = Metric.select().where(
+                    (Metric.collector == self.name) & (Metric.metric_name == 'active')
+                ).order_by(Metric.timestamp.desc()).first()
+                if last:
+                    is_active = last.value > 0.5
+                    status_label.text = 'ACTIVE' if is_active else 'INACTIVE'
+                    status_label.style('color: #22c55e' if is_active else 'color: #ef4444')
+            ui.timer(2.0, update_status)
 
             # Last Collection Card
             time_label = info_card('LAST COLLECTION', '--:--:--', value_classes='text-4xl font-black text-blue-500')
                 
-                def update_time():
-                    last = StatusHistory.select().where(
-                        StatusHistory.collector_id == self.id
-                    ).order_by(StatusHistory.timestamp.desc()).first()
-                    if last:
-                        time_label.text = last.timestamp.strftime('%H:%M:%S')
-                ui.timer(2.0, update_time)
+            def update_time():
+                last = StatusHistory.select().where(
+                    StatusHistory.collector_id == self.id
+                ).order_by(StatusHistory.timestamp.desc()).first()
+                if last:
+                    time_label.text = last.timestamp.strftime('%H:%M:%S')
+            ui.timer(2.0, update_time)
 
         # Log Area (Occupies the majority of the view)
         with card('w-full overflow-hidden flex-grow', padding=False):
