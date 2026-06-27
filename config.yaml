@@ -85,8 +85,9 @@ plugins:
           - name: "NixOS Upgrade"
             id: "ragnarok-nixos-upgrade"
             type: "systemd_service"
-            interval: 60
+            interval: 3600
             service_name: "nixos-upgrade.service"
+            max_age: 604800  # 1 week
             ssh_config:
               host: "ragnarok.technet"
       - name: "Heimdall Services"
@@ -96,8 +97,9 @@ plugins:
           - name: "NixOS Upgrade"
             id: "heimdall-nixos-upgrade"
             type: "systemd_service"
-            interval: 60
+            interval: 3600
             service_name: "nixos-upgrade.service"
+            max_age: 604800  # 1 week
             ssh_config:
               host: "heimdall.technet"
           - name: "Unbound"
@@ -121,8 +123,9 @@ plugins:
           - name: "NixOS Upgrade"
             id: "odin-nixos-upgrade"
             type: "systemd_service"
-            interval: 60
+            interval: 3600
             service_name: "nixos-upgrade.service"
+            max_age: 604800  # 1 week
             ssh_config:
               host: "odin.technet"
           - name: "Networking"

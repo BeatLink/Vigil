@@ -100,29 +100,45 @@ Checks host availability using ICMP ping.
 ---
 
 ### `systemd_service`
-Monitors status and logs for a systemd unit over SSH.
+Monitors systemd units over SSH. Operates in two modes depending on whether `max_age` is set.
 
-| Option         | Description                                                        |
-|----------------|--------------------------------------------------------------------|
-| `service_name` | Name of the systemd unit (e.g. `nginx.service`)                    |
-| `lines`        | Number of `journalctl` log lines to fetch per cycle (default: `10`) |
-| `interval`     | Polling frequency in seconds (default: `60`)                       |
-| `ssh_config`   | SSH connection details — see [SSH Config](#ssh-config) below       |
+**Continuous mode** (default) — for long-running daemons. Checks `systemctl is-active` each cycle and reports `online`/`warning`/`failed`.
 
-**Metrics**: `active` (1/0)
+**Oneshot mode** (`max_age` set) — for timer-driven services that run and exit (e.g. `nixos-upgrade`, backup jobs). Checks the result and timestamp of the last completed run via `systemctl show`. Reports `failed` if the last run did not succeed or completed more than `max_age` seconds ago.
+
+| Option         | Description                                                                     |
+|----------------|---------------------------------------------------------------------------------|
+| `service_name` | Name of the systemd unit (e.g. `nginx.service`)                                 |
+| `lines`        | Number of `journalctl` log lines to fetch per cycle (default: `10`)             |
+| `interval`     | Polling frequency in seconds (default: `60`)                                    |
+| `max_age`      | *(Oneshot mode)* Max seconds since last successful run before reporting `failed` |
+| `ssh_config`   | SSH connection details — see [SSH Config](#ssh-config) below                    |
+
+**Continuous metrics**: `active` (1/0)
+
+**Oneshot metrics**: `last_run_epoch` (Unix timestamp), `last_run_success` (1/0)
 
 **Actions**: Restart Service, Stop Service
 
 ```yaml
+# Continuous — long-running daemon
 - name: "Nginx"
   id: "nginx-service"
   type: "systemd_service"
   service_name: "nginx.service"
-  lines: 50
   interval: 60
   ssh_config:
     host: "web-01.example.com"
-    user: "vigil"
+
+# Oneshot — weekly timer-driven service
+- name: "NixOS Upgrade"
+  id: "myhost-nixos-upgrade"
+  type: "systemd_service"
+  service_name: "nixos-upgrade.service"
+  interval: 3600
+  max_age: 604800  # 1 week
+  ssh_config:
+    host: "myhost.example.com"
 ```
 
 ---
