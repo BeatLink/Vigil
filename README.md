@@ -68,37 +68,131 @@ vigil/
 
 ## Plugin Types
 
+All plugin types share these common fields:
+
+| Field    | Description                                                          |
+|----------|----------------------------------------------------------------------|
+| `name`   | Display name shown in the sidebar and dashboard                      |
+| `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
+| `type`   | Plugin type — one of `uptime`, `systemd_service`, `zfs_pool`, `group` |
+| `interval` | Polling frequency in seconds (default: 60)                         |
+
+---
+
 ### `uptime`
 Checks host availability using ICMP ping.
 
-| Option        | Description                              |
-|---------------|------------------------------------------|
-| `target_host` | The IP or hostname to ping               |
-| `interval`    | Polling frequency in seconds (default: 60) |
+| Option        | Description                                        |
+|---------------|----------------------------------------------------|
+| `target_host` | IP address or hostname to ping                     |
+| `interval`    | Polling frequency in seconds (default: `60`)       |
 
 **Metrics**: `up` (1/0), `latency_ms`
+
+```yaml
+- name: "Core Gateway"
+  id: "gateway-ping"
+  type: "uptime"
+  target_host: "192.168.1.1"
+  interval: 30
+```
 
 ---
 
 ### `systemd_service`
 Monitors status and logs for a systemd unit over SSH.
 
-| Option         | Description                                      |
-|----------------|--------------------------------------------------|
-| `service_name` | Name of the systemd unit (e.g. `nginx.service`)  |
-| `lines`        | Number of `journalctl` log lines to fetch per cycle |
-| `ssh_config`   | SSH connection details (`host`, `user`, etc.)    |
+| Option         | Description                                                        |
+|----------------|--------------------------------------------------------------------|
+| `service_name` | Name of the systemd unit (e.g. `nginx.service`)                    |
+| `lines`        | Number of `journalctl` log lines to fetch per cycle (default: `10`) |
+| `interval`     | Polling frequency in seconds (default: `60`)                       |
+| `ssh_config`   | SSH connection details — see [SSH Config](#ssh-config) below       |
+
+**Metrics**: `active` (1/0)
 
 **Actions**: Restart Service, Stop Service
+
+```yaml
+- name: "Nginx"
+  id: "nginx-service"
+  type: "systemd_service"
+  service_name: "nginx.service"
+  lines: 50
+  interval: 60
+  ssh_config:
+    host: "web-01.example.com"
+    user: "vigil"
+```
+
+---
+
+### `zfs_pool`
+Monitors ZFS zpool capacity over SSH. Marks the pool failed when usage exceeds the configured threshold.
+
+| Option      | Description                                                   |
+|-------------|---------------------------------------------------------------|
+| `pool`      | Name of the zpool to monitor (e.g. `data-pool-myhost`)        |
+| `threshold` | Usage percentage that triggers a `failed` status (default: `90`) |
+| `interval`  | Polling frequency in seconds (default: `60`, recommend `600`) |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `usage_pct`
+
+```yaml
+- name: "Data Pool"
+  id: "myhost-data-pool"
+  type: "zfs_pool"
+  pool: "data-pool-myhost"
+  threshold: 90
+  interval: 600
+  ssh_config:
+    host: "myhost.example.com"
+```
 
 ---
 
 ### `group`
-A logical container for other monitors. Aggregates the status of all children.
+A logical container for other monitors. Aggregates the worst-case status of all descendants and displays a summary card for each child.
 
-| Option     | Description                          |
-|------------|--------------------------------------|
-| `children` | A list of nested plugin definitions  |
+| Option     | Description                                  |
+|------------|----------------------------------------------|
+| `children` | A list of nested plugin definitions          |
+
+Groups can be nested to arbitrary depth.
+
+```yaml
+- name: "Infrastructure"
+  type: "group"
+  children:
+    - name: "Web Tier"
+      type: "group"
+      children:
+        - name: "Nginx"
+          type: "systemd_service"
+          ...
+```
+
+---
+
+### SSH Config
+
+All SSH-based plugins (`systemd_service`, `zfs_pool`) accept an `ssh_config` block:
+
+| Field        | Description                                                         |
+|--------------|---------------------------------------------------------------------|
+| `host`       | Remote hostname or IP address                                       |
+| `user`       | SSH username (defaults to the current OS user if omitted)           |
+| `port`       | SSH port (default: `22`)                                            |
+| `key_file`   | Path to a private key file (uses the SSH agent / default key if omitted) |
+
+```yaml
+ssh_config:
+  host: "myhost.example.com"
+  user: "vigil"
+  port: 22
+  key_file: "/home/vigil/.ssh/id_ed25519"
+```
 
 ---
 
@@ -201,6 +295,7 @@ nix run . -- --config config.yaml
 - [x] Hierarchical plugin/group support
 - [x] Ping/ICMP uptime module
 - [x] Web dashboard (NiceGUI)
+- [x] ZFS zpool capacity monitor
 - [ ] SSH collector module with standard metric parsing (CPU, RAM, Disk)
 - [ ] Basic alerting (Email, Slack, or Webhook)
 - [ ] Control module for service remediation

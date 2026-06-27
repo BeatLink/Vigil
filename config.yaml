@@ -75,7 +75,6 @@ plugins:
             type: "uptime"
             target_host: "sensor-bathroom.lan"
 
-
   - name: "Running Services"
     type: "group"
     children:
@@ -116,3 +115,63 @@ plugins:
             ssh_config:
               host: "odin.technet"
 
+  - name: "ZFS Storage"
+    type: "group"
+    children:
+      - name: "Ragnarok Storage"
+        type: "group"
+        children:
+          - name: "Ragnarok Data Pool"
+            id: "ragnarok-data-pool"
+            type: "zfs_pool"
+            pool: "data-pool-Ragnarok"
+            threshold: 90
+            interval: 600
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "Ragnarok Root Pool"
+            id: "ragnarok-root-pool"
+            type: "zfs_pool"
+            pool: "root-pool-Ragnarok"
+            threshold: 90
+            interval: 600
+            ssh_config:
+              host: "ragnarok.technet"
+      - name: "Heimdall Storage"
+        type: "group"
+        children:
+          - name: "Heimdall Data Pool"
+            id: "heimdall-data-pool"
+            type: "zfs_pool"
+            pool: "data-pool-Heimdall"
+            threshold: 90
+            interval: 600
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Heimdall Root Pool"
+            id: "heimdall-root-pool"
+            type: "zfs_pool"
+            pool: "root-pool-Heimdall"
+            threshold: 90
+            interval: 600
+            ssh_config:
+              host: "heimdall.technet"
+      - name: "Odin Storage"
+        type: "group"
+        children:
+          - name: "Odin Data Pool"
+            id: "odin-data-pool"
+            type: "zfs_pool"
+            pool: "data-pool-Odin"
+            threshold: 90
+            interval: 600
+            ssh_config:
+              host: "odin.technet"
+          - name: "Odin Root Pool"
+            id: "odin-root-pool"
+            type: "zfs_pool"
+            pool: "root-pool-Odin"
+            threshold: 90
+            interval: 600
+            ssh_config:
+              host: "odin.technet"
