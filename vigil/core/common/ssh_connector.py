@@ -56,17 +56,18 @@ class SSHConnection:
             self.client = None
             raise
 
-    def execute(self, command: str) -> Tuple[int, str, str]:
+    def execute(self, command: str, timeout: float = 30.0) -> Tuple[int, str, str]:
         """Executes a command and returns (exit_status, stdout, stderr)."""
         if not self.client:
             self.connect()
-            
+
         try:
-            _, stdout, stderr = self.client.exec_command(command)
+            _, stdout, stderr = self.client.exec_command(command, timeout=timeout)
             exit_status = stdout.channel.recv_exit_status()
             return exit_status, stdout.read().decode().strip(), stderr.read().decode().strip()
         except Exception as e:
             logging.error(f"Command execution failed on {self.host}: {e}")
+            self.client = None  # Force reconnect on the next call
             raise
 
     def close(self):
