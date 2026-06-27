@@ -78,10 +78,28 @@ plugins:
   - name: "Running Services"
     type: "group"
     children:
+      - name: "Ragnarok Services"
+        id: "ragnarok-services"
+        type: "group"
+        children:
+          - name: "NixOS Upgrade"
+            id: "ragnarok-nixos-upgrade"
+            type: "systemd_service"
+            interval: 60
+            service_name: "nixos-upgrade.service"
+            ssh_config:
+              host: "ragnarok.technet"
       - name: "Heimdall Services"
         id: "heimdall-services"
         type: "group"
         children:
+          - name: "NixOS Upgrade"
+            id: "heimdall-nixos-upgrade"
+            type: "systemd_service"
+            interval: 60
+            service_name: "nixos-upgrade.service"
+            ssh_config:
+              host: "heimdall.technet"
           - name: "Unbound"
             id: "heimdall-unbound"
             type: "systemd_service"
@@ -100,6 +118,13 @@ plugins:
         id: "odin-services"
         type: "group"
         children:
+          - name: "NixOS Upgrade"
+            id: "odin-nixos-upgrade"
+            type: "systemd_service"
+            interval: 60
+            service_name: "nixos-upgrade.service"
+            ssh_config:
+              host: "odin.technet"
           - name: "Networking"
             id: "odin-networking"
             type: "systemd_service"
