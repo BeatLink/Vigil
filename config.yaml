@@ -16,17 +16,17 @@ plugins:
             id: "ragnarok"
             type: "uptime"
             target_host: "ragnarok.technet"
-            interval: 30
+            interval: 30s
           - name: "Heimdall"
             id: "heimdall"
             type: "uptime"
             target_host: "heimdall.technet"
-            interval: 30
+            interval: 30s
           - name: "Odin"
             id: "odin"
             type: "uptime"
             target_host: "odin.technet"
-            interval: 30
+            interval: 30s
           - name: "Thor"
             id: "thor"
             type: "uptime"
@@ -85,9 +85,9 @@ plugins:
           - name: "NixOS Upgrade"
             id: "ragnarok-nixos-upgrade"
             type: "systemd_service"
-            interval: 3600
+            interval: 1h
             service_name: "nixos-upgrade.service"
-            max_age: 604800  # 1 week
+            max_age: 1w
             ssh_config:
               host: "ragnarok.technet"
       - name: "Heimdall Services"
@@ -97,22 +97,22 @@ plugins:
           - name: "NixOS Upgrade"
             id: "heimdall-nixos-upgrade"
             type: "systemd_service"
-            interval: 3600
+            interval: 1h
             service_name: "nixos-upgrade.service"
-            max_age: 604800  # 1 week
+            max_age: 1w
             ssh_config:
               host: "heimdall.technet"
           - name: "Unbound"
             id: "heimdall-unbound"
             type: "systemd_service"
-            interval: 60
+            interval: 1m
             service_name: "unbound.service"
             ssh_config:
               host: "heimdall.technet"
           - name: "VLC"
             id: "heimdall-vlc"
             type: "systemd_service"
-            interval: 60
+            interval: 1m
             service_name: "vlc-audio.service"
             ssh_config:
               host: "heimdall.technet"
@@ -123,22 +123,22 @@ plugins:
           - name: "NixOS Upgrade"
             id: "odin-nixos-upgrade"
             type: "systemd_service"
-            interval: 3600
+            interval: 1h
             service_name: "nixos-upgrade.service"
-            max_age: 604800  # 1 week
+            max_age: 1w
             ssh_config:
               host: "odin.technet"
           - name: "Networking"
             id: "odin-networking"
             type: "systemd_service"
-            interval: 60
+            interval: 1m
             service_name: "NetworkManager.service"
             ssh_config:
               host: "odin.technet"
           - name: "Bluetooth"
             id: "local-bluetooth"
             type: "systemd_service"
-            interval: 60
+            interval: 1m
             service_name: "bluetooth.service"
             ssh_config:
               host: "odin.technet"
@@ -152,13 +152,13 @@ plugins:
           - name: "Ragnarok SMART"
             id: "ragnarok-smart"
             type: "smart_disk"
-            interval: 3600
+            interval: 1h
             ssh_config:
               host: "ragnarok.technet"
           - name: "Ragnarok ZFS Health"
             id: "ragnarok-zfs-health"
             type: "zfs_health"
-            interval: 3600
+            interval: 1h
             ssh_config:
               host: "ragnarok.technet"
       - name: "Heimdall Disk Health"
@@ -167,13 +167,13 @@ plugins:
           - name: "Heimdall SMART"
             id: "heimdall-smart"
             type: "smart_disk"
-            interval: 3600
+            interval: 1h
             ssh_config:
               host: "heimdall.technet"
           - name: "Heimdall ZFS Health"
             id: "heimdall-zfs-health"
             type: "zfs_health"
-            interval: 3600
+            interval: 1h
             ssh_config:
               host: "heimdall.technet"
       - name: "Odin Disk Health"
@@ -182,13 +182,13 @@ plugins:
           - name: "Odin SMART"
             id: "odin-smart"
             type: "smart_disk"
-            interval: 3600
+            interval: 1h
             ssh_config:
               host: "odin.technet"
           - name: "Odin ZFS Health"
             id: "odin-zfs-health"
             type: "zfs_health"
-            interval: 3600
+            interval: 1h
             ssh_config:
               host: "odin.technet"
 
@@ -203,7 +203,7 @@ plugins:
             type: "zfs_pool"
             pool: "data-pool-Ragnarok"
             threshold: 90
-            interval: 600
+            interval: 10m
             ssh_config:
               host: "ragnarok.technet"
           - name: "Ragnarok Root Pool"
@@ -211,7 +211,7 @@ plugins:
             type: "zfs_pool"
             pool: "root-pool-Ragnarok"
             threshold: 90
-            interval: 600
+            interval: 10m
             ssh_config:
               host: "ragnarok.technet"
       - name: "Heimdall Storage"
@@ -222,7 +222,7 @@ plugins:
             type: "zfs_pool"
             pool: "data-pool-Heimdall"
             threshold: 90
-            interval: 600
+            interval: 10m
             ssh_config:
               host: "heimdall.technet"
           - name: "Heimdall Root Pool"
@@ -230,7 +230,7 @@ plugins:
             type: "zfs_pool"
             pool: "root-pool-Heimdall"
             threshold: 90
-            interval: 600
+            interval: 10m
             ssh_config:
               host: "heimdall.technet"
       - name: "Odin Storage"
@@ -241,7 +241,7 @@ plugins:
             type: "zfs_pool"
             pool: "data-pool-Odin"
             threshold: 90
-            interval: 600
+            interval: 10m
             ssh_config:
               host: "odin.technet"
           - name: "Odin Root Pool"
@@ -249,6 +249,6 @@ plugins:
             type: "zfs_pool"
             pool: "root-pool-Odin"
             threshold: 90
-            interval: 600
+            interval: 10m
             ssh_config:
               host: "odin.technet"

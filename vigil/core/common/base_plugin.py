@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 from vigil.core.common.ssh_connector import SSHConnection
+from vigil.core.common.time_utils import parse_duration
 from functools import partial
 from vigil.core.ui.components import render_host_card, render_status_card, metric_table, log_table
 from vigil.core.modules.collectors.ssh_collector import SSHCollector
@@ -15,7 +16,7 @@ class BasePlugin(ABC):
         self.name = name
         self.id = config.get('id', name)  # Unique identifier for the tree
         self.config = config
-        self.interval = config.get('interval', 60)
+        self.interval = parse_duration(config.get('interval', 60))
         self.children: List['BasePlugin'] = []
         self.db = db
 

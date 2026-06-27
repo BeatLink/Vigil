@@ -1,25 +1,8 @@
 import time
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
+from vigil.core.common.time_utils import parse_duration, format_duration, format_age
 from vigil.core.ui.components import info_card
-
-
-def _fmt_duration(seconds: int) -> str:
-    """Formats a number of seconds as a compact human-readable duration."""
-    if seconds < 60:
-        return f'{seconds}s'
-    if seconds < 3600:
-        return f'{seconds // 60}m'
-    if seconds < 86400:
-        h, m = seconds // 3600, (seconds % 3600) // 60
-        return f'{h}h {m}m' if m else f'{h}h'
-    d, h = seconds // 86400, (seconds % 86400) // 3600
-    return f'{d}d {h}h' if h else f'{d}d'
-
-
-def _fmt_age(seconds: int) -> str:
-    """Formats how long ago something happened."""
-    return 'Never' if seconds < 0 else f'{_fmt_duration(seconds)} ago'
 
 
 class SystemdPlugin(BasePlugin):
@@ -40,7 +23,7 @@ class SystemdPlugin(BasePlugin):
         super().__init__(name, config, db)
         self.service_name = config.get('service_name')
         self.lines = config.get('lines', 10)
-        self.max_age = config.get('max_age')  # None → continuous, int → oneshot
+        self.max_age = parse_duration(config['max_age']) if 'max_age' in config else None
 
         self.ssh_collector = self.internal_modules['collectors'].get('ssh')
         self.ssh_controller = self.internal_modules['controllers'].get('ssh')
@@ -124,12 +107,12 @@ class SystemdPlugin(BasePlugin):
             self.set_status('failed')
         elif age > self.max_age:
             self.db_logger.write(
-                f"Last run was {_fmt_age(age)}, exceeds max_age of {_fmt_duration(self.max_age)}",
+                f"Last run was {format_age(age)}, exceeds max_age of {format_duration(self.max_age)}",
                 level="WARNING"
             )
             self.set_status('failed')
         else:
-            self.db_logger.write(f"Last run {_fmt_age(age)}, result: {result}", level="INFO")
+            self.db_logger.write(f"Last run {format_age(age)}, result: {result}", level="INFO")
             self.set_status('online')
 
         # Fetch recent logs regardless of result
@@ -184,7 +167,7 @@ class SystemdPlugin(BasePlugin):
         with ui.row().classes('w-full gap-4 mb-4'):
             self.internal_modules['ui']['host_card']()
             info_card('SERVICE', self.service_name)
-            info_card('MAX AGE', _fmt_duration(self.max_age))
+            info_card('MAX AGE', format_duration(self.max_age))
 
             result_label = info_card('LAST RESULT', '--')
             age_label = info_card('LAST RUN', '--')
@@ -212,7 +195,7 @@ class SystemdPlugin(BasePlugin):
                     age_label.style(f"color: {STATUS_COLORS['failed']}")
                 else:
                     age = int(time.time()) - epoch
-                    age_label.text = _fmt_age(age)
+                    age_label.text = format_age(age)
                     color = STATUS_COLORS['failed'] if age > self.max_age else STATUS_COLORS['online']
                     age_label.style(f"color: {color}")
 
