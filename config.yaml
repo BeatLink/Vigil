@@ -115,6 +115,55 @@ plugins:
             ssh_config:
               host: "odin.technet"
 
+  - name: "Disk Health"
+    type: "group"
+    children:
+      - name: "Ragnarok Disk Health"
+        type: "group"
+        children:
+          - name: "Ragnarok SMART"
+            id: "ragnarok-smart"
+            type: "smart_disk"
+            interval: 3600
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "Ragnarok ZFS Health"
+            id: "ragnarok-zfs-health"
+            type: "zfs_health"
+            interval: 3600
+            ssh_config:
+              host: "ragnarok.technet"
+      - name: "Heimdall Disk Health"
+        type: "group"
+        children:
+          - name: "Heimdall SMART"
+            id: "heimdall-smart"
+            type: "smart_disk"
+            interval: 3600
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Heimdall ZFS Health"
+            id: "heimdall-zfs-health"
+            type: "zfs_health"
+            interval: 3600
+            ssh_config:
+              host: "heimdall.technet"
+      - name: "Odin Disk Health"
+        type: "group"
+        children:
+          - name: "Odin SMART"
+            id: "odin-smart"
+            type: "smart_disk"
+            interval: 3600
+            ssh_config:
+              host: "odin.technet"
+          - name: "Odin ZFS Health"
+            id: "odin-zfs-health"
+            type: "zfs_health"
+            interval: 3600
+            ssh_config:
+              host: "odin.technet"
+
   - name: "ZFS Storage"
     type: "group"
     children:

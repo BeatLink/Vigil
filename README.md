@@ -74,7 +74,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `systemd_service`, `zfs_pool`, `group` |
+| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -123,6 +123,50 @@ Monitors status and logs for a systemd unit over SSH.
   ssh_config:
     host: "web-01.example.com"
     user: "vigil"
+```
+
+---
+
+### `smart_disk`
+Monitors SMART health of all physical disks over SSH. Discovers disks automatically via `lsblk` and runs `smartctl -H` on each one. USB-attached disks are probed with `-d sat`.
+
+> The SSH user must have passwordless `sudo` access to `smartctl` (e.g. `vigil ALL=(ALL) NOPASSWD: /usr/bin/smartctl`).
+
+| Option      | Description                                                        |
+|-------------|--------------------------------------------------------------------|
+| `interval`  | Polling frequency in seconds (default: `60`, recommend `3600`)     |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below      |
+
+**Metrics**: `disks_total`, `disks_ok`, `disks_failed`
+
+```yaml
+- name: "Ragnarok SMART"
+  id: "ragnarok-smart"
+  type: "smart_disk"
+  interval: 3600
+  ssh_config:
+    host: "ragnarok.technet"
+```
+
+---
+
+### `zfs_health`
+Monitors ZFS pool health states over SSH via `zpool list -H -o name,health`. Reports failed if any pool is in a `DEGRADED`, `FAULTED`, `OFFLINE`, `UNAVAIL`, or `REMOVED` state. Complements `zfs_pool` (capacity) with structural integrity monitoring.
+
+| Option      | Description                                                        |
+|-------------|--------------------------------------------------------------------|
+| `interval`  | Polling frequency in seconds (default: `60`, recommend `3600`)     |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below      |
+
+**Metrics**: `pools_total`, `pools_ok`, `pools_degraded`
+
+```yaml
+- name: "Ragnarok ZFS Health"
+  id: "ragnarok-zfs-health"
+  type: "zfs_health"
+  interval: 3600
+  ssh_config:
+    host: "ragnarok.technet"
 ```
 
 ---
@@ -177,7 +221,7 @@ Groups can be nested to arbitrary depth.
 
 ### SSH Config
 
-All SSH-based plugins (`systemd_service`, `zfs_pool`) accept an `ssh_config` block:
+All SSH-based plugins (`systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`) accept an `ssh_config` block:
 
 | Field        | Description                                                         |
 |--------------|---------------------------------------------------------------------|
@@ -296,6 +340,8 @@ nix run . -- --config config.yaml
 - [x] Ping/ICMP uptime module
 - [x] Web dashboard (NiceGUI)
 - [x] ZFS zpool capacity monitor
+- [x] ZFS pool health monitor (DEGRADED/FAULTED detection)
+- [x] SMART disk health monitor
 - [ ] SSH collector module with standard metric parsing (CPU, RAM, Disk)
 - [ ] Basic alerting (Email, Slack, or Webhook)
 - [ ] Control module for service remediation
