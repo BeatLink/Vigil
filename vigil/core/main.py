@@ -66,29 +66,31 @@ class VigilEngine:
     async def run(self):
         logging.info("Vigil Engine started...")
         self.db.insert_event("INFO", "Vigil Engine started polling loop.", "vigil_core")
-        
+
         while True:
-            # Recursively collect all plugins to be polled
-            all_pollable = []
-            
-            def collect_recursive(plugins):
-                for p in plugins:
-                    # All plugins (including groups) should have their on_collect called
-                    # GroupPlugin's on_collect will perform aggregation
-                    all_pollable.append(p) 
-                    collect_recursive(p.children)
-            
-            collect_recursive(self.plugins)
-            tasks = [p.run_cycle() for p in all_pollable]
-            
-            if tasks:
+            # Build levels via BFS, then run bottom-up so group plugins always
+            # aggregate after their children have written fresh status to the DB.
+            levels = []
+            current_level = list(self.plugins)
+            while current_level:
+                levels.append(current_level)
+                next_level = []
+                for p in current_level:
+                    next_level.extend(p.children)
+                current_level = next_level
+
+            total = 0
+            for level in reversed(levels):
+                tasks = [p.run_cycle() for p in level]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                # Handle potential exceptions from gathered tasks
                 for res in results:
                     if isinstance(res, Exception):
                         logging.error(f"Plugin execution error: {res}")
-                logging.info(f"Engine Cycle: Processed {len(results)} monitors.")
+                total += len(results)
+
+            if total:
+                logging.info(f"Engine Cycle: Processed {total} monitors.")
             else:
                 logging.debug("No plugins configured.")
-            
+
             await asyncio.sleep(60)

@@ -101,8 +101,12 @@ def init_gui(engine: Any, port: int = 8080):
             </span>
         ''')
         
+        def refresh_tree():
+            tree._props['nodes'] = build_tree_nodes(engine.plugins)
+            tree.update()
+
         # Periodically refresh tree data (dots and nodes)
-        ui.timer(5.0, lambda: setattr(tree, 'nodes', build_tree_nodes(engine.plugins)))
+        ui.timer(5.0, refresh_tree)
 
     main_container = ui.column().classes('w-full p-6 bg-transparent')
 
