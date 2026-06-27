@@ -225,20 +225,21 @@ def init_gui(engine: Any, port: int = 8080):
         with ui.row().classes('w-full items-center justify-between mb-6'):
             with ui.column():
                 ui.label(info['name']).classes('text-3xl font-bold').style(f'color: {TEXT}')
-            
-            if info.get('actions'):
-                #with card('p-2'):
-                    with ui.row().classes('gap-2 items-center'):
-                        for action in info.get('actions', []):
-                            async def do_action(aid=action['action_id']):
-                                success = await plugin.on_action(aid)
-                                ui.notify('Action completed successfully' if success else 'Action failed', 
-                                          type='positive' if success else 'negative')
-                            
-                            # Color logic: Primary for normal actions, status failed (red) for danger actions
-                            btn_color = PRIMARY if action.get('variant') != 'danger' else STATUS_COLORS['failed']
-                            btn_icon = action.get('icon', 'play_arrow')
-                            action_chip(action['name'], on_click=do_action, color=btn_color, icon=btn_icon)
+
+            with ui.row().classes('gap-2 items-center'):
+                async def poll_now():
+                    await plugin.run_cycle()
+                    ui.notify(f'{info["name"]} polled', type='positive')
+                action_chip('Poll Now', on_click=poll_now, icon='refresh')
+
+                for action in info.get('actions', []):
+                    async def do_action(aid=action['action_id']):
+                        success = await plugin.on_action(aid)
+                        ui.notify('Action completed successfully' if success else 'Action failed',
+                                  type='positive' if success else 'negative')
+
+                    btn_color = PRIMARY if action.get('variant') != 'danger' else STATUS_COLORS['failed']
+                    action_chip(action['name'], on_click=do_action, color=btn_color, icon=action.get('icon', 'play_arrow'))
 
         # Delegate specific UI rendering to the plugin instance
         plugin.render_ui()
