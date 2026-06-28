@@ -3,13 +3,15 @@ from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.ui.components import info_card, history_chart
 from vigil.core.ui.theme import STATUS_COLORS
 
-# Single SSH command: first CPU sample, memory, thermal zones, 1s sleep, second CPU sample.
-# Each section is identified by line prefix so output order doesn't matter.
+# Single SSH command: first CPU sample, memory, thermal zones, load averages,
+# core count, 1s sleep, second CPU sample. Each section identified by line prefix.
 _COLLECT_CMD = (
     "{ head -1 /proc/stat; "
     "grep -E 'MemTotal:|MemAvailable:' /proc/meminfo; "
     "for f in /sys/class/thermal/thermal_zone*/temp; "
     "do [ -f \"$f\" ] && echo \"TEMP:$(cat $f)\"; done; "
+    "echo \"LOAD:$(cat /proc/loadavg)\"; "
+    "echo \"CPUS:$(nproc)\"; "
     "sleep 1; "
     "head -1 /proc/stat; }"
 )
@@ -56,14 +58,15 @@ def _fmt_gb(gb: float) -> str:
 
 class SystemStatsPlugin(BasePlugin):
     """
-    Monitors CPU usage, memory usage, and CPU temperature over SSH.
+    Monitors CPU usage, memory usage, temperature, and load averages over SSH.
 
     Uses /proc/stat (two 1-second samples) for CPU, /proc/meminfo for memory,
-    and /sys/class/thermal/thermal_zone*/temp for temperature — no extra tools
-    required on the remote host.
+    /sys/class/thermal/thermal_zone*/temp for temperature, and /proc/loadavg
+    for the 1m/5m/15m load averages — no extra tools required on the remote host.
 
-    Each metric has independent warning and failed thresholds. The overall
-    status is the worst level across all metrics.
+    Temperature monitoring is skipped gracefully on hosts with no thermal zones.
+    Load average thresholds are optional; when unset, load metrics are collected
+    but do not affect plugin status.
 
     Config options:
       cpu_warning      CPU % that triggers warning (default: 70)
@@ -72,6 +75,8 @@ class SystemStatsPlugin(BasePlugin):
       memory_threshold Memory % that triggers failed  (default: 90)
       temp_warning     Temperature °C that triggers warning (default: 70)
       temp_threshold   Temperature °C that triggers failed  (default: 80)
+      load_warning     1m load as % of CPU cores that triggers warning (default: unset)
+      load_threshold   1m load as % of CPU cores that triggers failed  (default: unset)
     """
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -82,6 +87,9 @@ class SystemStatsPlugin(BasePlugin):
         self.memory_threshold = int(config.get('memory_threshold', 90))
         self.temp_warning     = int(config.get('temp_warning',     70))
         self.temp_threshold   = int(config.get('temp_threshold',   80))
+        # Load thresholds are optional — meaningful values depend on CPU count
+        self.load_warning   = float(config['load_warning'])   if 'load_warning'   in config else None
+        self.load_threshold = float(config['load_threshold'])  if 'load_threshold'  in config else None
         self.ssh_collector = self.internal_modules['collectors']['ssh']
         self.db_logger     = self.internal_modules['loggers']['db_logs']
         self.db_metrics    = self.internal_modules['loggers']['db_metrics']
@@ -98,6 +106,8 @@ class SystemStatsPlugin(BasePlugin):
         mem_total_line = next((l for l in lines if l.startswith('MemTotal:')),     None)
         mem_avail_line = next((l for l in lines if l.startswith('MemAvailable:')), None)
         temp_lines     = [l for l in lines if l.startswith('TEMP:')]
+        load_line      = next((l for l in lines if l.startswith('LOAD:')), None)
+        cpus_line      = next((l for l in lines if l.startswith('CPUS:')), None)
 
         if len(cpu_lines) < 2 or not mem_total_line or not mem_avail_line:
             self.db_logger.write(f"Incomplete output from remote host: {stdout!r}", level="ERROR")
@@ -121,6 +131,14 @@ class SystemStatsPlugin(BasePlugin):
                 if temps_mc:
                     temp_c = max(temps_mc) / 1000.0
 
+            load_pct_1m = load_pct_5m = load_pct_15m = None
+            if load_line:
+                cpu_count = max(1, int(cpus_line.removeprefix('CPUS:').strip())) if cpus_line else 1
+                parts = load_line.removeprefix('LOAD:').split()
+                load_pct_1m  = float(parts[0]) / cpu_count * 100.0
+                load_pct_5m  = float(parts[1]) / cpu_count * 100.0
+                load_pct_15m = float(parts[2]) / cpu_count * 100.0
+
         except (ValueError, IndexError, ZeroDivisionError) as e:
             self.db_logger.write(f"Failed to parse stats output: {e}", level="ERROR")
             self.set_status('failed')
@@ -132,6 +150,10 @@ class SystemStatsPlugin(BasePlugin):
         self.db_metrics.metric('memory_total_gb', memory_total_gb)
         if temp_c is not None:
             self.db_metrics.metric('temp_c', temp_c)
+        if load_pct_1m is not None:
+            self.db_metrics.metric('load_pct_1m',  load_pct_1m)
+            self.db_metrics.metric('load_pct_5m',  load_pct_5m)
+            self.db_metrics.metric('load_pct_15m', load_pct_15m)
 
         levels = [
             _level_for(cpu_pct,    self.cpu_warning,    self.cpu_threshold),
@@ -139,16 +161,21 @@ class SystemStatsPlugin(BasePlugin):
         ]
         if temp_c is not None:
             levels.append(_level_for(temp_c, self.temp_warning, self.temp_threshold))
+        if load_pct_1m is not None and self.load_warning is not None and self.load_threshold is not None:
+            levels.append(_level_for(load_pct_1m, self.load_warning, self.load_threshold))
 
         overall = max(levels, key=lambda s: _SEVERITY[s])
 
         temp_str = f"{temp_c:.1f}°C" if temp_c is not None else "N/A"
+        load_str = (f"{load_pct_1m:.0f}% / {load_pct_5m:.0f}% / {load_pct_15m:.0f}%"
+                    if load_pct_1m is not None else "N/A")
         log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
         self.db_logger.write(
             f"CPU {cpu_pct:.1f}% (warn {self.cpu_warning}% / fail {self.cpu_threshold}%), "
             f"MEM {memory_pct:.1f}% ({_fmt_gb(memory_used_gb)}/{_fmt_gb(memory_total_gb)}, "
             f"warn {self.memory_warning}% / fail {self.memory_threshold}%), "
-            f"TEMP {temp_str} (warn {self.temp_warning}°C / fail {self.temp_threshold}°C)",
+            f"TEMP {temp_str} (warn {self.temp_warning}°C / fail {self.temp_threshold}°C), "
+            f"LOAD {load_str}",
             level=log_level
         )
         self.set_status(overall)
@@ -172,13 +199,19 @@ class SystemStatsPlugin(BasePlugin):
             mem_pct_label  = info_card('MEMORY',   '-- %')
             mem_used_label = info_card('MEM USED', '--')
             temp_label     = info_card('TEMP',     'N/A')
+            load_1m_label  = info_card('LOAD 1M',  '-- %')
+            load_5m_label  = info_card('LOAD 5M',  '-- %')
+            load_15m_label = info_card('LOAD 15M', '-- %')
 
             def update_cards():
-                cpu     = latest('cpu_pct')
-                mem_pct = latest('memory_pct')
+                cpu       = latest('cpu_pct')
+                mem_pct   = latest('memory_pct')
                 mem_used  = latest('memory_used_gb')
                 mem_total = latest('memory_total_gb')
-                temp    = latest('temp_c')
+                temp      = latest('temp_c')
+                load_1m   = latest('load_pct_1m')
+                load_5m   = latest('load_pct_5m')
+                load_15m  = latest('load_pct_15m')
 
                 if cpu:
                     cpu_label.text = f'{cpu.value:.1f}%'
@@ -195,9 +228,21 @@ class SystemStatsPlugin(BasePlugin):
                     temp_label.text = f'{temp.value:.1f}°C'
                     temp_label.style(f'color: {STATUS_COLORS[_level_for(temp.value, self.temp_warning, self.temp_threshold)]}')
 
+                if load_1m:
+                    load_1m_label.text = f'{load_1m.value:.0f}%'
+                    if self.load_warning is not None and self.load_threshold is not None:
+                        load_1m_label.style(f'color: {STATUS_COLORS[_level_for(load_1m.value, self.load_warning, self.load_threshold)]}')
+
+                if load_5m:
+                    load_5m_label.text = f'{load_5m.value:.0f}%'
+
+                if load_15m:
+                    load_15m_label.text = f'{load_15m.value:.0f}%'
+
             ui.timer(5.0, update_cards)
 
         history_chart('CPU USAGE (%)',    self.name, 'cpu_pct')
         history_chart('MEMORY USAGE (%)', self.name, 'memory_pct')
         history_chart('TEMPERATURE (°C)', self.name, 'temp_c')
+        history_chart('LOAD AVERAGE (%)',  self.name, 'load_pct_1m')
         self.internal_modules['ui']['logs_table']()

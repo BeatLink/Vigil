@@ -101,6 +101,8 @@ plugins:
         memory_threshold: 90
         temp_warning: 70
         temp_threshold: 80
+        load_warning: 70
+        load_threshold: 100
         ssh_config:
           host: "ragnarok.technet"
       - name: "Heimdall System"
@@ -113,6 +115,8 @@ plugins:
         memory_threshold: 90
         temp_warning: 70
         temp_threshold: 80
+        load_warning: 70
+        load_threshold: 100
         ssh_config:
           host: "heimdall.technet"
       - name: "Odin System"
@@ -125,6 +129,8 @@ plugins:
         memory_threshold: 90
         temp_warning: 70
         temp_threshold: 80
+        load_warning: 70
+        load_threshold: 100
         ssh_config:
           host: "odin.technet"
 

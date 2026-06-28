@@ -19,10 +19,12 @@ BASE_CFG = {
 }
 
 
-def _make_output(cpu1, cpu2, mem_total_kb, mem_avail_kb, temps_mc=None):
+def _make_output(cpu1, cpu2, mem_total_kb, mem_avail_kb, temps_mc=None, load=None, cpus=4):
     """Build synthetic SSH output for system_stats collection.
 
     cpu1/cpu2: list of ints [user, nice, system, idle, iowait, irq, softirq, steal]
+    load: (load_1m, load_5m, load_15m) floats, or None to omit the LOAD/CPUS lines
+    cpus: number of CPU cores reported by nproc (default 4)
     """
     lines = [
         f"cpu  {' '.join(str(f) for f in cpu1)}",
@@ -31,6 +33,9 @@ def _make_output(cpu1, cpu2, mem_total_kb, mem_avail_kb, temps_mc=None):
     ]
     for t in (temps_mc or []):
         lines.append(f"TEMP:{t}")
+    if load is not None:
+        lines.append(f"LOAD:{load[0]} {load[1]} {load[2]} 1/100 12345")
+        lines.append(f"CPUS:{cpus}")
     lines.append(f"cpu  {' '.join(str(f) for f in cpu2)}")
     return "\n".join(lines) + "\n"
 
@@ -56,6 +61,16 @@ _MEM_AVAIL_5   = 800_000       # 95% used → failed (above 90% threshold)
 _TEMPS_OK      = [42_000, 38_000, 45_000]   # max 45°C → online
 _TEMPS_WARNING = [72_000, 68_000]            # max 72°C → warning (between 70 and 80)
 _TEMPS_FAILED  = [85_000, 90_000]            # max 90°C → failed
+
+# Load average tuples (1m, 5m, 15m) — raw values; tests use cpus=4
+# Percentages = raw / 4 * 100, so thresholds are set as percentages (70%, 100%)
+_LOAD_OK      = (1.2, 1.0, 0.8)   # 1m → 30% of 4 cores → below warning 70%
+_LOAD_WARNING = (3.2, 2.8, 2.4)   # 1m → 80% of 4 cores → between warning 70% and failed 100%
+_LOAD_FAILED  = (5.0, 4.8, 4.6)   # 1m → 125% of 4 cores → above failed threshold 100%
+
+# Config with load thresholds enabled (as percentages of core count)
+_LOAD_CFG = {**BASE_CFG, "name": "test-load", "id": "test-load",
+             "load_warning": 70.0, "load_threshold": 100.0}
 
 
 @pytest.fixture
@@ -276,6 +291,68 @@ class TestSystemStatsCollection:
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
         await plugin.on_collect()
         assert _latest_status() == "failed"
+
+
+class TestLoadAverageCollection:
+    @pytest.fixture
+    def load_plugin(self, make_plugin):
+        return make_plugin(SystemStatsPlugin, _LOAD_CFG)
+
+    async def test_load_pct_metrics_recorded(self, load_plugin):
+        # _LOAD_OK = (1.2, 1.0, 0.8) with cpus=4 → 30%, 25%, 20%
+        stdout = _make_output(_CPU1_50, _CPU2_50, _MEM_TOTAL_KB, _MEM_AVAIL_50, load=_LOAD_OK, cpus=4)
+        load_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
+        await load_plugin.on_collect()
+        assert _latest_metric("load_pct_1m",  "test-load") == pytest.approx(30.0)
+        assert _latest_metric("load_pct_5m",  "test-load") == pytest.approx(25.0)
+        assert _latest_metric("load_pct_15m", "test-load") == pytest.approx(20.0)
+
+    async def test_load_pct_respects_core_count(self, load_plugin):
+        # Same raw load, twice the cores → half the percentage
+        stdout = _make_output(_CPU1_50, _CPU2_50, _MEM_TOTAL_KB, _MEM_AVAIL_50, load=(2.0, 2.0, 2.0), cpus=8)
+        load_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
+        await load_plugin.on_collect()
+        assert _latest_metric("load_pct_1m", "test-load") == pytest.approx(25.0)
+
+    async def test_load_below_warning_stays_online(self, load_plugin):
+        stdout = _make_output(_CPU1_50, _CPU2_50, _MEM_TOTAL_KB, _MEM_AVAIL_50, load=_LOAD_OK, cpus=4)
+        load_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
+        await load_plugin.on_collect()
+        assert _latest_status("test-load") == "online"
+
+    async def test_load_above_warning_sets_warning(self, load_plugin):
+        stdout = _make_output(_CPU1_50, _CPU2_50, _MEM_TOTAL_KB, _MEM_AVAIL_50, load=_LOAD_WARNING, cpus=4)
+        load_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
+        await load_plugin.on_collect()
+        assert _latest_status("test-load") == "warning"
+
+    async def test_load_above_failed_threshold_sets_failed(self, load_plugin):
+        stdout = _make_output(_CPU1_50, _CPU2_50, _MEM_TOTAL_KB, _MEM_AVAIL_50, load=_LOAD_FAILED, cpus=4)
+        load_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
+        await load_plugin.on_collect()
+        assert _latest_status("test-load") == "failed"
+
+    async def test_load_failed_overrides_other_warning(self, load_plugin):
+        # CPU in warning, load in failed → overall failed
+        stdout = _make_output(_CPU1_75, _CPU2_75, _MEM_TOTAL_KB, _MEM_AVAIL_50, load=_LOAD_FAILED, cpus=4)
+        load_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
+        await load_plugin.on_collect()
+        assert _latest_status("test-load") == "failed"
+
+    async def test_no_load_thresholds_does_not_affect_status(self, plugin):
+        # BASE_CFG has no load_warning/load_threshold — high load should not change status
+        stdout = _make_output(_CPU1_50, _CPU2_50, _MEM_TOTAL_KB, _MEM_AVAIL_50, load=_LOAD_FAILED, cpus=4)
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
+        await plugin.on_collect()
+        assert _latest_status() == "online"
+
+    async def test_missing_load_line_still_succeeds(self, load_plugin):
+        # Output with no LOAD:/CPUS: lines — graceful degradation
+        stdout = _make_output(_CPU1_50, _CPU2_50, _MEM_TOTAL_KB, _MEM_AVAIL_50, load=None)
+        load_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
+        await load_plugin.on_collect()
+        assert _latest_status("test-load") == "online"
+        assert _latest_metric("load_pct_1m", "test-load") is None
 
 
 class TestSystemStatsActions:

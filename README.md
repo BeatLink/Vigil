@@ -239,22 +239,24 @@ Monitors disk space usage for a path or mountpoint over SSH via `df`. Works on a
 ---
 
 ### `system_stats`
-Monitors CPU usage, memory usage, and temperature over SSH. Uses `/proc/stat` (two 1-second samples) for CPU, `/proc/meminfo` for memory, and `/sys/class/thermal/thermal_zone*/temp` for temperature — no extra tools required on the remote host. Temperature monitoring is gracefully skipped on hosts where no thermal zones are present (e.g. some VMs).
+Monitors CPU usage, memory usage, temperature, and load averages over SSH. Uses `/proc/stat` (two 1-second samples) for CPU, `/proc/meminfo` for memory, `/sys/class/thermal/thermal_zone*/temp` for temperature, and `/proc/loadavg` for the 1m/5m/15m load averages — no extra tools required on the remote host. Temperature monitoring is gracefully skipped on hosts with no thermal zones (e.g. some VMs).
 
-Each metric has independent warning and failed thresholds. The overall status is the worst level across all metrics — `online`, `warning`, or `failed`.
+Each metric has independent warning and failed thresholds. The overall status is the worst level across all metrics — `online`, `warning`, or `failed`. Load thresholds are optional — when omitted, load averages are collected and displayed but do not influence status. Since load average is relative to CPU core count, set `load_warning` and `load_threshold` to values appropriate for the target host.
 
-| Option              | Description                                                               |
-|---------------------|---------------------------------------------------------------------------|
-| `cpu_warning`       | CPU % that triggers `warning` (default: `70`)                            |
-| `cpu_threshold`     | CPU % that triggers `failed` (default: `85`)                             |
-| `memory_warning`    | Memory usage % that triggers `warning` (default: `75`)                  |
-| `memory_threshold`  | Memory usage % that triggers `failed` (default: `90`)                   |
-| `temp_warning`      | Max thermal zone °C that triggers `warning` (default: `70`)              |
-| `temp_threshold`    | Max thermal zone °C that triggers `failed` (default: `80`)               |
-| `interval`          | Polling frequency (default: `60`)                                         |
-| `ssh_config`        | SSH connection details — see [SSH Config](#ssh-config) below             |
+| Option              | Description                                                                        |
+|---------------------|------------------------------------------------------------------------------------|
+| `cpu_warning`       | CPU % that triggers `warning` (default: `70`)                                     |
+| `cpu_threshold`     | CPU % that triggers `failed` (default: `85`)                                      |
+| `memory_warning`    | Memory usage % that triggers `warning` (default: `75`)                            |
+| `memory_threshold`  | Memory usage % that triggers `failed` (default: `90`)                             |
+| `temp_warning`      | Max thermal zone °C that triggers `warning` (default: `70`)                       |
+| `temp_threshold`    | Max thermal zone °C that triggers `failed` (default: `80`)                        |
+| `load_warning`      | 1m load average that triggers `warning` (optional — omit to disable alerting)     |
+| `load_threshold`    | 1m load average that triggers `failed`  (optional — omit to disable alerting)     |
+| `interval`          | Polling frequency (default: `60`)                                                  |
+| `ssh_config`        | SSH connection details — see [SSH Config](#ssh-config) below                      |
 
-**Metrics**: `cpu_pct`, `memory_pct`, `memory_used_gb`, `memory_total_gb`, `temp_c`
+**Metrics**: `cpu_pct`, `memory_pct`, `memory_used_gb`, `memory_total_gb`, `temp_c`, `load_avg_1m`, `load_avg_5m`, `load_avg_15m`
 
 ```yaml
 - name: "Heimdall System"
@@ -267,6 +269,8 @@ Each metric has independent warning and failed thresholds. The overall status is
   memory_threshold: 90
   temp_warning: 70
   temp_threshold: 80
+  load_warning: 2.0    # tune to CPU count (e.g. n_cores × 0.5 for warning)
+  load_threshold: 4.0  # e.g. n_cores × 1.0 for failed
   ssh_config:
     host: "heimdall.example.com"
 ```
