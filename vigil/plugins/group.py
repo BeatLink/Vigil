@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.database import StatusHistory
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.core.ui.theme import STATUS_COLORS, PRIMARY
 from vigil.core.ui.components import info_card
 
 # Logic for status aggregation
@@ -76,7 +76,7 @@ class GroupPlugin(BasePlugin):
 
             child_color = STATUS_COLORS.get(child_status, STATUS_COLORS['offline'])
 
-            with ui.expansion(value=False).classes('w-full mb-3 rounded-lg border shadow-sm overflow-hidden') as exp:
+            with ui.expansion(value=False).classes('w-full mb-3 rounded-lg shadow-sm overflow-hidden').style(f'border: 1px solid {PRIMARY}') as exp:
                 exp.add_slot('header', f'''
                     <div class="flex items-center w-full gap-3 px-1 py-1">
                         <q-icon name="circle" style="color: {child_color}" size="10px" class="flex-shrink-0" />
