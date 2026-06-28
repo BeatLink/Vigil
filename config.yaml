@@ -4,6 +4,19 @@
 database:
   path: "vigil.db"
 
+# Theme (all fields are optional — defaults shown below)
+theme:
+  primary:          "#00ACFF"   # Header, links, accents
+  accent:           "#FF5500"   # Secondary accent (unused in current UI)
+  background:       "#FFFFFF"   # Sidebar and card backgrounds
+  background_muted: "#FAFAFA"   # Page body background
+  text:             "#111827"   # Primary text
+  text_muted:       "#6B7280"   # Labels and secondary text
+  status_online:    "lime"      # Online status color
+  status_warning:   "gold"      # Warning status color
+  status_failed:    "red"       # Failed status color
+  status_offline:   "lightgray" # Offline status color
+
 # Domain-based Plugins
 plugins:
   - name: "Device Availability"

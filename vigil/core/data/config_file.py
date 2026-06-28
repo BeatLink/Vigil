@@ -41,6 +41,11 @@ class ConfigFileManager:
         return self.data.get('alerting', [])
 
     @property
+    def theme_settings(self) -> Dict[str, Any]:
+        """Returns the theme overrides section (may be empty)."""
+        return self.data.get('theme', {})
+
+    @property
     def controllers(self) -> List[Dict[str, Any]]:
         """Returns the list of control/remediation configurations."""
         return self.data.get('control', [])

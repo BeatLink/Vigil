@@ -66,6 +66,32 @@ vigil/
 
 ---
 
+## Theme
+
+All colors used in the dashboard can be overridden in the `theme:` section of `config.yaml`. All fields are optional — omit any field to keep its default.
+
+| Field             | Default       | Description                              |
+|-------------------|---------------|------------------------------------------|
+| `primary`         | `#00ACFF`     | Header, links, and primary accents       |
+| `accent`          | `#FF5500`     | Secondary accent color                   |
+| `background`      | `#FFFFFF`     | Sidebar and card backgrounds             |
+| `background_muted`| `#FAFAFA`     | Page body background                     |
+| `text`            | `#111827`     | Primary text                             |
+| `text_muted`      | `#6B7280`     | Labels and secondary text                |
+| `status_online`   | `lime`        | Color shown when a monitor is online     |
+| `status_warning`  | `gold`        | Color shown when a monitor is in warning |
+| `status_failed`   | `red`         | Color shown when a monitor has failed    |
+| `status_offline`  | `lightgray`   | Color shown when a monitor is offline    |
+
+```yaml
+theme:
+  primary: "#7C3AED"
+  status_online: "limegreen"
+  status_warning: "orange"
+```
+
+---
+
 ## Plugin Types
 
 All plugin types share these common fields:
