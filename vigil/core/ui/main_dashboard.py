@@ -139,70 +139,174 @@ def init_gui(engine: Any, port: int = 8080):
     def render_overview():
         section_title('Monitors', 'mb-6 font-light')
 
+        # Collect all leaf monitors once — shared by charts, table, and filter logic
+        all_monitors = []
+        def collect_leafs(plist):
+            for p in plist:
+                if not p.children: all_monitors.append(p)
+                else: collect_leafs(p.children)
+        collect_leafs(engine.plugins)
+        plugin_by_id = {p.id: p for p in all_monitors}
+
+        # Active filter: {'field': 'status'|'type'|None, 'value': str|None}
+        filter_state = {'field': None, 'value': None}
+
         with ui.row().classes('w-full gap-4 mb-6'):
-            # Status Distribution Chart
             with card('flex-1 h-80'):
                 ui.label('MONITORS BY STATUS').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
                 status_chart = ui.echart({
-                    'tooltip': {'trigger': 'item'},
+                    'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
                     'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
                     'series': [{
                         'type': 'pie',
                         'radius': ['40%', '70%'],
                         'avoidLabelOverlap': False,
+                        'cursor': 'pointer',
                         'itemStyle': {'borderRadius': 10, 'borderColor': '#fff', 'borderWidth': 2},
                         'label': {'show': False},
                         'data': []
                     }]
                 }).classes('w-full h-64')
 
-            # Type Distribution Chart
             with card('flex-1 h-80'):
                 ui.label('MONITORS BY TYPE').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
                 type_chart = ui.echart({
-                    'tooltip': {'trigger': 'item'},
+                    'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
                     'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
                     'series': [{
                         'type': 'pie',
                         'radius': ['40%', '70%'],
                         'avoidLabelOverlap': False,
+                        'cursor': 'pointer',
                         'itemStyle': {'borderRadius': 10, 'borderColor': '#fff', 'borderWidth': 2},
                         'label': {'show': False},
                         'data': []
                     }]
                 }).classes('w-full h-64')
 
-        def update_charts():
-            all_monitors = []
-            def collect_leafs(plist):
-                for p in plist:
-                    if not p.children: all_monitors.append(p)
-                    else: collect_leafs(p.children)
-            collect_leafs(engine.plugins)
+        # Monitors table
+        with card('w-full mb-6'):
+            with ui.row().classes('w-full items-center justify-between mb-3'):
+                ui.label('ALL MONITORS').classes('text-xs font-bold').style(f'color: {TEXT_MUTED}')
+                with ui.row().classes('items-center gap-1') as filter_row:
+                    filter_label = ui.label('').classes('text-xs italic').style(f'color: {TEXT_MUTED}')
+                    ui.button(icon='close', on_click=lambda: _clear_filter()).props('flat dense round size=xs').style(f'color: {TEXT_MUTED}')
+            filter_row.set_visibility(False)
 
-            status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'offline': 0}
-            type_counts = {}
-            
+            monitor_columns = [
+                {'name': 'name',   'label': 'Monitor', 'field': 'name',   'align': 'left', 'sortable': True},
+                {'name': 'type',   'label': 'Type',    'field': 'type',   'align': 'left', 'sortable': True},
+                {'name': 'host',   'label': 'Host',    'field': 'host',   'align': 'left', 'sortable': True},
+                {'name': 'status', 'label': 'Status',  'field': 'status', 'align': 'left', 'sortable': True},
+            ]
+            monitor_table = ui.table(columns=monitor_columns, rows=[]).classes('w-full border-none')
+
+            # Name column: clickable link that navigates to the monitor's detail page
+            monitor_table.add_slot('body-cell-name', f'''
+                <q-td :props="props">
+                    <span class="cursor-pointer font-medium hover:underline"
+                          style="color: {PRIMARY}"
+                          @click="$parent.$emit('navigate', props.row)">
+                        {{{{ props.row.name }}}}
+                    </span>
+                </q-td>
+            ''')
+
+            # Status column: color-coded text
+            monitor_table.add_slot('body-cell-status', '''
+                <q-td :props="props">
+                    <span :style="{ color: props.row.status_color }" class="font-semibold text-xs">
+                        {{ props.row.status }}
+                    </span>
+                </q-td>
+            ''')
+
+            def _navigate_to_row(e):
+                row_id = (e.args or {}).get('id')
+                if row_id and row_id in plugin_by_id:
+                    navigate_to(plugin_by_id[row_id])
+            monitor_table.on('navigate', _navigate_to_row)
+
+        # -- Update functions ------------------------------------------------
+
+        def _update_filter_ui():
+            if filter_state['field']:
+                filter_label.text = f'Showing: {filter_state["value"].upper()} — click again to clear'
+                filter_row.set_visibility(True)
+            else:
+                filter_row.set_visibility(False)
+
+        def _clear_filter():
+            filter_state['field'] = None
+            filter_state['value'] = None
+            _update_filter_ui()
+            update_table()
+
+        def _set_filter(field: str, raw_value: str):
+            value = raw_value.lower()
+            if filter_state['field'] == field and filter_state['value'] == value:
+                filter_state['field'] = None
+                filter_state['value'] = None
+            else:
+                filter_state['field'] = field
+                filter_state['value'] = value
+            _update_filter_ui()
+            update_table()
+
+        status_chart.on('chart_click', lambda e: _set_filter('status', (e.args or {}).get('name', '')))
+        type_chart.on('chart_click',   lambda e: _set_filter('type',   (e.args or {}).get('name', '')))
+
+        def update_table():
+            rows = []
             with StatusHistory._meta.database.connection_context():
                 for m in all_monitors:
-                    latest = StatusHistory.select().where(StatusHistory.collector_id == m.id).order_by(StatusHistory.timestamp.desc()).first()
+                    latest = StatusHistory.select().where(
+                        StatusHistory.collector_id == m.id
+                    ).order_by(StatusHistory.timestamp.desc()).first()
+                    st = latest.state if latest else 'offline'
+                    mtype = m.config.get('type', 'unknown')
+
+                    if filter_state['field'] == 'status' and st != filter_state['value']:
+                        continue
+                    if filter_state['field'] == 'type' and mtype != filter_state['value']:
+                        continue
+
+                    rows.append({
+                        'id': m.id,
+                        'name': m.name,
+                        'type': mtype.upper(),
+                        'host': m.target,
+                        'status': st.upper(),
+                        'status_color': STATUS_COLORS.get(st, STATUS_COLORS['offline']),
+                    })
+            monitor_table.rows[:] = rows
+
+        def update_charts():
+            status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'offline': 0}
+            type_counts = {}
+            with StatusHistory._meta.database.connection_context():
+                for m in all_monitors:
+                    latest = StatusHistory.select().where(
+                        StatusHistory.collector_id == m.id
+                    ).order_by(StatusHistory.timestamp.desc()).first()
                     st = latest.state if latest else 'offline'
                     status_counts[st] = status_counts.get(st, 0) + 1
-                    
                     mtype = m.config.get('type', 'unknown')
                     type_counts[mtype] = type_counts.get(mtype, 0) + 1
 
             status_chart.options['series'][0]['data'] = [
-                {'value': status_counts['online'], 'name': 'Online', 'itemStyle': {'color': STATUS_COLORS['online']}},
-                {'value': status_counts['failed'], 'name': 'Failed', 'itemStyle': {'color': STATUS_COLORS['failed']}},
+                {'value': status_counts['online'],  'name': 'Online',  'itemStyle': {'color': STATUS_COLORS['online']}},
+                {'value': status_counts['failed'],  'name': 'Failed',  'itemStyle': {'color': STATUS_COLORS['failed']}},
                 {'value': status_counts['warning'], 'name': 'Warning', 'itemStyle': {'color': STATUS_COLORS['warning']}},
                 {'value': status_counts['offline'], 'name': 'Offline', 'itemStyle': {'color': STATUS_COLORS['offline']}},
             ]
-            type_chart.options['series'][0]['data'] = [{'value': v, 'name': k.upper()} for k, v in type_counts.items()]
+            type_chart.options['series'][0]['data'] = [
+                {'value': v, 'name': k.upper()} for k, v in type_counts.items()
+            ]
             status_chart.update()
             type_chart.update()
+            update_table()
 
-        # Initial data load and refresh timer
         update_charts()
         ui.timer(10.0, update_charts)
 
@@ -217,7 +321,7 @@ def init_gui(engine: Any, port: int = 8080):
                     {'name': 'value', 'label': 'Value', 'field': 'value', 'align': 'left'},
                 ]
                 m_table = ui.table(columns=metric_columns, rows=[]).classes('w-full')
-                
+
                 def update_m():
                     query = Metric.select().order_by(Metric.timestamp.desc()).limit(20)
                     m_table.rows[:] = [m.__data__ for m in query]
@@ -232,7 +336,7 @@ def init_gui(engine: Any, port: int = 8080):
                     {'name': 'message', 'label': 'Message', 'field': 'message', 'align': 'left'},
                 ]
                 e_table = ui.table(columns=event_columns, rows=[]).classes('w-full')
-                
+
                 def update_e():
                     query = Event.select().order_by(Event.timestamp.desc()).limit(20)
                     e_table.rows[:] = [e.__data__ for e in query]
