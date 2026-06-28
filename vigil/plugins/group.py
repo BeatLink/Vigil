@@ -1,9 +1,9 @@
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.data.database import StatusHistory # Needed for querying child statuses
-from vigil.core.ui.theme import STATUS_COLORS, TEXT_MUTED
-from vigil.core.ui.components import card, info_card, section_title, HOVER_STYLE
+from vigil.core.data.database import StatusHistory
+from vigil.core.ui.theme import STATUS_COLORS
+from vigil.core.ui.components import info_card
 
 # Logic for status aggregation
 SEVERITY_ORDER = {
@@ -60,33 +60,29 @@ class GroupPlugin(BasePlugin):
         return False
 
     def render_ui(self):
-        """Render a summary dashboard for the group members."""
+        """Render children as collapsible sections, each showing their full plugin UI."""
         from nicegui import ui
-        
-        # Display aggregated status at the top
+
         aggregated_status = self._get_aggregated_status()
-        status_hex = STATUS_COLORS.get(aggregated_status, STATUS_COLORS['offline'])
-
         status_lbl = info_card('AGGREGATED STATUS', aggregated_status.upper(), card_classes='w-full mb-6')
-        status_lbl.style(f'color: {status_hex}')
+        status_lbl.style(f'color: {STATUS_COLORS.get(aggregated_status, STATUS_COLORS["offline"])}')
 
-        section_title('Group Members')
-        with ui.grid(columns=3).classes('w-full gap-4'):
-            for child in self.children:
-                info = child.present()
-                # Clicking a card now triggers navigation to that child's detail view
-                def navigate_to_child(c=child):
-                    from vigil.core.ui.main_dashboard import navigate_to
-                    navigate_to(c)
+        for child in self.children:
+            with StatusHistory._meta.database.connection_context():
+                latest = StatusHistory.select(StatusHistory.state).where(
+                    StatusHistory.collector_id == child.id
+                ).order_by(StatusHistory.timestamp.desc()).first()
+                child_status = latest.state if latest else 'offline'
 
-                with card(f'items-center {HOVER_STYLE}').on('click', navigate_to_child):
-                    # For group children, we might want to show their latest status too
-                    latest_child_status = StatusHistory.select(StatusHistory.state).where(
-                        StatusHistory.collector_id == child.id
-                    ).order_by(StatusHistory.timestamp.desc()).first()
-                    child_status_text = latest_child_status.state.upper() if latest_child_status else 'OFFLINE'
-                    child_status_hex = STATUS_COLORS.get(latest_child_status.state if latest_child_status else 'offline', STATUS_COLORS['offline'])
+            child_color = STATUS_COLORS.get(child_status, STATUS_COLORS['offline'])
 
-                    ui.label(info['name']).classes('font-bold').style(f'color: {TEXT_MUTED}')
-                    ui.label(info['target']).classes('text-xs').style(f'color: {TEXT_MUTED}')
-                    ui.label(child_status_text).classes('text-sm font-semibold').style(f'color: {child_status_hex}')
+            with ui.expansion(value=False).classes('w-full mb-3 rounded-lg border shadow-sm overflow-hidden') as exp:
+                exp.add_slot('header', f'''
+                    <div class="flex items-center w-full gap-3 px-1 py-1">
+                        <q-icon name="circle" style="color: {child_color}" size="10px" class="flex-shrink-0" />
+                        <span class="font-semibold flex-1">{child.name}</span>
+                        <span class="text-xs font-medium mr-2" style="color: {child_color}">{child_status.upper()}</span>
+                    </div>
+                ''')
+                with ui.column().classes('w-full p-4'):
+                    child.render_ui()
