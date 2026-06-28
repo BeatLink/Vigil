@@ -1,6 +1,7 @@
+import json
 import logging
 from nicegui import app, ui
-from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory
+from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory, Setting
 from typing import Any, Dict, Optional
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
 from .components import action_chip, card, section_title
@@ -107,6 +108,23 @@ def init_gui(engine: Any, port: int = 8080):
 
         # Periodically refresh tree data (dots and nodes)
         ui.timer(5.0, refresh_tree)
+
+        # Restore previously saved expanded state
+        def _load_expanded() -> list:
+            with Setting._meta.database.connection_context():
+                try:
+                    return json.loads(Setting.get(Setting.key == 'tree_expanded').value)
+                except Exception:
+                    return []
+
+        def _save_expanded(e):
+            ids = e.args if isinstance(e.args, list) else []
+            with Setting._meta.database.connection_context():
+                Setting.insert(key='tree_expanded', value=json.dumps(ids)).on_conflict_replace().execute()
+
+        tree._props['expanded'] = _load_expanded()
+        tree.update()
+        tree.on('update:expanded', _save_expanded)
 
     main_container = ui.column().classes('w-full p-6 bg-transparent')
 

@@ -75,15 +75,16 @@ class SystemdPlugin(BasePlugin):
         cmd = (
             f"result=$(systemctl show {self.service_name} -p Result --value); "
             f"exit_code=$(systemctl show {self.service_name} -p ExecMainStatus --value); "
-            # ExecMainExitTimestamp works for RemainAfterExit=yes services
+            f"active=$(systemctl show {self.service_name} -p ActiveState --value); "
+            f"sub=$(systemctl show {self.service_name} -p SubState --value); "
             f"ts=$(systemctl show {self.service_name} -p ExecMainExitTimestamp --value); "
-            # Fall back to InactiveEnterTimestamp for services that do go inactive
             '[ -z "$ts" ] || [ "$ts" = "n/a" ] && '
             f"ts=$(systemctl show {self.service_name} -p InactiveEnterTimestamp --value); "
             'if [ -n "$ts" ] && [ "$ts" != "n/a" ]; then '
             '  epoch=$(date -d "$ts" +%s 2>/dev/null || echo 0); '
             'else epoch=0; fi; '
-            'echo "$result $exit_code $epoch"'
+            # Use placeholder tokens so empty values never collapse the field count
+            'echo "result=${result:-empty} exit=${exit_code:-empty} epoch=$epoch active=${active:-unknown} sub=${sub:-unknown}"'
         )
         ret, stdout, stderr = await self.ssh_collector.fetch_output(cmd)
 
@@ -92,25 +93,38 @@ class SystemdPlugin(BasePlugin):
             self.set_status('failed')
             return
 
-        parts = stdout.strip().split()
-        if len(parts) < 3:
-            self.db_logger.write(f"Unexpected output from service query: {stdout!r}", level="ERROR")
-            self.set_status('failed')
-            return
-
-        result, exit_code = parts[0], parts[1]
+        # Parse key=value tokens — immune to empty fields collapsing word count
+        tokens = dict(tok.split('=', 1) for tok in stdout.strip().split() if '=' in tok)
+        result    = tokens.get('result', 'empty')
+        exit_code = tokens.get('exit',   'empty')
+        active    = tokens.get('active', 'unknown')
+        sub       = tokens.get('sub',    'unknown')
         try:
-            epoch = int(parts[2])
+            epoch = int(tokens.get('epoch', '0'))
         except ValueError:
             epoch = 0
+
+        # Log raw values so failures are diagnosable from the dashboard
+        self.db_logger.write(
+            f"systemd state: result={result!r} exit_code={exit_code!r} epoch={epoch} active={active!r} sub={sub!r}",
+            level="INFO"
+        )
+
+        # Service is "currently running" while activating or actively executing its main process
+        _RUNNING_SUBSTATES = {'running', 'start', 'start-pre', 'start-post', 'start-chroot', 'reload'}
+        is_running = active == 'activating' or (active == 'active' and sub in _RUNNING_SUBSTATES)
 
         is_success = result == 'success' or exit_code == '0'
         age = (int(time.time()) - epoch) if epoch > 0 else -1
 
         self.db_metrics.metric('last_run_epoch', float(epoch))
         self.db_metrics.metric('last_run_success', 1.0 if is_success else 0.0)
+        self.db_metrics.metric('is_running', 1.0 if is_running else 0.0)
 
-        if epoch == 0:
+        if is_running:
+            self.db_logger.write("Service is currently running", level="INFO")
+            self.set_status('online')
+        elif epoch == 0:
             self.db_logger.write("Service has never run", level="WARNING")
             self.set_status('failed')
         elif not is_success:
@@ -179,28 +193,50 @@ class SystemdPlugin(BasePlugin):
             self.internal_modules['ui']['host_card']()
             info_card('SERVICE', self.service_name)
             info_card('MAX AGE', format_duration(self.max_age))
+            state_label = info_card('CURRENT STATE', '--')
 
-            result_label = info_card('LAST RESULT', '--')
-            age_label = info_card('LAST RUN', '--')
+            with ui.row().classes('gap-4') as history_row:
+                result_label = info_card('LAST RESULT', '--')
+                age_label = info_card('LAST RUN', '--')
 
-            def update():
-                def latest(metric):
-                    m = Metric.select().where(
-                        (Metric.collector == self.name) & (Metric.metric_name == metric)
-                    ).order_by(Metric.timestamp.desc()).first()
-                    return m.value if m else None
+        def latest(metric):
+            m = Metric.select().where(
+                (Metric.collector == self.name) & (Metric.metric_name == metric)
+            ).order_by(Metric.timestamp.desc()).first()
+            return m.value if m else None
 
-                epoch_val = latest('last_run_epoch')
-                success_val = latest('last_run_success')
+        def update():
+            run_val     = latest('is_running')
+            epoch_val   = latest('last_run_epoch')
+            success_val = latest('last_run_success')
+
+            is_now_running = run_val is not None and run_val > 0.5
+
+            if is_now_running:
+                state_label.text = 'RUNNING'
+                state_label.style(f"color: {STATUS_COLORS['warning']}")
+                history_row.set_visibility(False)
+            else:
+                history_row.set_visibility(True)
 
                 if epoch_val is None:
+                    state_label.text = 'UNKNOWN'
+                    state_label.style(f"color: {STATUS_COLORS['offline']}")
                     return
 
                 is_ok = success_val is not None and success_val > 0.5
+                epoch = int(epoch_val)
+
+                if epoch == 0:
+                    state_label.text = 'NEVER RUN'
+                    state_label.style(f"color: {STATUS_COLORS['failed']}")
+                else:
+                    state_label.text = 'IDLE'
+                    state_label.style(f"color: {STATUS_COLORS['online']}")
+
                 result_label.text = 'SUCCESS' if is_ok else 'FAILED'
                 result_label.style(f"color: {STATUS_COLORS['online' if is_ok else 'failed']}")
 
-                epoch = int(epoch_val)
                 if epoch == 0:
                     age_label.text = 'Never run'
                     age_label.style(f"color: {STATUS_COLORS['failed']}")
@@ -210,7 +246,8 @@ class SystemdPlugin(BasePlugin):
                     color = STATUS_COLORS['failed'] if age > self.max_age else STATUS_COLORS['online']
                     age_label.style(f"color: {color}")
 
-            ui.timer(5.0, update)
+        update()
+        ui.timer(5.0, update)
 
         self.internal_modules['ui']['logs_table'](title='LOGS', limit=100, full_height=True)
 

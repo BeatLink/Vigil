@@ -3,7 +3,7 @@ from .theme import TEXT, TEXT_MUTED, PRIMARY, ACCENT, STATUS_COLORS, BACKGROUND_
 
 # Standardized UI Sizing Constants
 LABEL_CLASS = 'text-xs font-bold'
-VALUE_CLASS = 'text-4xl font-black'
+VALUE_CLASS = 'text-2xl font-bold'
 SECTION_CLASS = 'text-xl font-bold'
 HOVER_STYLE = 'hover:bg-blue-50 cursor-pointer'
 
@@ -14,9 +14,9 @@ def card(classes: str = '', padding: bool = True):
 
 def info_card(title: str, value: str = '--', value_classes: str = VALUE_CLASS, card_classes: str = 'flex-1'):
     """A card component for displaying a label and a large value."""
-    with card(f'{card_classes} items-center justify-center'):
+    with card(f'min-w-36 h-28 overflow-hidden items-center justify-center {card_classes}'):
         ui.label(title.upper()).classes(LABEL_CLASS).style(f'color: {TEXT_MUTED}')
-        return ui.label(value).classes(value_classes).style(f'color: {PRIMARY}')
+        return ui.label(value).classes(f'{value_classes} w-full text-center break-words').style(f'color: {PRIMARY}')
 
 def action_chip(text: str, on_click=None, icon: str = 'play_arrow', color: str = PRIMARY):
     """A standardized chip for control actions."""

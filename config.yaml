@@ -116,6 +116,153 @@ plugins:
             service_name: "vlc-audio.service"
             ssh_config:
               host: "heimdall.technet"
+          - name: "Nginx"
+            id: "heimdall-nginx"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "nginx.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Pi-hole"
+            id: "heimdall-pihole"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "pihole-ftl.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Home Assistant"
+            id: "heimdall-home-assistant"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "home-assistant.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Frigate"
+            id: "heimdall-frigate"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "frigate.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "go2rtc"
+            id: "heimdall-go2rtc"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "go2rtc.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Loki"
+            id: "heimdall-loki"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "loki.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Prometheus"
+            id: "heimdall-prometheus"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "prometheus.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Grafana"
+            id: "heimdall-grafana"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "grafana.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Uptime Kuma"
+            id: "heimdall-uptime-kuma"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "uptime-kuma.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "FreshRSS"
+            id: "heimdall-freshrss"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "phpfpm-freshrss.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "qBittorrent"
+            id: "heimdall-qbittorrent"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "qbittorrent.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Openbooks"
+            id: "heimdall-openbooks"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "openbooks.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Traccar"
+            id: "heimdall-traccar"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "traccar.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "ESPHome"
+            id: "heimdall-esphome"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "esphome.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Glances"
+            id: "heimdall-glances"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "glances.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Homepage"
+            id: "heimdall-homepage"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "homepage-dashboard.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "DDNS Updater"
+            id: "heimdall-ddns-updater"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "ddns-updater.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Blockurl"
+            id: "heimdall-blockurl"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "blockurl.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Radicale"
+            id: "heimdall-radicale"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "radicale.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Syncthing"
+            id: "heimdall-syncthing"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "syncthing.service"
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Trilium"
+            id: "heimdall-trilium"
+            type: "systemd_service"
+            interval: 1m
+            service_name: "trilium-server.service"
+            ssh_config:
+              host: "heimdall.technet"
       - name: "Odin Services"
         id: "odin-services"
         type: "group"
