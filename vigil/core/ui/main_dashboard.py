@@ -253,8 +253,8 @@ def init_gui(engine: Any, port: int = 8080):
             _update_filter_ui()
             update_table()
 
-        status_chart.on('chart_click', lambda e: _set_filter('status', (e.args or {}).get('name', '')))
-        type_chart.on('chart_click',   lambda e: _set_filter('type',   (e.args or {}).get('name', '')))
+        status_chart.on_point_click(lambda e: _set_filter('status', e.name))
+        type_chart.on_point_click(lambda e: _set_filter('type', e.name))
 
         def update_table():
             rows = []

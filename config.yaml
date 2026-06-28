@@ -361,62 +361,86 @@ plugins:
             ssh_config:
               host: "odin.technet"
 
-  - name: "ZFS Storage"
+  - name: "Disk Space"
     type: "group"
     children:
-      - name: "Ragnarok Storage"
+      - name: "Ragnarok Disk Space"
         type: "group"
         children:
-          - name: "Ragnarok Data Pool"
-            id: "ragnarok-data-pool"
-            type: "zfs_pool"
-            pool: "data-pool-Ragnarok"
+          - name: "Ragnarok /"
+            id: "ragnarok-disk-root"
+            type: "disk_space"
+            path: "/"
             threshold: 90
             interval: 10m
             ssh_config:
               host: "ragnarok.technet"
-          - name: "Ragnarok Root Pool"
-            id: "ragnarok-root-pool"
-            type: "zfs_pool"
-            pool: "root-pool-Ragnarok"
+          - name: "Ragnarok /Storage"
+            id: "ragnarok-disk-storage"
+            type: "disk_space"
+            path: "/Storage"
             threshold: 90
             interval: 10m
             ssh_config:
               host: "ragnarok.technet"
-      - name: "Heimdall Storage"
+          - name: "Ragnarok /boot"
+            id: "ragnarok-disk-boot"
+            type: "disk_space"
+            path: "/boot"
+            threshold: 90
+            interval: 10m
+            ssh_config:
+              host: "ragnarok.technet"
+      - name: "Heimdall Disk Space"
         type: "group"
         children:
-          - name: "Heimdall Data Pool"
-            id: "heimdall-data-pool"
-            type: "zfs_pool"
-            pool: "data-pool-Heimdall"
+          - name: "Heimdall /"
+            id: "heimdall-disk-root"
+            type: "disk_space"
+            path: "/"
             threshold: 90
             interval: 10m
             ssh_config:
               host: "heimdall.technet"
-          - name: "Heimdall Root Pool"
-            id: "heimdall-root-pool"
-            type: "zfs_pool"
-            pool: "root-pool-Heimdall"
+          - name: "Heimdall /Storage"
+            id: "heimdall-disk-storage"
+            type: "disk_space"
+            path: "/Storage"
             threshold: 90
             interval: 10m
             ssh_config:
               host: "heimdall.technet"
-      - name: "Odin Storage"
+          - name: "Heimdall /boot"
+            id: "heimdall-disk-boot"
+            type: "disk_space"
+            path: "/boot"
+            threshold: 90
+            interval: 10m
+            ssh_config:
+              host: "heimdall.technet"
+      - name: "Odin Disk Space"
         type: "group"
         children:
-          - name: "Odin Data Pool"
-            id: "odin-data-pool"
-            type: "zfs_pool"
-            pool: "data-pool-Odin"
+          - name: "Odin /"
+            id: "odin-disk-root"
+            type: "disk_space"
+            path: "/"
             threshold: 90
             interval: 10m
             ssh_config:
               host: "odin.technet"
-          - name: "Odin Root Pool"
-            id: "odin-root-pool"
-            type: "zfs_pool"
-            pool: "root-pool-Odin"
+          - name: "Odin /Storage"
+            id: "odin-disk-storage"
+            type: "disk_space"
+            path: "/Storage"
+            threshold: 90
+            interval: 10m
+            ssh_config:
+              host: "odin.technet"
+          - name: "Odin /boot"
+            id: "odin-disk-boot"
+            type: "disk_space"
+            path: "/boot"
             threshold: 90
             interval: 10m
             ssh_config:

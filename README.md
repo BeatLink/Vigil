@@ -74,7 +74,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`, `network_usage`, `group` |
+| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -187,25 +187,25 @@ Monitors ZFS pool health states over SSH via `zpool list -H -o name,health`. Rep
 
 ---
 
-### `zfs_pool`
-Monitors ZFS zpool capacity over SSH. Marks the pool failed when usage exceeds the configured threshold.
+### `disk_space`
+Monitors disk space usage for a path or mountpoint over SSH via `df`. Works on any mounted Linux filesystem — no ZFS or other tools required. Marks the path failed when usage exceeds the configured threshold.
 
-| Option      | Description                                                   |
-|-------------|---------------------------------------------------------------|
-| `pool`      | Name of the zpool to monitor (e.g. `data-pool-myhost`)        |
+| Option      | Description                                                       |
+|-------------|-------------------------------------------------------------------|
+| `path`      | Filesystem path or mountpoint to monitor (e.g. `/`, `/Storage`)  |
 | `threshold` | Usage percentage that triggers a `failed` status (default: `90`) |
-| `interval`  | Polling frequency in seconds (default: `60`, recommend `600`) |
-| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+| `interval`  | Polling frequency (default: `60`, recommend `10m`)                |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below     |
 
-**Metrics**: `usage_pct`
+**Metrics**: `used_pct`, `size_gb`, `used_gb`, `avail_gb`
 
 ```yaml
-- name: "Data Pool"
-  id: "myhost-data-pool"
-  type: "zfs_pool"
-  pool: "data-pool-myhost"
+- name: "Root Disk"
+  id: "myhost-disk-root"
+  type: "disk_space"
+  path: "/"
   threshold: 90
-  interval: 600
+  interval: 10m
   ssh_config:
     host: "myhost.example.com"
 ```
@@ -271,7 +271,7 @@ Groups can be nested to arbitrary depth.
 
 ### SSH Config
 
-All SSH-based plugins (`systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`, `network_usage`) accept an `ssh_config` block:
+All SSH-based plugins (`systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`) accept an `ssh_config` block:
 
 | Field        | Description                                                         |
 |--------------|---------------------------------------------------------------------|
@@ -389,7 +389,7 @@ nix run . -- --config config.yaml
 - [x] Hierarchical plugin/group support
 - [x] Ping/ICMP uptime module
 - [x] Web dashboard (NiceGUI)
-- [x] ZFS zpool capacity monitor
+- [x] Disk space monitor (any path/mountpoint via `df`, threshold alerting)
 - [x] ZFS pool health monitor (DEGRADED/FAULTED detection)
 - [x] SMART disk health monitor
 - [x] Network usage monitor (RX/TX throughput via `/proc/net/dev`, auto-detect or explicit interface)
