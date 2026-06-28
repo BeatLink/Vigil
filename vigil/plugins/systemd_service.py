@@ -63,17 +63,27 @@ class SystemdPlugin(BasePlugin):
     async def _collect_oneshot(self):
         """
         Oneshot check: was the last run successful and recent enough?
-        Uses a single SSH call to get both the Result and the completion
-        timestamp, converting the timestamp to a Unix epoch on the remote side
-        to avoid locale-dependent date parsing.
+
+        Uses ExecMainExitTimestamp as the primary completion time — this is set
+        whenever the main process exits, including for RemainAfterExit=yes services
+        that stay 'active' after the command finishes (e.g. nixos-upgrade.service).
+        InactiveEnterTimestamp is used as a fallback for services that do go inactive.
+
+        Considers a run successful if Result=success OR ExecMainStatus=0, because
+        some oneshot scripts exit with result=exit-code even on clean completion.
         """
         cmd = (
             f"result=$(systemctl show {self.service_name} -p Result --value); "
+            f"exit_code=$(systemctl show {self.service_name} -p ExecMainStatus --value); "
+            # ExecMainExitTimestamp works for RemainAfterExit=yes services
+            f"ts=$(systemctl show {self.service_name} -p ExecMainExitTimestamp --value); "
+            # Fall back to InactiveEnterTimestamp for services that do go inactive
+            '[ -z "$ts" ] || [ "$ts" = "n/a" ] && '
             f"ts=$(systemctl show {self.service_name} -p InactiveEnterTimestamp --value); "
             'if [ -n "$ts" ] && [ "$ts" != "n/a" ]; then '
             '  epoch=$(date -d "$ts" +%s 2>/dev/null || echo 0); '
             'else epoch=0; fi; '
-            'echo "$result $epoch"'
+            'echo "$result $exit_code $epoch"'
         )
         ret, stdout, stderr = await self.ssh_collector.fetch_output(cmd)
 
@@ -83,27 +93,28 @@ class SystemdPlugin(BasePlugin):
             return
 
         parts = stdout.strip().split()
-        if len(parts) < 2:
+        if len(parts) < 3:
             self.db_logger.write(f"Unexpected output from service query: {stdout!r}", level="ERROR")
             self.set_status('failed')
             return
 
-        result = parts[0]
+        result, exit_code = parts[0], parts[1]
         try:
-            epoch = int(parts[1])
+            epoch = int(parts[2])
         except ValueError:
             epoch = 0
 
+        is_success = result == 'success' or exit_code == '0'
         age = (int(time.time()) - epoch) if epoch > 0 else -1
 
         self.db_metrics.metric('last_run_epoch', float(epoch))
-        self.db_metrics.metric('last_run_success', 1.0 if result == 'success' else 0.0)
+        self.db_metrics.metric('last_run_success', 1.0 if is_success else 0.0)
 
         if epoch == 0:
             self.db_logger.write("Service has never run", level="WARNING")
             self.set_status('failed')
-        elif result != 'success':
-            self.db_logger.write(f"Last run failed (result: {result})", level="ERROR")
+        elif not is_success:
+            self.db_logger.write(f"Last run failed (result: {result}, exit: {exit_code})", level="ERROR")
             self.set_status('failed')
         elif age > self.max_age:
             self.db_logger.write(
