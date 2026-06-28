@@ -20,6 +20,16 @@ dependencies = [
 [project.scripts]
 vigil = "vigil.__main__:main"
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["vigil*"]

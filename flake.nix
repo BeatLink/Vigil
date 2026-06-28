@@ -70,6 +70,8 @@
                             ++ [
                                 ps.pip
                                 ps.setuptools
+                                ps.pytest
+                                ps.pytest-asyncio
                             ]
                         ))
                         vigil-run
