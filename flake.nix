@@ -85,7 +85,13 @@
                         echo "Vigil development environment loaded."
                         echo "Python: $(python3 --version)"
                         echo ""
-                        echo "Type 'vigil-run' to start the application."
+                        echo "Commands:"
+                        echo "  vigil-run              Start the application"
+                        echo "  pytest                 Run all tests"
+                        echo "  pytest tests/plugins/  Run plugin tests only"
+                        echo "  pytest tests/unit/     Run unit tests only"
+                        echo "  pytest -v              Verbose test output"
+                        echo "  pytest -k <name>       Run tests matching name"
                     '';
                 };
             }
