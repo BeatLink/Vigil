@@ -290,6 +290,28 @@ plugins:
             ssh_config:
               host: "odin.technet"
 
+  - name: "Network Usage"
+    type: "group"
+    children:
+      - name: "Ragnarok Network"
+        id: "ragnarok-network"
+        type: "network_usage"
+        interval: 30s
+        ssh_config:
+          host: "ragnarok.technet"
+      - name: "Heimdall Network"
+        id: "heimdall-network"
+        type: "network_usage"
+        interval: 30s
+        ssh_config:
+          host: "heimdall.technet"
+      - name: "Odin Network"
+        id: "odin-network"
+        type: "network_usage"
+        interval: 30s
+        ssh_config:
+          host: "odin.technet"
+
   - name: "Disk Health"
     type: "group"
     children:

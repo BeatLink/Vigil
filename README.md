@@ -74,7 +74,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`, `group` |
+| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`, `network_usage`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -212,6 +212,40 @@ Monitors ZFS zpool capacity over SSH. Marks the pool failed when usage exceeds t
 
 ---
 
+### `network_usage`
+Monitors network interface throughput over SSH. Takes two snapshots of `/proc/net/dev` one second apart in a single SSH command — no extra tools required on the remote host.
+
+The interface to monitor can be specified explicitly or auto-detected. In auto-detect mode, Vigil picks the non-virtual, non-loopback interface with the highest cumulative byte count, ignoring interfaces with prefixes like `lo`, `veth`, `docker`, `virbr`, `br-`, `tun`, and `tap`.
+
+| Option       | Description                                                                            |
+|--------------|----------------------------------------------------------------------------------------|
+| `interface`  | *(Optional)* Interface name to monitor (e.g. `eth0`). Omit to auto-detect.            |
+| `interval`   | Polling frequency (default: `60`). Shorter intervals give finer-grained trend history. |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below                           |
+
+**Metrics**: `rx_kbps`, `tx_kbps`
+
+```yaml
+# Auto-detect the primary interface
+- name: "Heimdall Network"
+  id: "heimdall-network"
+  type: "network_usage"
+  interval: 30s
+  ssh_config:
+    host: "heimdall.example.com"
+
+# Monitor a specific interface
+- name: "Ragnarok Network"
+  id: "ragnarok-network"
+  type: "network_usage"
+  interval: 30s
+  interface: "eth0"
+  ssh_config:
+    host: "ragnarok.example.com"
+```
+
+---
+
 ### `group`
 A logical container for other monitors. Aggregates the worst-case status of all descendants and displays a summary card for each child.
 
@@ -237,7 +271,7 @@ Groups can be nested to arbitrary depth.
 
 ### SSH Config
 
-All SSH-based plugins (`systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`) accept an `ssh_config` block:
+All SSH-based plugins (`systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`, `network_usage`) accept an `ssh_config` block:
 
 | Field        | Description                                                         |
 |--------------|---------------------------------------------------------------------|
@@ -358,6 +392,7 @@ nix run . -- --config config.yaml
 - [x] ZFS zpool capacity monitor
 - [x] ZFS pool health monitor (DEGRADED/FAULTED detection)
 - [x] SMART disk health monitor
+- [x] Network usage monitor (RX/TX throughput via `/proc/net/dev`, auto-detect or explicit interface)
 - [ ] SSH collector module with standard metric parsing (CPU, RAM, Disk)
 - [ ] Basic alerting (Email, Slack, or Webhook)
 - [ ] Control module for service remediation
