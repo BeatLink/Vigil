@@ -1,0 +1,69 @@
+"""
+Root-level fixtures shared across all test modules.
+
+Key design decisions:
+- Uses a file-based SQLite temp DB (not :memory:) so that Peewee's
+  connection_context() pattern works correctly across multiple open/close cycles.
+- SSHConnection, SSHCollector, and SSHController are patched during plugin __init__
+  so plugins instantiate cleanly without real network access.
+- After instantiation, ssh_collector / ssh_controller are replaced with fresh
+  MagicMocks so each test can configure return values independently.
+"""
+import pytest
+from unittest.mock import MagicMock, AsyncMock, patch
+
+
+@pytest.fixture
+def db_manager(tmp_path):
+    """DatabaseManager backed by a temp SQLite file. Cleans up on teardown."""
+    from vigil.core.data.database import DatabaseManager, db
+    if not db.is_closed():
+        db.close()
+    manager = DatabaseManager(str(tmp_path / "test.db"))
+    yield manager
+    if not db.is_closed():
+        db.close()
+
+
+@pytest.fixture
+def make_plugin(db_manager):
+    """
+    Factory fixture: creates any BasePlugin subclass with all external deps mocked.
+    Returns a callable: make_plugin(PluginClass, extra_config_dict).
+    The plugin's ssh_collector and ssh_controller are fresh AsyncMocks for per-test control.
+    """
+    def factory(cls, extra_config=None):
+        cfg = {
+            "name": "test-plugin",
+            "id":   "test-plugin",
+            "interval": 60,
+            "ssh_config": {"host": "test.host"},
+        }
+        if extra_config:
+            cfg.update(extra_config)
+
+        with patch("vigil.core.common.base_plugin.SSHConnection") as MockSSH, \
+             patch("vigil.core.common.base_plugin.SSHCollector") as MockCollector, \
+             patch("vigil.core.common.base_plugin.SSHController") as MockController:
+
+            mock_conn = MagicMock()
+            mock_conn.host = cfg.get("ssh_config", {}).get("host", "test.host")
+            MockSSH.from_config.return_value = mock_conn
+            MockCollector.return_value = MagicMock(
+                fetch_output=AsyncMock(return_value=(0, "", ""))
+            )
+            MockController.return_value = MagicMock(
+                execute_action=AsyncMock(return_value=(0, "", ""))
+            )
+            plugin = cls(cfg["name"], cfg, db_manager)
+
+        # Replace with fresh mocks that each test controls directly
+        plugin.ssh_collector = MagicMock(
+            fetch_output=AsyncMock(return_value=(0, "", ""))
+        )
+        plugin.ssh_controller = MagicMock(
+            execute_action=AsyncMock(return_value=(0, "", ""))
+        )
+        return plugin
+
+    return factory

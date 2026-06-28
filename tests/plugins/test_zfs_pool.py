@@ -1,0 +1,102 @@
+import pytest
+from unittest.mock import AsyncMock
+
+pytestmark = pytest.mark.asyncio
+from vigil.plugins.zfs_pool import ZFSPoolPlugin
+from vigil.core.data.database import db, StatusHistory, Metric
+
+
+POOL_CFG = {
+    "name":       "test-pool",
+    "id":         "test-pool",
+    "pool":       "data-pool",
+    "threshold":  90,
+    "ssh_config": {"host": "test.host"},
+}
+
+
+@pytest.fixture
+def plugin(make_plugin):
+    return make_plugin(ZFSPoolPlugin, POOL_CFG)
+
+
+def _latest_status() -> str | None:
+    with db.connection_context():
+        row = StatusHistory.select().where(
+            StatusHistory.collector_id == "test-pool"
+        ).order_by(StatusHistory.timestamp.desc()).first()
+    return row.state if row else None
+
+
+def _latest_usage() -> float | None:
+    with db.connection_context():
+        row = Metric.select().where(
+            (Metric.collector == "test-pool") & (Metric.metric_name == "usage_pct")
+        ).order_by(Metric.timestamp.desc()).first()
+    return row.value if row else None
+
+
+class TestZFSPoolCollection:
+    async def test_below_threshold_is_online(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, "data-pool\t50%", "")
+        )
+        await plugin.on_collect()
+        assert _latest_status() == "online"
+
+    async def test_usage_metric_recorded(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, "data-pool\t50%", "")
+        )
+        await plugin.on_collect()
+        assert _latest_usage() == pytest.approx(50.0)
+
+    async def test_at_threshold_is_failed(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, "data-pool\t90%", "")
+        )
+        await plugin.on_collect()
+        assert _latest_status() == "failed"
+
+    async def test_above_threshold_is_failed(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, "data-pool\t95%", "")
+        )
+        await plugin.on_collect()
+        assert _latest_status() == "failed"
+
+    async def test_high_usage_metric_recorded(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, "data-pool\t95%", "")
+        )
+        await plugin.on_collect()
+        assert _latest_usage() == pytest.approx(95.0)
+
+    async def test_ssh_failure_sets_failed(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(-1, "", "connection timed out")
+        )
+        await plugin.on_collect()
+        assert _latest_status() == "failed"
+
+    async def test_malformed_output_sets_failed(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, "unexpected output", "")
+        )
+        await plugin.on_collect()
+        assert _latest_status() == "failed"
+
+    async def test_custom_threshold_respected(self, make_plugin):
+        plugin = make_plugin(ZFSPoolPlugin, {**POOL_CFG, "id": "pool-75", "threshold": 75})
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, "data-pool\t80%", "")
+        )
+        await plugin.on_collect()
+        with db.connection_context():
+            row = StatusHistory.select().where(
+                StatusHistory.collector_id == "pool-75"
+            ).order_by(StatusHistory.timestamp.desc()).first()
+        assert row.state == "failed"
+
+    async def test_on_action_always_false(self, plugin):
+        assert await plugin.on_action("anything") is False
