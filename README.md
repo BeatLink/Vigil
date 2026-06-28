@@ -74,7 +74,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`, `group` |
+| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`, `system_stats`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -208,6 +208,41 @@ Monitors disk space usage for a path or mountpoint over SSH via `df`. Works on a
   interval: 10m
   ssh_config:
     host: "myhost.example.com"
+```
+
+---
+
+### `system_stats`
+Monitors CPU usage, memory usage, and temperature over SSH. Uses `/proc/stat` (two 1-second samples) for CPU, `/proc/meminfo` for memory, and `/sys/class/thermal/thermal_zone*/temp` for temperature — no extra tools required on the remote host. Temperature monitoring is gracefully skipped on hosts where no thermal zones are present (e.g. some VMs).
+
+Each metric has independent warning and failed thresholds. The overall status is the worst level across all metrics — `online`, `warning`, or `failed`.
+
+| Option              | Description                                                               |
+|---------------------|---------------------------------------------------------------------------|
+| `cpu_warning`       | CPU % that triggers `warning` (default: `70`)                            |
+| `cpu_threshold`     | CPU % that triggers `failed` (default: `85`)                             |
+| `memory_warning`    | Memory usage % that triggers `warning` (default: `75`)                  |
+| `memory_threshold`  | Memory usage % that triggers `failed` (default: `90`)                   |
+| `temp_warning`      | Max thermal zone °C that triggers `warning` (default: `70`)              |
+| `temp_threshold`    | Max thermal zone °C that triggers `failed` (default: `80`)               |
+| `interval`          | Polling frequency (default: `60`)                                         |
+| `ssh_config`        | SSH connection details — see [SSH Config](#ssh-config) below             |
+
+**Metrics**: `cpu_pct`, `memory_pct`, `memory_used_gb`, `memory_total_gb`, `temp_c`
+
+```yaml
+- name: "Heimdall System"
+  id: "heimdall-system"
+  type: "system_stats"
+  interval: 1m
+  cpu_warning: 70
+  cpu_threshold: 85
+  memory_warning: 75
+  memory_threshold: 90
+  temp_warning: 70
+  temp_threshold: 80
+  ssh_config:
+    host: "heimdall.example.com"
 ```
 
 ---
@@ -392,6 +427,7 @@ nix run . -- --config config.yaml
 - [x] Disk space monitor (any path/mountpoint via `df`, threshold alerting)
 - [x] ZFS pool health monitor (DEGRADED/FAULTED detection)
 - [x] SMART disk health monitor
+- [x] System stats monitor (CPU %, memory %, temperature via `/proc` and `/sys`, per-metric thresholds)
 - [x] Network usage monitor (RX/TX throughput via `/proc/net/dev`, auto-detect or explicit interface)
 - [ ] SSH collector module with standard metric parsing (CPU, RAM, Disk)
 - [ ] Basic alerting (Email, Slack, or Webhook)

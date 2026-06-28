@@ -75,6 +75,46 @@ plugins:
             type: "uptime"
             target_host: "sensor-bathroom.lan"
 
+  - name: "System Stats"
+    type: "group"
+    children:
+      - name: "Ragnarok System"
+        id: "ragnarok-system"
+        type: "system_stats"
+        interval: 1m
+        cpu_warning: 70
+        cpu_threshold: 85
+        memory_warning: 75
+        memory_threshold: 90
+        temp_warning: 70
+        temp_threshold: 80
+        ssh_config:
+          host: "ragnarok.technet"
+      - name: "Heimdall System"
+        id: "heimdall-system"
+        type: "system_stats"
+        interval: 1m
+        cpu_warning: 70
+        cpu_threshold: 85
+        memory_warning: 75
+        memory_threshold: 90
+        temp_warning: 70
+        temp_threshold: 80
+        ssh_config:
+          host: "heimdall.technet"
+      - name: "Odin System"
+        id: "odin-system"
+        type: "system_stats"
+        interval: 1m
+        cpu_warning: 70
+        cpu_threshold: 85
+        memory_warning: 75
+        memory_threshold: 90
+        temp_warning: 70
+        temp_threshold: 80
+        ssh_config:
+          host: "odin.technet"
+
   - name: "Running Services"
     type: "group"
     children:
