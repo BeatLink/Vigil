@@ -375,4 +375,5 @@ def init_gui(engine: Any, port: int = 8080):
     render_main()
 
     # Run the NiceGUI app
-    ui.run(title='Vigil', favicon=_ICON, port=port, reload=False, show=False)
+    svg = _ICON.read_text()
+    ui.run(title='Vigil', favicon=svg[svg.index('<svg'):], port=port, reload=False, show=False)
