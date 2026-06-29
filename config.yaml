@@ -90,7 +90,7 @@ plugins:
 
   - name: "System Stats"
     type: "group"
-    grid_columns: 3
+    grid_columns: 1
     children:
       - name: "Ragnarok"
         type: "group"
