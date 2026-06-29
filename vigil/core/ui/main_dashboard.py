@@ -370,4 +370,4 @@ def init_gui(engine: Any, port: int = 8080):
     render_main()
 
     # Run the NiceGUI app
-    ui.run(title='Vigil Dashboard', port=port, reload=False, show=False)
+    ui.run(title='Vigil', favicon='🔭', port=port, reload=False, show=False)
