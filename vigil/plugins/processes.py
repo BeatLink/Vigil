@@ -82,8 +82,9 @@ class ProcessesPlugin(BasePlugin):
 
         processes = _parse_ps_output(stdout)
 
-        # If ps returned output but we parsed nothing, something went wrong
-        if not processes and stdout.strip():
+        # Fail only when there were data rows (beyond the header) that we couldn't parse
+        has_data_rows = len(stdout.strip().splitlines()) > 1
+        if not processes and has_data_rows:
             self.db_logger.write(f"Could not parse ps output: {stdout!r}", level="ERROR")
             self.set_status('failed')
             return

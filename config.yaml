@@ -88,6 +88,31 @@ plugins:
             type: "uptime"
             target_host: "sensor-bathroom.lan"
 
+  - name: "Processes"
+    type: "group"
+    children:
+      - name: "Ragnarok Processes"
+        id: "ragnarok-processes"
+        type: "processes"
+        interval: 30s
+        max_processes: 20
+        ssh_config:
+          host: "ragnarok.technet"
+      - name: "Heimdall Processes"
+        id: "heimdall-processes"
+        type: "processes"
+        interval: 30s
+        max_processes: 20
+        ssh_config:
+          host: "heimdall.technet"
+      - name: "Odin Processes"
+        id: "odin-processes"
+        type: "processes"
+        interval: 30s
+        max_processes: 20
+        ssh_config:
+          host: "odin.technet"
+
   - name: "System Stats"
     type: "group"
     children:

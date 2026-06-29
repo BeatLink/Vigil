@@ -100,7 +100,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `group` |
+| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
