@@ -4,6 +4,19 @@ from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.ui.components import info_card, history_chart
 
 
+_DEFAULT_LAYOUT = {
+    'grid_columns': 4,
+    'widgets': {
+        'host_card':      {'col_span': 1},
+        'pool_card':      {'col_span': 1},
+        'usage_card':     {'col_span': 1},
+        'threshold_card': {'col_span': 1},
+        'chart':          {'col_span': 4},
+        'logs':           {'col_span': 4},
+    }
+}
+
+
 class ZFSPoolPlugin(BasePlugin):
     """
     Monitors ZFS zpool capacity over SSH.
@@ -50,24 +63,31 @@ class ZFSPoolPlugin(BasePlugin):
         from nicegui import ui
         from vigil.core.data.database import Metric
         from vigil.core.ui.theme import STATUS_COLORS
+        from vigil.core.ui.layout import PluginLayout
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
+        with layout.cell('pool_card'):
             info_card('POOL', self.pool)
-
+        with layout.cell('usage_card'):
             usage_label = info_card('USAGE', '-- %')
+        with layout.cell('threshold_card'):
             info_card('THRESHOLD', f'{self.threshold}%')
+        with layout.cell('chart'):
+            history_chart(f'CAPACITY HISTORY — {self.pool} (%)', self.name, 'usage_pct')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table']()
 
-            def update_usage():
-                last = Metric.select().where(
-                    (Metric.collector == self.name) & (Metric.metric_name == 'usage_pct')
-                ).order_by(Metric.timestamp.desc()).first()
-                if last:
-                    pct = last.value
-                    usage_label.text = f'{pct:.1f}%'
-                    color = STATUS_COLORS['failed'] if pct >= self.threshold else STATUS_COLORS['online']
-                    usage_label.style(f'color: {color}')
-            ui.timer(5.0, update_usage)
+        def update_usage():
+            last = Metric.select().where(
+                (Metric.collector == self.name) & (Metric.metric_name == 'usage_pct')
+            ).order_by(Metric.timestamp.desc()).first()
+            if last:
+                pct = last.value
+                usage_label.text = f'{pct:.1f}%'
+                color = STATUS_COLORS['failed'] if pct >= self.threshold else STATUS_COLORS['online']
+                usage_label.style(f'color: {color}')
 
-        history_chart(f'CAPACITY HISTORY — {self.pool} (%)', self.name, 'usage_pct')
-        self.internal_modules['ui']['logs_table']()
+        ui.timer(5.0, update_usage)

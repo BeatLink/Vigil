@@ -20,6 +20,18 @@ def _fmt_gb(gb: float) -> str:
     return f"{gb:.1f} GB"
 
 
+_DEFAULT_LAYOUT = {
+    'grid_columns': 3,
+    'widgets': {
+        'host_card':    {'col_span': 1},
+        'mem_pct_card': {'col_span': 1},
+        'mem_used_card':{'col_span': 1},
+        'chart':        {'col_span': 3},
+        'logs':         {'col_span': 3},
+    }
+}
+
+
 class MemoryUsagePlugin(BasePlugin):
     """
     Monitors memory usage over SSH via /proc/meminfo.
@@ -87,30 +99,34 @@ class MemoryUsagePlugin(BasePlugin):
     def render_ui(self):
         from nicegui import ui
         from vigil.core.data.database import Metric
+        from vigil.core.ui.layout import PluginLayout
 
         def latest(metric_name):
             return Metric.select().where(
                 (Metric.collector == self.name) & (Metric.metric_name == metric_name)
             ).order_by(Metric.timestamp.desc()).first()
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
-            mem_pct_label  = info_card('MEMORY',   '-- %')
+        with layout.cell('mem_pct_card'):
+            mem_pct_label = info_card('MEMORY', '-- %')
+        with layout.cell('mem_used_card'):
             mem_used_label = info_card('MEM USED', '--')
+        with layout.cell('chart'):
+            history_chart('MEMORY USAGE (%)', self.name, 'memory_pct')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table']()
 
-            def update_cards():
-                mem_pct   = latest('memory_pct')
-                mem_used  = latest('memory_used_gb')
-                mem_total = latest('memory_total_gb')
+        def update_cards():
+            mem_pct   = latest('memory_pct')
+            mem_used  = latest('memory_used_gb')
+            mem_total = latest('memory_total_gb')
+            if mem_pct:
+                mem_pct_label.text = f'{mem_pct.value:.1f}%'
+                mem_pct_label.style(f'color: {STATUS_COLORS[_level_for(mem_pct.value, self.memory_warning, self.memory_threshold)]}')
+            if mem_used and mem_total:
+                mem_used_label.text = f'{_fmt_gb(mem_used.value)} / {_fmt_gb(mem_total.value)}'
 
-                if mem_pct:
-                    mem_pct_label.text = f'{mem_pct.value:.1f}%'
-                    mem_pct_label.style(f'color: {STATUS_COLORS[_level_for(mem_pct.value, self.memory_warning, self.memory_threshold)]}')
-
-                if mem_used and mem_total:
-                    mem_used_label.text = f'{_fmt_gb(mem_used.value)} / {_fmt_gb(mem_total.value)}'
-
-            ui.timer(5.0, update_cards)
-
-        history_chart('MEMORY USAGE (%)', self.name, 'memory_pct')
-        self.internal_modules['ui']['logs_table']()
+        ui.timer(5.0, update_cards)

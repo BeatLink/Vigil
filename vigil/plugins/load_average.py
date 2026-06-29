@@ -15,6 +15,19 @@ def _level_for(value: float, warning: float, failed: float) -> str:
     return 'online'
 
 
+_DEFAULT_LAYOUT = {
+    'grid_columns': 4,
+    'widgets': {
+        'host_card':    {'col_span': 1},
+        'load_1m_card': {'col_span': 1},
+        'load_5m_card': {'col_span': 1},
+        'load_15m_card':{'col_span': 1},
+        'chart':        {'col_span': 4},
+        'logs':         {'col_span': 4},
+    }
+}
+
+
 class LoadAveragePlugin(BasePlugin):
     """
     Monitors system load averages over SSH via /proc/loadavg.
@@ -89,35 +102,39 @@ class LoadAveragePlugin(BasePlugin):
     def render_ui(self):
         from nicegui import ui
         from vigil.core.data.database import Metric
+        from vigil.core.ui.layout import PluginLayout
 
         def latest(metric_name):
             return Metric.select().where(
                 (Metric.collector == self.name) & (Metric.metric_name == metric_name)
             ).order_by(Metric.timestamp.desc()).first()
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
-            load_1m_label  = info_card('LOAD 1M',  '-- %')
-            load_5m_label  = info_card('LOAD 5M',  '-- %')
+        with layout.cell('load_1m_card'):
+            load_1m_label = info_card('LOAD 1M', '-- %')
+        with layout.cell('load_5m_card'):
+            load_5m_label = info_card('LOAD 5M', '-- %')
+        with layout.cell('load_15m_card'):
             load_15m_label = info_card('LOAD 15M', '-- %')
+        with layout.cell('chart'):
+            history_chart('LOAD AVERAGE (%)', self.name, 'load_pct_1m')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table']()
 
-            def update_cards():
-                load_1m  = latest('load_pct_1m')
-                load_5m  = latest('load_pct_5m')
-                load_15m = latest('load_pct_15m')
+        def update_cards():
+            load_1m  = latest('load_pct_1m')
+            load_5m  = latest('load_pct_5m')
+            load_15m = latest('load_pct_15m')
+            if load_1m:
+                load_1m_label.text = f'{load_1m.value:.0f}%'
+                if self.load_warning is not None and self.load_threshold is not None:
+                    load_1m_label.style(f'color: {STATUS_COLORS[_level_for(load_1m.value, self.load_warning, self.load_threshold)]}')
+            if load_5m:
+                load_5m_label.text = f'{load_5m.value:.0f}%'
+            if load_15m:
+                load_15m_label.text = f'{load_15m.value:.0f}%'
 
-                if load_1m:
-                    load_1m_label.text = f'{load_1m.value:.0f}%'
-                    if self.load_warning is not None and self.load_threshold is not None:
-                        load_1m_label.style(f'color: {STATUS_COLORS[_level_for(load_1m.value, self.load_warning, self.load_threshold)]}')
-
-                if load_5m:
-                    load_5m_label.text = f'{load_5m.value:.0f}%'
-
-                if load_15m:
-                    load_15m_label.text = f'{load_15m.value:.0f}%'
-
-            ui.timer(5.0, update_cards)
-
-        history_chart('LOAD AVERAGE (%)', self.name, 'load_pct_1m')
-        self.internal_modules['ui']['logs_table']()
+        ui.timer(5.0, update_cards)

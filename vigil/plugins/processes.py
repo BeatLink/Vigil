@@ -37,6 +37,18 @@ def _level_for(value: float, warning: float, failed: float) -> str:
     return 'online'
 
 
+_DEFAULT_LAYOUT = {
+    'grid_columns': 3,
+    'widgets': {
+        'host_card':    {'col_span': 1},
+        'count_card':   {'col_span': 1},
+        'top_cpu_card': {'col_span': 1},
+        'table':        {'col_span': 3},
+        'logs':         {'col_span': 3},
+    }
+}
+
+
 class ProcessesPlugin(BasePlugin):
     """
     Monitors running processes over SSH via `ps`.
@@ -135,11 +147,16 @@ class ProcessesPlugin(BasePlugin):
     def render_ui(self):
         from nicegui import ui
         import asyncio
+        from vigil.core.ui.layout import PluginLayout
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
-            count_label   = info_card('PROCESSES', '--')
-            top_cpu_label = info_card('TOP CPU',   '-- %')
+        with layout.cell('count_card'):
+            count_label = info_card('PROCESSES', '--')
+        with layout.cell('top_cpu_card'):
+            top_cpu_label = info_card('TOP CPU', '-- %')
 
         columns = [
             {'name': 'pid',     'label': 'PID',     'field': 'pid',     'sortable': True,  'align': 'right'},
@@ -150,26 +167,26 @@ class ProcessesPlugin(BasePlugin):
             {'name': 'actions', 'label': '',        'field': 'actions', 'sortable': False, 'align': 'center'},
         ]
 
-        table = ui.table(columns=columns, rows=[], row_key='pid').classes('w-full text-sm')
+        with layout.cell('table'):
+            table = ui.table(columns=columns, rows=[], row_key='pid').classes('w-full text-sm')
+            table.add_slot('body-cell-cpu', '''
+                <q-td :props="props">
+                    <span :style="{ color: props.row._cpu_color }">{{ props.row.cpu }}</span>
+                </q-td>
+            ''')
+            table.add_slot('body-cell-actions', '''
+                <q-td :props="props">
+                    <q-btn dense flat icon="cancel" color="warning" size="sm"
+                           @click="$parent.$emit('kill_term', props.row)"
+                           title="SIGTERM (graceful)" />
+                    <q-btn dense flat icon="dangerous" color="negative" size="sm"
+                           @click="$parent.$emit('kill_kill', props.row)"
+                           title="SIGKILL (force)" />
+                </q-td>
+            ''')
 
-        # Colorize the CPU % cell by threshold level
-        table.add_slot('body-cell-cpu', '''
-            <q-td :props="props">
-                <span :style="{ color: props.row._cpu_color }">{{ props.row.cpu }}</span>
-            </q-td>
-        ''')
-
-        # Per-row kill buttons: SIGTERM (graceful) and SIGKILL (force)
-        table.add_slot('body-cell-actions', '''
-            <q-td :props="props">
-                <q-btn dense flat icon="cancel" color="warning" size="sm"
-                       @click="$parent.$emit('kill_term', props.row)"
-                       title="SIGTERM (graceful)" />
-                <q-btn dense flat icon="dangerous" color="negative" size="sm"
-                       @click="$parent.$emit('kill_kill', props.row)"
-                       title="SIGKILL (force)" />
-            </q-td>
-        ''')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table']()
 
         async def _do_kill(e, signal):
             pid = (e.args or {}).get('pid')
@@ -192,16 +209,13 @@ class ProcessesPlugin(BasePlugin):
                     top_cpu_label.style(
                         f'color: {STATUS_COLORS[_level_for(top_cpu, self.cpu_warning, self.cpu_threshold)]}'
                     )
-
             rows = []
             for p in self._processes:
                 cpu_color = STATUS_COLORS['online']
                 if self.cpu_warning is not None and self.cpu_threshold is not None:
                     cpu_color = STATUS_COLORS[_level_for(p['cpu'], self.cpu_warning, self.cpu_threshold)]
                 rows.append({**p, '_cpu_color': cpu_color})
-
             table.rows[:] = rows
             table.update()
 
         ui.timer(5.0, update)
-        self.internal_modules['ui']['logs_table']()

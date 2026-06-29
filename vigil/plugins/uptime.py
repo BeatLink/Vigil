@@ -6,6 +6,18 @@ from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.ui.components import info_card, history_chart
 
+_DEFAULT_LAYOUT = {
+    'grid_columns': 3,
+    'widgets': {
+        'host_card':    {'col_span': 1},
+        'status_card':  {'col_span': 1},
+        'latency_card': {'col_span': 1},
+        'chart':        {'col_span': 3},
+        'logs':         {'col_span': 3},
+    }
+}
+
+
 class UptimePlugin(BasePlugin):
     """
     A simple uptime plugin that checks host availability via ICMP ping.
@@ -63,35 +75,33 @@ class UptimePlugin(BasePlugin):
         return False
 
     def render_ui(self):
-        """Specialized UI for Uptime monitoring."""
         from nicegui import ui
         from vigil.core.data.database import Metric
-        
-        with ui.row().classes('w-full gap-4 mb-4'):
-            self.internal_modules['ui']['host_card']()
+        from vigil.core.ui.layout import PluginLayout
 
-            # Status Card
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+
+        with layout.cell('host_card'):
+            self.internal_modules['ui']['host_card']()
+        with layout.cell('status_card'):
             self.internal_modules['ui']['status_card'](
                 metric_name='up',
                 title='CURRENT STATUS',
                 on_text='ONLINE',
                 off_text='OFFLINE'
             )
-
-            # Latency Card
+        with layout.cell('latency_card'):
             latency_label = info_card('LAST LATENCY', '-- ms')
-                
-            def update_latency():
-                last = Metric.select().where(
-                    (Metric.collector == self.name) & (Metric.metric_name == 'latency_ms')
-                ).order_by(Metric.timestamp.desc()).first()
-                if last:
-                    latency_label.text = f"{last.value:.1f} ms"
-            ui.timer(2.0, update_latency)
-        
-        # Latency History Chart
-        history_chart('RESPONSE TIME HISTORY (ms)', self.name, 'latency_ms')
-
-        # Explicitly render metrics and logs in a grid
-        with ui.grid(columns=1).classes('w-full gap-4'):
+        with layout.cell('chart'):
+            history_chart('RESPONSE TIME HISTORY (ms)', self.name, 'latency_ms')
+        with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
+
+        def update_latency():
+            last = Metric.select().where(
+                (Metric.collector == self.name) & (Metric.metric_name == 'latency_ms')
+            ).order_by(Metric.timestamp.desc()).first()
+            if last:
+                latency_label.text = f"{last.value:.1f} ms"
+
+        ui.timer(2.0, update_latency)

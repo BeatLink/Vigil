@@ -5,6 +5,30 @@ from vigil.core.common.time_utils import parse_duration, format_duration, format
 from vigil.core.ui.components import info_card
 
 
+_CONTINUOUS_LAYOUT = {
+    'grid_columns': 4,
+    'widgets': {
+        'host_card':    {'col_span': 1},
+        'service_card': {'col_span': 1},
+        'status_card':  {'col_span': 1},
+        'time_card':    {'col_span': 1},
+        'logs':         {'col_span': 4},
+    }
+}
+
+_ONESHOT_LAYOUT = {
+    'grid_columns': 4,
+    'widgets': {
+        'host_card':    {'col_span': 1},
+        'service_card': {'col_span': 1},
+        'maxage_card':  {'col_span': 1},
+        'state_card':   {'col_span': 1},
+        'history':      {'col_span': 4},
+        'logs':         {'col_span': 4},
+    }
+}
+
+
 class SystemdPlugin(BasePlugin):
     """
     Monitors systemd services over SSH.
@@ -162,42 +186,57 @@ class SystemdPlugin(BasePlugin):
     def _render_continuous_ui(self):
         from nicegui import ui
         from vigil.core.data.database import StatusHistory
+        from vigil.core.ui.layout import PluginLayout
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _CONTINUOUS_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
+        with layout.cell('service_card'):
             info_card('SERVICE', self.service_name)
+        with layout.cell('status_card'):
             self.internal_modules['ui']['status_card'](
                 metric_name='active',
                 title='SERVICE STATUS',
                 on_text='ACTIVE',
                 off_text='INACTIVE'
             )
+        with layout.cell('time_card'):
             time_label = info_card('LAST COLLECTION', '--:--:--')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table'](title='LOGS', limit=100, full_height=True)
 
-            def update_time():
-                last = StatusHistory.select().where(
-                    StatusHistory.collector_id == self.id
-                ).order_by(StatusHistory.timestamp.desc()).first()
-                if last:
-                    time_label.text = last.timestamp.strftime('%H:%M:%S')
-            ui.timer(2.0, update_time)
+        def update_time():
+            last = StatusHistory.select().where(
+                StatusHistory.collector_id == self.id
+            ).order_by(StatusHistory.timestamp.desc()).first()
+            if last:
+                time_label.text = last.timestamp.strftime('%H:%M:%S')
 
-        self.internal_modules['ui']['logs_table'](title='LOGS', limit=100, full_height=True)
+        ui.timer(2.0, update_time)
 
     def _render_oneshot_ui(self):
         from nicegui import ui
         from vigil.core.data.database import Metric
         from vigil.core.ui.theme import STATUS_COLORS
+        from vigil.core.ui.layout import PluginLayout
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _ONESHOT_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
+        with layout.cell('service_card'):
             info_card('SERVICE', self.service_name)
+        with layout.cell('maxage_card'):
             info_card('MAX AGE', format_duration(self.max_age))
+        with layout.cell('state_card'):
             state_label = info_card('CURRENT STATE', '--')
-
-            with ui.row().classes('gap-4') as history_row:
+        with layout.cell('history') as history_cell:
+            with ui.row().classes('gap-4'):
                 result_label = info_card('LAST RESULT', '--')
                 age_label = info_card('LAST RUN', '--')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table'](title='LOGS', limit=100, full_height=True)
 
         def latest(metric):
             m = Metric.select().where(
@@ -215,9 +254,9 @@ class SystemdPlugin(BasePlugin):
             if is_now_running:
                 state_label.text = 'RUNNING'
                 state_label.style(f"color: {STATUS_COLORS['warning']}")
-                history_row.set_visibility(False)
+                history_cell.set_visibility(False)
             else:
-                history_row.set_visibility(True)
+                history_cell.set_visibility(True)
 
                 if epoch_val is None:
                     state_label.text = 'UNKNOWN'
@@ -248,8 +287,6 @@ class SystemdPlugin(BasePlugin):
 
         update()
         ui.timer(5.0, update)
-
-        self.internal_modules['ui']['logs_table'](title='LOGS', limit=100, full_height=True)
 
     # -------------------------------------------------------------------------
     # Actions

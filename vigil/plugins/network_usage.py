@@ -42,6 +42,20 @@ def _format_rate(kbps: float) -> str:
     return f"{kbps:.1f} KB/s"
 
 
+_DEFAULT_LAYOUT = {
+    'grid_columns': 4,
+    'widgets': {
+        'host_card':  {'col_span': 1},
+        'iface_card': {'col_span': 1},
+        'rx_card':    {'col_span': 1},
+        'tx_card':    {'col_span': 1},
+        'rx_chart':   {'col_span': 4},
+        'tx_chart':   {'col_span': 4},
+        'logs':       {'col_span': 4},
+    }
+}
+
+
 class NetworkUsagePlugin(BasePlugin):
     """
     Monitors network interface throughput over SSH via /proc/net/dev.
@@ -114,29 +128,38 @@ class NetworkUsagePlugin(BasePlugin):
     def render_ui(self):
         from nicegui import ui
         from vigil.core.data.database import Metric
+        from vigil.core.ui.layout import PluginLayout
 
         def latest(metric_name):
             return Metric.select().where(
                 (Metric.collector == self.name) & (Metric.metric_name == metric_name)
             ).order_by(Metric.timestamp.desc()).first()
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
+        with layout.cell('iface_card'):
             iface_label = info_card('INTERFACE', self._active_interface or 'Detecting...')
+        with layout.cell('rx_card'):
             rx_label = info_card('DOWNLOAD', '-- KB/s')
+        with layout.cell('tx_card'):
             tx_label = info_card('UPLOAD', '-- KB/s')
+        with layout.cell('rx_chart'):
+            history_chart('DOWNLOAD HISTORY (KB/s)', self.name, 'rx_kbps')
+        with layout.cell('tx_chart'):
+            history_chart('UPLOAD HISTORY (KB/s)', self.name, 'tx_kbps')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table']()
 
-            def update_cards():
-                if self._active_interface:
-                    iface_label.text = self._active_interface
-                rx = latest('rx_kbps')
-                tx = latest('tx_kbps')
-                if rx:
-                    rx_label.text = _format_rate(rx.value)
-                if tx:
-                    tx_label.text = _format_rate(tx.value)
-            ui.timer(5.0, update_cards)
+        def update_cards():
+            if self._active_interface:
+                iface_label.text = self._active_interface
+            rx = latest('rx_kbps')
+            tx = latest('tx_kbps')
+            if rx:
+                rx_label.text = _format_rate(rx.value)
+            if tx:
+                tx_label.text = _format_rate(tx.value)
 
-        history_chart('DOWNLOAD HISTORY (KB/s)', self.name, 'rx_kbps')
-        history_chart('UPLOAD HISTORY (KB/s)', self.name, 'tx_kbps')
-        self.internal_modules['ui']['logs_table']()
+        ui.timer(5.0, update_cards)

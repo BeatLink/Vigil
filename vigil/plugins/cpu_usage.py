@@ -40,6 +40,17 @@ def _level_for(value: float, warning: float, failed: float) -> str:
     return 'online'
 
 
+_DEFAULT_LAYOUT = {
+    'grid_columns': 2,
+    'widgets': {
+        'host_card': {'col_span': 1},
+        'cpu_card':  {'col_span': 1},
+        'chart':     {'col_span': 2},
+        'logs':      {'col_span': 2},
+    }
+}
+
+
 class CpuUsagePlugin(BasePlugin):
     """
     Monitors CPU utilization over SSH.
@@ -98,23 +109,28 @@ class CpuUsagePlugin(BasePlugin):
     def render_ui(self):
         from nicegui import ui
         from vigil.core.data.database import Metric
+        from vigil.core.ui.layout import PluginLayout
 
         def latest(metric_name):
             return Metric.select().where(
                 (Metric.collector == self.name) & (Metric.metric_name == metric_name)
             ).order_by(Metric.timestamp.desc()).first()
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
+        with layout.cell('cpu_card'):
             cpu_label = info_card('CPU', '-- %')
+        with layout.cell('chart'):
+            history_chart('CPU USAGE (%)', self.name, 'cpu_pct')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table']()
 
-            def update_cards():
-                cpu = latest('cpu_pct')
-                if cpu:
-                    cpu_label.text = f'{cpu.value:.1f}%'
-                    cpu_label.style(f'color: {STATUS_COLORS[_level_for(cpu.value, self.cpu_warning, self.cpu_threshold)]}')
+        def update_cards():
+            cpu = latest('cpu_pct')
+            if cpu:
+                cpu_label.text = f'{cpu.value:.1f}%'
+                cpu_label.style(f'color: {STATUS_COLORS[_level_for(cpu.value, self.cpu_warning, self.cpu_threshold)]}')
 
-            ui.timer(5.0, update_cards)
-
-        history_chart('CPU USAGE (%)', self.name, 'cpu_pct')
-        self.internal_modules['ui']['logs_table']()
+        ui.timer(5.0, update_cards)

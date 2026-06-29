@@ -12,6 +12,21 @@ def _format_gb(gb: float) -> str:
     return f"{gb * 1024:.0f} MB"
 
 
+_DEFAULT_LAYOUT = {
+    'grid_columns': 3,
+    'widgets': {
+        'host_card':      {'col_span': 1},
+        'path_card':      {'col_span': 1},
+        'threshold_card': {'col_span': 1},
+        'usage_card':     {'col_span': 1},
+        'avail_card':     {'col_span': 1},
+        'total_card':     {'col_span': 1},
+        'chart':          {'col_span': 3},
+        'logs':           {'col_span': 3},
+    }
+}
+
+
 class DiskSpacePlugin(BasePlugin):
     """
     Monitors disk space usage for a path or mountpoint over SSH via `df`.
@@ -72,34 +87,43 @@ class DiskSpacePlugin(BasePlugin):
     def render_ui(self):
         from nicegui import ui
         from vigil.core.data.database import Metric
+        from vigil.core.ui.layout import PluginLayout
 
         def latest(metric_name):
             return Metric.select().where(
                 (Metric.collector == self.name) & (Metric.metric_name == metric_name)
             ).order_by(Metric.timestamp.desc()).first()
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
+        with layout.cell('path_card'):
             info_card('PATH', self.path)
+        with layout.cell('threshold_card'):
             info_card('THRESHOLD', f'{self.threshold}%')
-
+        with layout.cell('usage_card'):
             usage_label = info_card('USAGE', '-- %')
+        with layout.cell('avail_card'):
             avail_label = info_card('AVAILABLE', '--')
+        with layout.cell('total_card'):
             total_label = info_card('TOTAL SIZE', '--')
+        with layout.cell('chart'):
+            history_chart(f'USAGE HISTORY — {self.path} (%)', self.name, 'used_pct')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table']()
 
-            def update_cards():
-                pct  = latest('used_pct')
-                avail = latest('avail_gb')
-                total = latest('size_gb')
-                if pct:
-                    usage_label.text = f'{pct.value:.1f}%'
-                    color = STATUS_COLORS['failed'] if pct.value >= self.threshold else STATUS_COLORS['online']
-                    usage_label.style(f'color: {color}')
-                if avail:
-                    avail_label.text = _format_gb(avail.value)
-                if total:
-                    total_label.text = _format_gb(total.value)
-            ui.timer(5.0, update_cards)
+        def update_cards():
+            pct   = latest('used_pct')
+            avail = latest('avail_gb')
+            total = latest('size_gb')
+            if pct:
+                usage_label.text = f'{pct.value:.1f}%'
+                color = STATUS_COLORS['failed'] if pct.value >= self.threshold else STATUS_COLORS['online']
+                usage_label.style(f'color: {color}')
+            if avail:
+                avail_label.text = _format_gb(avail.value)
+            if total:
+                total_label.text = _format_gb(total.value)
 
-        history_chart(f'USAGE HISTORY — {self.path} (%)', self.name, 'used_pct')
-        self.internal_modules['ui']['logs_table']()
+        ui.timer(5.0, update_cards)

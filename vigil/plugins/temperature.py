@@ -17,6 +17,17 @@ def _level_for(value: float, warning: float, failed: float) -> str:
     return 'online'
 
 
+_DEFAULT_LAYOUT = {
+    'grid_columns': 2,
+    'widgets': {
+        'host_card': {'col_span': 1},
+        'temp_card': {'col_span': 1},
+        'chart':     {'col_span': 2},
+        'logs':      {'col_span': 2},
+    }
+}
+
+
 class TemperaturePlugin(BasePlugin):
     """
     Monitors CPU/system temperature over SSH via /sys/class/thermal/thermal_zone*/temp.
@@ -82,23 +93,28 @@ class TemperaturePlugin(BasePlugin):
     def render_ui(self):
         from nicegui import ui
         from vigil.core.data.database import Metric
+        from vigil.core.ui.layout import PluginLayout
 
         def latest(metric_name):
             return Metric.select().where(
                 (Metric.collector == self.name) & (Metric.metric_name == metric_name)
             ).order_by(Metric.timestamp.desc()).first()
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
+        with layout.cell('temp_card'):
             temp_label = info_card('TEMP', 'N/A')
+        with layout.cell('chart'):
+            history_chart('TEMPERATURE (°C)', self.name, 'temp_c')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table']()
 
-            def update_cards():
-                temp = latest('temp_c')
-                if temp:
-                    temp_label.text = f'{temp.value:.1f}°C'
-                    temp_label.style(f'color: {STATUS_COLORS[_level_for(temp.value, self.temp_warning, self.temp_threshold)]}')
+        def update_cards():
+            temp = latest('temp_c')
+            if temp:
+                temp_label.text = f'{temp.value:.1f}°C'
+                temp_label.style(f'color: {STATUS_COLORS[_level_for(temp.value, self.temp_warning, self.temp_threshold)]}')
 
-            ui.timer(5.0, update_cards)
-
-        history_chart('TEMPERATURE (°C)', self.name, 'temp_c')
-        self.internal_modules['ui']['logs_table']()
+        ui.timer(5.0, update_cards)

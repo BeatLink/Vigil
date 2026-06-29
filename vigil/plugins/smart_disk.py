@@ -21,6 +21,18 @@ _SMART_SCRIPT = (
 )
 
 
+_DEFAULT_LAYOUT = {
+    'grid_columns': 4,
+    'widgets': {
+        'host_card':   {'col_span': 1},
+        'total_card':  {'col_span': 1},
+        'ok_card':     {'col_span': 1},
+        'failed_card': {'col_span': 1},
+        'logs':        {'col_span': 4},
+    }
+}
+
+
 class SmartDiskPlugin(BasePlugin):
     """
     Monitors SMART health of all physical disks over SSH.
@@ -72,32 +84,37 @@ class SmartDiskPlugin(BasePlugin):
         from nicegui import ui
         from vigil.core.data.database import Metric
         from vigil.core.ui.theme import STATUS_COLORS
+        from vigil.core.ui.layout import PluginLayout
 
-        with ui.row().classes('w-full gap-4 mb-4'):
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+
+        with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
-
+        with layout.cell('total_card'):
             total_label = info_card('DISKS', '--')
+        with layout.cell('ok_card'):
             ok_label = info_card('HEALTHY', '--')
+        with layout.cell('failed_card'):
             failed_label = info_card('FAILED', '--')
+        with layout.cell('logs'):
+            self.internal_modules['ui']['logs_table']()
 
-            def update_cards():
-                def latest(metric):
-                    m = Metric.select().where(
-                        (Metric.collector == self.name) & (Metric.metric_name == metric)
-                    ).order_by(Metric.timestamp.desc()).first()
-                    return int(m.value) if m else None
+        def update_cards():
+            def latest(metric):
+                m = Metric.select().where(
+                    (Metric.collector == self.name) & (Metric.metric_name == metric)
+                ).order_by(Metric.timestamp.desc()).first()
+                return int(m.value) if m else None
 
-                total = latest('disks_total')
-                ok = latest('disks_ok')
-                failed = latest('disks_failed')
-                if total is not None:
-                    total_label.text = str(total)
-                    ok_label.text = str(ok)
-                    ok_label.style(f"color: {STATUS_COLORS['online']}")
-                    failed_label.text = str(failed)
-                    color = STATUS_COLORS['failed'] if failed else STATUS_COLORS['online']
-                    failed_label.style(f"color: {color}")
+            total = latest('disks_total')
+            ok = latest('disks_ok')
+            failed = latest('disks_failed')
+            if total is not None:
+                total_label.text = str(total)
+                ok_label.text = str(ok)
+                ok_label.style(f"color: {STATUS_COLORS['online']}")
+                failed_label.text = str(failed)
+                color = STATUS_COLORS['failed'] if failed else STATUS_COLORS['online']
+                failed_label.style(f"color: {color}")
 
-            ui.timer(5.0, update_cards)
-
-        self.internal_modules['ui']['logs_table']()
+        ui.timer(5.0, update_cards)

@@ -453,6 +453,81 @@ Groups can be nested to arbitrary depth. Inner groups inherit their own `grid_co
 
 ---
 
+### Plugin Layout
+
+Every leaf plugin supports a `layout:` key that controls how its widgets are arranged on the detail page. Without a `layout:` block the plugin uses its built-in default grid (defined in the plugin's `_DEFAULT_LAYOUT`).
+
+| `layout` option  | Description                                                                                          |
+|------------------|------------------------------------------------------------------------------------------------------|
+| `grid_columns`   | Number of equal-width columns in this plugin's detail grid. Defaults vary by plugin type.            |
+
+Each named widget within a plugin can be overridden:
+
+| Per-widget option | Description                                                                                         |
+|-------------------|-----------------------------------------------------------------------------------------------------|
+| `col`             | Start column (1-based). Omit to use CSS auto-placement.                                             |
+| `row`             | Start row (1-based). Omit to use CSS auto-placement.                                                |
+| `col_span`        | How many columns this widget occupies (default: `1`).                                               |
+| `row_span`        | How many rows this widget occupies (default: `1`).                                                  |
+| `height`          | Explicit CSS height for this cell, e.g. `"400px"`. Adds a scrollbar on overflow (default: auto).   |
+| `visible`         | `false` to hide the widget entirely (default: `true`).                                              |
+
+**Widget names by plugin type:**
+
+| Plugin             | Widget names                                                                 |
+|--------------------|------------------------------------------------------------------------------|
+| `uptime`           | `host_card`, `status_card`, `latency_card`, `chart`, `logs`                 |
+| `systemd_service`  | `host_card`, `service_card`, `status_card`, `time_card`, `logs` *(continuous)* / `host_card`, `service_card`, `maxage_card`, `state_card`, `history`, `logs` *(oneshot)* |
+| `cpu_usage`        | `host_card`, `cpu_card`, `chart`, `logs`                                    |
+| `memory_usage`     | `host_card`, `mem_pct_card`, `mem_used_card`, `chart`, `logs`               |
+| `temperature`      | `host_card`, `temp_card`, `chart`, `logs`                                   |
+| `load_average`     | `host_card`, `load_1m_card`, `load_5m_card`, `load_15m_card`, `chart`, `logs` |
+| `processes`        | `host_card`, `count_card`, `top_cpu_card`, `table`, `logs`                  |
+| `network_usage`    | `host_card`, `iface_card`, `rx_card`, `tx_card`, `rx_chart`, `tx_chart`, `logs` |
+| `smart_disk`       | `host_card`, `total_card`, `ok_card`, `failed_card`, `logs`                 |
+| `disk_space`       | `host_card`, `path_card`, `threshold_card`, `usage_card`, `avail_card`, `total_card`, `chart`, `logs` |
+| `zfs_health`       | `host_card`, `total_card`, `ok_card`, `degraded_card`, `logs`               |
+| `zfs_pool`         | `host_card`, `pool_card`, `usage_card`, `threshold_card`, `chart`, `logs`   |
+
+**Examples:**
+
+```yaml
+# Make the chart taller and hide the logs panel
+- name: "Ragnarok CPU"
+  type: "cpu_usage"
+  layout:
+    chart:
+      height: "500px"
+    logs:
+      visible: false
+
+# Custom 3-column grid: stat cards left, chart occupies right two columns
+- name: "Heimdall Memory"
+  type: "memory_usage"
+  layout:
+    grid_columns: 3
+    host_card:
+      col: 1
+      row: 1
+    mem_pct_card:
+      col: 1
+      row: 2
+    mem_used_card:
+      col: 1
+      row: 3
+    chart:
+      col: 2
+      row: 1
+      col_span: 2
+      row_span: 3
+    logs:
+      col: 1
+      row: 4
+      col_span: 3
+```
+
+---
+
 ### SSH Config
 
 All SSH-based plugins (`systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`) accept an `ssh_config` block:
