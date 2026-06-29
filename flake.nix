@@ -15,7 +15,9 @@
         flake-utils.lib.eachDefaultSystem (
             system:
             let
-                pkgs = import nixpkgs { inherit system; };
+                pkgs = import nixpkgs {
+                    inherit system;
+                };
                 pyproject = builtins.fromTOML (builtins.readFile ./pyproject.toml);
 
                 pythonDeps = with pkgs.python312Packages; [
@@ -95,5 +97,8 @@
                     '';
                 };
             }
-        );
+        ) // {
+            nixosModules.vigil = import ./nix/module.nix self;
+            nixosModules.default = import ./nix/module.nix self;
+        };
 }
