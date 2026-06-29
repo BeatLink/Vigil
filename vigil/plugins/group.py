@@ -1,9 +1,10 @@
+import json
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.data.database import StatusHistory
-from vigil.core.ui.theme import STATUS_COLORS
-from vigil.core.ui.components import info_card
+from vigil.core.data.database import StatusHistory, Setting
+from vigil.core.ui.theme import STATUS_COLORS, TEXT, TEXT_MUTED
+from vigil.core.ui.components import card
 
 SEVERITY_ORDER = {
     'online': 0,
@@ -20,8 +21,34 @@ class GroupPlugin(BasePlugin):
     """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
-        self._expanded: Dict[str, bool] = {}
+        self._expanded: Dict[str, bool] = self._load_expanded()
         self.grid_columns: int = int(config.get('grid_columns', 1))
+
+    # -------------------------------------------------------------------------
+    # Persistence
+    # -------------------------------------------------------------------------
+
+    def _setting_key(self) -> str:
+        return f'group_expanded_{self.id}'
+
+    def _load_expanded(self) -> Dict[str, bool]:
+        try:
+            with Setting._meta.database.connection_context():
+                row = Setting.get(Setting.key == self._setting_key())
+                return json.loads(row.value)
+        except Setting.DoesNotExist:
+            return {}
+
+    def _save_expanded(self):
+        with Setting._meta.database.connection_context():
+            Setting.insert(
+                key=self._setting_key(),
+                value=json.dumps(self._expanded)
+            ).on_conflict_replace().execute()
+
+    # -------------------------------------------------------------------------
+    # Collection
+    # -------------------------------------------------------------------------
 
     async def on_collect(self):
         aggregated_status = self._get_aggregated_status()
@@ -51,18 +78,17 @@ class GroupPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
-    def render_ui(self, context: str = 'page'):
-        """Render children as collapsible sections in a configurable grid layout."""
-        from nicegui import ui
+    # -------------------------------------------------------------------------
+    # UI
+    # -------------------------------------------------------------------------
 
-        aggregated_status = self._get_aggregated_status()
-        status_lbl = info_card('AGGREGATED STATUS', aggregated_status.upper(), card_classes='w-full mb-6')
-        status_lbl.style(f'color: {STATUS_COLORS.get(aggregated_status, STATUS_COLORS["offline"])}')
+    def render_ui(self, context: str = 'page'):
+        from nicegui import ui
 
         grid_style = (
             f'display: grid; '
             f'grid-template-columns: repeat({self.grid_columns}, 1fr); '
-            f'gap: 1rem; width: 100%;'
+            f'gap: 0.75rem; width: 100%;'
         )
         with ui.element('div').style(grid_style):
             for child in self.children:
@@ -73,7 +99,6 @@ class GroupPlugin(BasePlugin):
                     child_status = latest.state if latest else 'offline'
 
                 child_color = STATUS_COLORS.get(child_status, STATUS_COLORS['offline'])
-
                 col_span = int(child.config.get('grid_col_span', 1))
                 child_height = child.config.get('grid_height', None)
 
@@ -81,21 +106,34 @@ class GroupPlugin(BasePlugin):
                 if child_height:
                     cell_style += f' height: {child_height}; overflow-y: auto;'
 
+                is_open = self._expanded.get(child.id, False)
+
                 with ui.element('div').style(cell_style):
-                    with ui.expansion(
-                        value=self._expanded.get(child.id, False)
-                    ).classes('w-full mb-3 rounded-lg shadow-sm overflow-hidden') as exp:
-                        exp.add_slot('header', f'''
-                            <div class="flex items-center w-full gap-3 px-1 py-1">
-                                <q-icon name="circle" style="color: {child_color}" size="10px" class="flex-shrink-0" />
-                                <span class="font-semibold flex-1">{child.name}</span>
-                                <span class="text-xs font-medium mr-2" style="color: {child_color}">{child_status.upper()}</span>
-                            </div>
-                        ''')
-                        with ui.column().classes('w-full p-4'):
+                    with card('w-full overflow-hidden', padding=False):
+                        with ui.row().classes(
+                            'w-full items-center gap-3 px-4 py-3 cursor-pointer select-none'
+                        ) as header_row:
+                            ui.element('div').style(
+                                f'width: 8px; height: 8px; border-radius: 50%; '
+                                f'background: {child_color}; flex-shrink: 0'
+                            )
+                            ui.label(child.name).classes('font-semibold text-sm flex-1').style(f'color: {TEXT}')
+                            chevron = ui.icon('expand_more', size='sm').style(
+                                f'color: {TEXT_MUTED}; transition: transform 0.2s; '
+                                + ('transform: rotate(180deg)' if is_open else 'transform: rotate(0deg)')
+                            )
+
+                        body = ui.column().classes('w-full p-4 border-t border-gray-100')
+                        body.set_visibility(is_open)
+                        with body:
                             child.render_ui(context='inline')
 
-                    def _track(e, cid=child.id):
-                        self._expanded[cid] = bool(e.args)
+                    def _toggle(e=None, cid=child.id, _body=body, _chev=chevron):
+                        self._expanded[cid] = not self._expanded.get(cid, False)
+                        open_now = self._expanded[cid]
+                        _body.set_visibility(open_now)
+                        angle = '180deg' if open_now else '0deg'
+                        _chev.style(f'color: {TEXT_MUTED}; transition: transform 0.2s; transform: rotate({angle})')
+                        self._save_expanded()
 
-                    exp.on('update:modelValue', _track)
+                    header_row.on('click', _toggle)
