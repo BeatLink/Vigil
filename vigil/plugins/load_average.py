@@ -7,12 +7,7 @@ from vigil.core.ui.theme import STATUS_COLORS
 _COLLECT_CMD = 'echo "LOAD:$(cat /proc/loadavg)"; echo "CPUS:$(nproc)"'
 
 
-def _level_for(value: float, warning: float, failed: float) -> str:
-    if value >= failed:
-        return 'failed'
-    if value >= warning:
-        return 'warning'
-    return 'online'
+from vigil.core.common.plugin_utils import level_for as _level_for
 
 
 _DEFAULT_LAYOUT = [
@@ -42,9 +37,6 @@ class LoadAveragePlugin(BasePlugin):
         super().__init__(name, config, db)
         self.load_warning   = float(config['load_warning'])   if 'load_warning'   in config else None
         self.load_threshold = float(config['load_threshold'])  if 'load_threshold'  in config else None
-        self.ssh_collector = self.internal_modules['collectors']['ssh']
-        self.db_logger     = self.internal_modules['loggers']['db_logs']
-        self.db_metrics    = self.internal_modules['loggers']['db_metrics']
 
     async def on_collect(self):
         ret, stdout, stderr = await self.ssh_collector.fetch_output(_COLLECT_CMD)
@@ -95,13 +87,8 @@ class LoadAveragePlugin(BasePlugin):
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.data.database import Metric
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
-        def latest(metric_name):
-            return Metric.select().where(
-                (Metric.collector == self.name) & (Metric.metric_name == metric_name)
-            ).order_by(Metric.timestamp.desc()).first()
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -119,9 +106,9 @@ class LoadAveragePlugin(BasePlugin):
             self.internal_modules['ui']['logs_table']()
 
         def update_cards():
-            load_1m  = latest('load_pct_1m')
-            load_5m  = latest('load_pct_5m')
-            load_15m = latest('load_pct_15m')
+            load_1m  = self.latest_metric('load_pct_1m')
+            load_5m  = self.latest_metric('load_pct_5m')
+            load_15m = self.latest_metric('load_pct_15m')
             if load_1m:
                 load_1m_label.text = f'{load_1m.value:.0f}%'
                 if self.load_warning is not None and self.load_threshold is not None:

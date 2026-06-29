@@ -20,9 +20,6 @@ class ZFSPoolPlugin(BasePlugin):
         super().__init__(name, config, db)
         self.pool = config.get('pool')
         self.threshold = int(config.get('threshold', 90))
-        self.ssh_collector = self.internal_modules['collectors'].get('ssh')
-        self.db_logger = self.internal_modules['loggers'].get('db_logs')
-        self.db_metrics = self.internal_modules['loggers'].get('db_metrics')
 
     async def on_collect(self):
         ret, stdout, stderr = await self.ssh_collector.fetch_output(

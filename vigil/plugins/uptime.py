@@ -21,9 +21,6 @@ class UptimePlugin(BasePlugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         
-        # Access internal database loggers initialized by BasePlugin
-        self.db_logger = self.internal_modules['loggers'].get('db_logs')
-        self.db_metrics = self.internal_modules['loggers'].get('db_metrics')
 
     async def on_collect(self):
         """Executes a ping command and records the result."""

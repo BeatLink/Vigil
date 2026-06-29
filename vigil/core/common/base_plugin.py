@@ -41,6 +41,12 @@ class BasePlugin(ABC):
             }
         }
 
+        # Convenience aliases — available in every plugin without repetitive __init__ boilerplate
+        self.ssh_collector  = self.internal_modules['collectors'].get('ssh')
+        self.ssh_controller = self.internal_modules['controllers'].get('ssh')
+        self.db_logger      = self.internal_modules['loggers'].get('db_logs')
+        self.db_metrics     = self.internal_modules['loggers'].get('db_metrics')
+
     def set_status(self, state: str):
         """Sets the current state of the plugin (online, warning, failed, offline)."""
         self.db.insert_status(self.id, state)
@@ -70,6 +76,16 @@ class BasePlugin(ABC):
     async def run_cycle(self):
         """Main execution entry point for the plugin's polling interval."""
         await self.on_collect()
+
+    def latest_metric(self, metric_name: str):
+        """Return the most recent Metric row for this plugin, or None."""
+        from vigil.core.data.database import Metric
+        return (
+            Metric.select()
+            .where((Metric.collector == self.name) & (Metric.metric_name == metric_name))
+            .order_by(Metric.timestamp.desc())
+            .first()
+        )
 
     @abstractmethod
     def render_ui(self, context: str = 'page'):

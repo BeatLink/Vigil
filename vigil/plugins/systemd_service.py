@@ -37,10 +37,6 @@ class SystemdPlugin(BasePlugin):
         self.lines = config.get('lines', 10)
         self.max_age = parse_duration(config['max_age']) if 'max_age' in config else None
 
-        self.ssh_collector = self.internal_modules['collectors'].get('ssh')
-        self.ssh_controller = self.internal_modules['controllers'].get('ssh')
-        self.db_logger = self.internal_modules['loggers'].get('db_logs')
-        self.db_metrics = self.internal_modules['loggers'].get('db_metrics')
 
     # -------------------------------------------------------------------------
     # Collection
@@ -226,16 +222,14 @@ class SystemdPlugin(BasePlugin):
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table'](title='LOGS', limit=100, full_height=True)
 
-        def latest(metric):
-            m = Metric.select().where(
-                (Metric.collector == self.name) & (Metric.metric_name == metric)
-            ).order_by(Metric.timestamp.desc()).first()
-            return m.value if m else None
-
         def update():
-            run_val     = latest('is_running')
-            epoch_val   = latest('last_run_epoch')
-            success_val = latest('last_run_success')
+            def _val(name):
+                m = self.latest_metric(name)
+                return m.value if m else None
+
+            run_val     = _val('is_running')
+            epoch_val   = _val('last_run_epoch')
+            success_val = _val('last_run_success')
 
             is_now_running = run_val is not None and run_val > 0.5
 

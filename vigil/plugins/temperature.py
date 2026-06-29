@@ -18,12 +18,7 @@ def _sanitize(name: str) -> str:
     return ''.join(c if c.isalnum() or c == '_' else '_' for c in name.lower())
 
 
-def _level_for(value: float, warning: float, failed: float) -> str:
-    if value >= failed:
-        return 'failed'
-    if value >= warning:
-        return 'warning'
-    return 'online'
+from vigil.core.common.plugin_utils import level_for as _level_for
 
 
 _DEFAULT_LAYOUT = [
@@ -51,9 +46,6 @@ class TemperaturePlugin(BasePlugin):
         super().__init__(name, config, db)
         self.temp_warning   = int(config.get('temp_warning',   70))
         self.temp_threshold = int(config.get('temp_threshold', 80))
-        self.ssh_collector = self.internal_modules['collectors']['ssh']
-        self.db_logger     = self.internal_modules['loggers']['db_logs']
-        self.db_metrics    = self.internal_modules['loggers']['db_metrics']
 
     async def on_collect(self):
         ret, stdout, stderr = await self.ssh_collector.fetch_output(_COLLECT_CMD)

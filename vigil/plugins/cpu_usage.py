@@ -32,12 +32,7 @@ def _cpu_pct(line1: str, line2: str) -> float:
     return max(0.0, min(100.0, 100.0 * (1.0 - delta_idle / delta_total)))
 
 
-def _level_for(value: float, warning: float, failed: float) -> str:
-    if value >= failed:
-        return 'failed'
-    if value >= warning:
-        return 'warning'
-    return 'online'
+from vigil.core.common.plugin_utils import level_for as _level_for
 
 
 _DEFAULT_LAYOUT = [
@@ -63,9 +58,6 @@ class CpuUsagePlugin(BasePlugin):
         super().__init__(name, config, db)
         self.cpu_warning   = int(config.get('cpu_warning',   70))
         self.cpu_threshold = int(config.get('cpu_threshold', 85))
-        self.ssh_collector = self.internal_modules['collectors']['ssh']
-        self.db_logger     = self.internal_modules['loggers']['db_logs']
-        self.db_metrics    = self.internal_modules['loggers']['db_metrics']
 
     async def on_collect(self):
         ret, stdout, stderr = await self.ssh_collector.fetch_output(_COLLECT_CMD)
@@ -104,13 +96,8 @@ class CpuUsagePlugin(BasePlugin):
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.data.database import Metric
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
-        def latest(metric_name):
-            return Metric.select().where(
-                (Metric.collector == self.name) & (Metric.metric_name == metric_name)
-            ).order_by(Metric.timestamp.desc()).first()
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -124,7 +111,7 @@ class CpuUsagePlugin(BasePlugin):
             self.internal_modules['ui']['logs_table']()
 
         def update_cards():
-            cpu = latest('cpu_pct')
+            cpu = self.latest_metric('cpu_pct')
             if cpu:
                 cpu_label.text = f'{cpu.value:.1f}%'
                 cpu_label.style(f'color: {STATUS_COLORS[_level_for(cpu.value, self.cpu_warning, self.cpu_threshold)]}')

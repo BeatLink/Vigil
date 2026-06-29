@@ -29,12 +29,7 @@ def _parse_ps_output(stdout: str) -> List[Dict]:
     return processes
 
 
-def _level_for(value: float, warning: float, failed: float) -> str:
-    if value >= failed:
-        return 'failed'
-    if value >= warning:
-        return 'warning'
-    return 'online'
+from vigil.core.common.plugin_utils import level_for as _level_for
 
 
 _DEFAULT_LAYOUT = [
@@ -70,10 +65,6 @@ class ProcessesPlugin(BasePlugin):
         self.cpu_warning   = float(config['cpu_warning'])   if 'cpu_warning'   in config else None
         self.cpu_threshold = float(config['cpu_threshold'])  if 'cpu_threshold'  in config else None
         self._processes: List[Dict] = []
-        self.ssh_collector  = self.internal_modules['collectors']['ssh']
-        self.ssh_controller = self.internal_modules['controllers'].get('ssh')
-        self.db_logger      = self.internal_modules['loggers']['db_logs']
-        self.db_metrics     = self.internal_modules['loggers']['db_metrics']
 
     async def on_collect(self):
         # +1 so head includes the header line plus max_processes data rows

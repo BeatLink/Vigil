@@ -4,12 +4,7 @@ from vigil.core.ui.components import info_card, history_chart
 from vigil.core.ui.theme import STATUS_COLORS
 
 
-def _format_gb(gb: float) -> str:
-    if gb >= 1024:
-        return f"{gb / 1024:.1f} TB"
-    if gb >= 1:
-        return f"{gb:.1f} GB"
-    return f"{gb * 1024:.0f} MB"
+from vigil.core.common.plugin_utils import format_bytes as _format_gb
 
 
 _DEFAULT_LAYOUT = [
@@ -31,9 +26,6 @@ class DiskSpacePlugin(BasePlugin):
         super().__init__(name, config, db)
         self.path = config.get('path', '/')
         self.threshold = int(config.get('threshold', 90))
-        self.ssh_collector = self.internal_modules['collectors']['ssh']
-        self.db_logger = self.internal_modules['loggers']['db_logs']
-        self.db_metrics = self.internal_modules['loggers']['db_metrics']
 
     async def on_collect(self):
         # Single-quoted path prevents shell expansion; --output avoids line-wrap issues
@@ -79,13 +71,8 @@ class DiskSpacePlugin(BasePlugin):
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.data.database import Metric
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
-        def latest(metric_name):
-            return Metric.select().where(
-                (Metric.collector == self.name) & (Metric.metric_name == metric_name)
-            ).order_by(Metric.timestamp.desc()).first()
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -107,9 +94,9 @@ class DiskSpacePlugin(BasePlugin):
             self.internal_modules['ui']['logs_table']()
 
         def update_cards():
-            pct   = latest('used_pct')
-            avail = latest('avail_gb')
-            total = latest('size_gb')
+            pct   = self.latest_metric('used_pct')
+            avail = self.latest_metric('avail_gb')
+            total = self.latest_metric('size_gb')
             if pct:
                 usage_label.text = f'{pct.value:.1f}%'
                 color = STATUS_COLORS['failed'] if pct.value >= self.threshold else STATUS_COLORS['online']

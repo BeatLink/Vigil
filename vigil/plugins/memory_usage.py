@@ -6,18 +6,7 @@ from vigil.core.ui.theme import STATUS_COLORS
 _COLLECT_CMD = "grep -E 'MemTotal:|MemAvailable:' /proc/meminfo"
 
 
-def _level_for(value: float, warning: float, failed: float) -> str:
-    if value >= failed:
-        return 'failed'
-    if value >= warning:
-        return 'warning'
-    return 'online'
-
-
-def _fmt_gb(gb: float) -> str:
-    if gb >= 1024:
-        return f"{gb / 1024:.1f} TB"
-    return f"{gb:.1f} GB"
+from vigil.core.common.plugin_utils import level_for as _level_for, format_bytes as _fmt_gb
 
 
 _DEFAULT_LAYOUT = [
@@ -43,9 +32,6 @@ class MemoryUsagePlugin(BasePlugin):
         super().__init__(name, config, db)
         self.memory_warning   = int(config.get('memory_warning',   75))
         self.memory_threshold = int(config.get('memory_threshold', 90))
-        self.ssh_collector = self.internal_modules['collectors']['ssh']
-        self.db_logger     = self.internal_modules['loggers']['db_logs']
-        self.db_metrics    = self.internal_modules['loggers']['db_metrics']
 
     async def on_collect(self):
         ret, stdout, stderr = await self.ssh_collector.fetch_output(_COLLECT_CMD)
@@ -93,13 +79,8 @@ class MemoryUsagePlugin(BasePlugin):
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.data.database import Metric
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
-        def latest(metric_name):
-            return Metric.select().where(
-                (Metric.collector == self.name) & (Metric.metric_name == metric_name)
-            ).order_by(Metric.timestamp.desc()).first()
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -115,9 +96,9 @@ class MemoryUsagePlugin(BasePlugin):
             self.internal_modules['ui']['logs_table']()
 
         def update_cards():
-            mem_pct   = latest('memory_pct')
-            mem_used  = latest('memory_used_gb')
-            mem_total = latest('memory_total_gb')
+            mem_pct   = self.latest_metric('memory_pct')
+            mem_used  = self.latest_metric('memory_used_gb')
+            mem_total = self.latest_metric('memory_total_gb')
             if mem_pct:
                 mem_pct_label.text = f'{mem_pct.value:.1f}%'
                 mem_pct_label.style(f'color: {STATUS_COLORS[_level_for(mem_pct.value, self.memory_warning, self.memory_threshold)]}')

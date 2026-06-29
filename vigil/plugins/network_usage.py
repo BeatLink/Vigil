@@ -66,9 +66,6 @@ class NetworkUsagePlugin(BasePlugin):
         super().__init__(name, config, db)
         self.interface: Optional[str] = config.get('interface')
         self._active_interface: Optional[str] = self.interface
-        self.ssh_collector = self.internal_modules['collectors']['ssh']
-        self.db_logger = self.internal_modules['loggers']['db_logs']
-        self.db_metrics = self.internal_modules['loggers']['db_metrics']
 
     async def on_collect(self):
         ret, stdout, stderr = await self.ssh_collector.fetch_output(
@@ -121,13 +118,8 @@ class NetworkUsagePlugin(BasePlugin):
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.data.database import Metric
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
-        def latest(metric_name):
-            return Metric.select().where(
-                (Metric.collector == self.name) & (Metric.metric_name == metric_name)
-            ).order_by(Metric.timestamp.desc()).first()
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -149,8 +141,8 @@ class NetworkUsagePlugin(BasePlugin):
         def update_cards():
             if self._active_interface:
                 iface_label.text = self._active_interface
-            rx = latest('rx_kbps')
-            tx = latest('tx_kbps')
+            rx = self.latest_metric('rx_kbps')
+            tx = self.latest_metric('tx_kbps')
             if rx:
                 rx_label.text = _format_rate(rx.value)
             if tx:

@@ -35,9 +35,6 @@ class SmartDiskPlugin(BasePlugin):
     """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
-        self.ssh_collector = self.internal_modules['collectors'].get('ssh')
-        self.db_logger = self.internal_modules['loggers'].get('db_logs')
-        self.db_metrics = self.internal_modules['loggers'].get('db_metrics')
 
     async def on_collect(self):
         ret, stdout, stderr = await self.ssh_collector.fetch_output(_SMART_SCRIPT)
@@ -76,7 +73,7 @@ class SmartDiskPlugin(BasePlugin):
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.data.database import Metric
+
         from vigil.core.ui.theme import STATUS_COLORS
         from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
@@ -94,15 +91,13 @@ class SmartDiskPlugin(BasePlugin):
             self.internal_modules['ui']['logs_table']()
 
         def update_cards():
-            def latest(metric):
-                m = Metric.select().where(
-                    (Metric.collector == self.name) & (Metric.metric_name == metric)
-                ).order_by(Metric.timestamp.desc()).first()
+            def _ival(name):
+                m = self.latest_metric(name)
                 return int(m.value) if m else None
 
-            total = latest('disks_total')
-            ok = latest('disks_ok')
-            failed = latest('disks_failed')
+            total = _ival('disks_total')
+            ok = _ival('disks_ok')
+            failed = _ival('disks_failed')
             if total is not None:
                 total_label.text = str(total)
                 ok_label.text = str(ok)
