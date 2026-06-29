@@ -5,16 +5,10 @@ from vigil.core.ui.components import info_card
 # Pool health states that indicate a problem
 _UNHEALTHY = {'DEGRADED', 'FAULTED', 'OFFLINE', 'UNAVAIL', 'REMOVED'}
 
-_DEFAULT_LAYOUT = {
-    'grid_columns': 4,
-    'widgets': {
-        'host_card':     {'col_span': 1},
-        'total_card':    {'col_span': 1},
-        'ok_card':       {'col_span': 1},
-        'degraded_card': {'col_span': 1},
-        'logs':          {'col_span': 4},
-    }
-}
+_DEFAULT_LAYOUT = [
+    ['host_card', 'total_card', 'ok_card', 'degraded_card'],
+    ['logs'],
+]
 
 
 class ZFSHealthPlugin(BasePlugin):

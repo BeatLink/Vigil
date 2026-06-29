@@ -1,117 +1,140 @@
 from contextlib import contextmanager
-from typing import Dict, Any, Tuple
+from typing import Any, Dict, List, Tuple, Union
 
 
 def make_inline_layout(
-    default_layout: dict,
+    default_layout: list,
     hidden: Tuple[str, ...] = ('host_card', 'logs'),
-) -> dict:
+) -> list:
     """Return a copy of *default_layout* with *hidden* widgets set to visible=False.
 
     Used to produce the compact variant rendered inside group expansion panels,
     where the host header and log table are redundant context.
     """
-    widgets = {
-        name: ({**defn, 'visible': False} if name in hidden else {**defn})
-        for name, defn in default_layout.get('widgets', {}).items()
-    }
-    return {**default_layout, 'widgets': widgets}
+    result = []
+    for row in default_layout:
+        new_row = []
+        for item in row:
+            if isinstance(item, str):
+                name, base = item, {}
+            else:
+                name = item['widget']
+                base = {k: v for k, v in item.items() if k != 'widget'}
+            if name in hidden:
+                new_row.append({'widget': name, **base, 'visible': False})
+            else:
+                new_row.append(item)
+        result.append(new_row)
+    return result
 
 
 class PluginLayout:
     """
-    CSS grid layout manager for plugin UIs.
+    Flex-row layout manager for plugin UIs.
 
-    Each plugin defines a ``_DEFAULT_LAYOUT`` with ``grid_columns`` and a
-    ``widgets`` dict that maps widget names to their default placement::
+    Each plugin defines a ``_DEFAULT_LAYOUT`` as a list of rows. Each row is a
+    list of widget names. Widgets in the same row are placed side by side with
+    equal width; a widget alone in a row fills the full width::
 
-        _DEFAULT_LAYOUT = {
-            'grid_columns': 2,
-            'widgets': {
-                'host_card': {'col_span': 1},
-                'value_card': {'col_span': 1},
-                'chart':     {'col_span': 2},
-                'logs':      {'col_span': 2},
-            }
-        }
+        _DEFAULT_LAYOUT = [
+            ['host_card', 'cpu_card'],  # two stat cards side by side
+            ['chart'],                  # full width
+            ['logs'],                   # full width
+        ]
 
-    Users can override any of these from ``config.yaml`` under a ``layout:``
-    key on the plugin entry::
+    Users can override from ``config.yaml`` under a ``layout:`` key in two ways:
 
+    Full row-structure override (replaces defaults entirely):
         layout:
-          grid_columns: 3
-          chart:
-            col_span: 3
-            row_span: 2
-            height: "400px"
+          - [host_card, cpu_card, chart]
+          - [logs]
+
+    Per-widget property overrides (keeps default row structure, tweaks specific widgets):
+        layout:
           logs:
             visible: false
+          chart:
+            height: "400px"
+            flex: 2
 
     Per-widget options:
-      col        Start column (1-based). Omit to use CSS auto-placement.
-      row        Start row    (1-based). Omit to use CSS auto-placement.
-      col_span   How many columns this widget occupies (default: 1).
-      row_span   How many rows   this widget occupies (default: 1).
-      height     Explicit CSS height string, e.g. ``"400px"`` (default: auto).
-      visible    Whether to render this widget (default: true). When false the
-                 cell is created with ``display: none`` so reactive timers that
-                 reference it still function safely.
+      flex     Relative width within the row (CSS flex value, default: 1).
+      height   Explicit CSS height string, e.g. ``"400px"`` (default: auto).
+      visible  Whether to show this widget (default: true). When false the
+               cell is hidden so reactive timers referencing it remain safe.
     """
 
-    def __init__(self, plugin_config: dict, default_layout: dict) -> None:
+    def __init__(self, plugin_config: dict, default_layout: list) -> None:
         from nicegui import ui
 
         user = plugin_config.get('layout', {})
 
-        self.grid_columns: int = int(
-            user.get('grid_columns') or
-            default_layout.get('grid_columns', 1)
+        if isinstance(user, list):
+            raw_rows = user
+            widget_overrides: Dict[str, dict] = {}
+        else:
+            raw_rows = default_layout
+            widget_overrides = user
+
+        self._widget_row_div: Dict[str, Any] = {}
+        self._widget_cfg: Dict[str, dict] = {}
+
+        outer = ui.element('div').style(
+            'display: flex; flex-direction: column; gap: 1rem; width: 100%'
         )
 
-        defaults: Dict[str, dict] = default_layout.get('widgets', {})
-        self._widgets: Dict[str, dict] = {
-            name: {**defn, **(user.get(name) or {})}
-            for name, defn in defaults.items()
-        }
-        for name, defn in user.items():
-            if name not in self._widgets and name != 'grid_columns':
-                self._widgets[name] = defn
+        for row in raw_rows:
+            items: List[Tuple[str, dict]] = []
+            for item in row:
+                if isinstance(item, str):
+                    name, base_cfg = item, {}
+                else:
+                    name = item['widget']
+                    base_cfg = {k: v for k, v in item.items() if k != 'widget'}
+                override = widget_overrides.get(name, {})
+                cfg = {
+                    'flex':    int(base_cfg.get('flex',    override.get('flex',    1))),
+                    'visible': bool(base_cfg.get('visible', override.get('visible', True))),
+                    'height':  base_cfg.get('height') or override.get('height'),
+                }
+                self._widget_cfg[name] = cfg
+                items.append((name, cfg))
 
-        self._container = ui.element('div').style(
-            f'display: grid; '
-            f'grid-template-columns: repeat({self.grid_columns}, 1fr); '
-            f'gap: 1rem; width: 100%;'
-        )
+            all_hidden = all(not cfg['visible'] for _, cfg in items)
+            row_style = (
+                'display: none'
+                if all_hidden else
+                'display: flex; gap: 1rem; width: 100%; align-items: stretch'
+            )
+            with outer:
+                row_div = ui.element('div').style(row_style)
+            for name, _ in items:
+                self._widget_row_div[name] = row_div
 
     @contextmanager
     def cell(self, widget_name: str):
-        """Context manager that places its contents in a named grid cell."""
+        """Context manager that places its contents in the named widget's row slot."""
         from nicegui import ui
 
-        cfg = self._widgets.get(widget_name, {})
+        cfg     = self._widget_cfg.get(widget_name, {})
+        flex    = int(cfg.get('flex', 1))
+        visible = bool(cfg.get('visible', True))
+        height  = cfg.get('height')
 
-        col      = cfg.get('col')
-        row      = cfg.get('row')
-        col_span = int(cfg.get('col_span', 1))
-        row_span = int(cfg.get('row_span', 1))
-        height   = cfg.get('height')
-        visible  = cfg.get('visible', True)
-
-        parts: list[str] = []
-        if col is not None:
-            parts.append(f'grid-column: {col} / span {col_span}')
-        else:
-            parts.append(f'grid-column: span {col_span}')
-        if row is not None:
-            parts.append(f'grid-row: {row} / span {row_span}')
-        else:
-            parts.append(f'grid-row: span {row_span}')
+        parts = [f'flex: {flex}; min-width: 0']
         if height:
             parts.append(f'height: {height}; overflow-y: auto')
         if not visible:
             parts.append('display: none')
 
-        with self._container:
+        row_div = self._widget_row_div.get(widget_name)
+        if row_div is None:
+            # Widget not in layout — still create the element so timers stay safe
+            parent = ui.element('div').style('display: none')
+        else:
+            parent = row_div
+
+        with parent:
             div = ui.element('div').style('; '.join(parts))
         with div:
             yield div

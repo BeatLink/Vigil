@@ -21,16 +21,10 @@ _SMART_SCRIPT = (
 )
 
 
-_DEFAULT_LAYOUT = {
-    'grid_columns': 4,
-    'widgets': {
-        'host_card':   {'col_span': 1},
-        'total_card':  {'col_span': 1},
-        'ok_card':     {'col_span': 1},
-        'failed_card': {'col_span': 1},
-        'logs':        {'col_span': 4},
-    }
-}
+_DEFAULT_LAYOUT = [
+    ['host_card', 'total_card', 'ok_card', 'failed_card'],
+    ['logs'],
+]
 
 
 class SmartDiskPlugin(BasePlugin):

@@ -17,15 +17,11 @@ def _level_for(value: float, warning: float, failed: float) -> str:
     return 'online'
 
 
-_DEFAULT_LAYOUT = {
-    'grid_columns': 2,
-    'widgets': {
-        'host_card': {'col_span': 1},
-        'temp_card': {'col_span': 1},
-        'chart':     {'col_span': 2},
-        'logs':      {'col_span': 2},
-    }
-}
+_DEFAULT_LAYOUT = [
+    ['host_card', 'temp_card'],
+    ['chart'],
+    ['logs'],
+]
 
 
 class TemperaturePlugin(BasePlugin):

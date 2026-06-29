@@ -5,28 +5,16 @@ from vigil.core.common.time_utils import parse_duration, format_duration, format
 from vigil.core.ui.components import info_card
 
 
-_CONTINUOUS_LAYOUT = {
-    'grid_columns': 4,
-    'widgets': {
-        'host_card':    {'col_span': 1},
-        'service_card': {'col_span': 1},
-        'status_card':  {'col_span': 1},
-        'time_card':    {'col_span': 1},
-        'logs':         {'col_span': 4},
-    }
-}
+_CONTINUOUS_LAYOUT = [
+    ['host_card', 'service_card', 'status_card', 'time_card'],
+    ['logs'],
+]
 
-_ONESHOT_LAYOUT = {
-    'grid_columns': 4,
-    'widgets': {
-        'host_card':    {'col_span': 1},
-        'service_card': {'col_span': 1},
-        'maxage_card':  {'col_span': 1},
-        'state_card':   {'col_span': 1},
-        'history':      {'col_span': 4},
-        'logs':         {'col_span': 4},
-    }
-}
+_ONESHOT_LAYOUT = [
+    ['host_card', 'service_card', 'maxage_card', 'state_card'],
+    ['history'],
+    ['logs'],
+]
 
 
 class SystemdPlugin(BasePlugin):

@@ -12,19 +12,12 @@ def _format_gb(gb: float) -> str:
     return f"{gb * 1024:.0f} MB"
 
 
-_DEFAULT_LAYOUT = {
-    'grid_columns': 3,
-    'widgets': {
-        'host_card':      {'col_span': 1},
-        'path_card':      {'col_span': 1},
-        'threshold_card': {'col_span': 1},
-        'usage_card':     {'col_span': 1},
-        'avail_card':     {'col_span': 1},
-        'total_card':     {'col_span': 1},
-        'chart':          {'col_span': 3},
-        'logs':           {'col_span': 3},
-    }
-}
+_DEFAULT_LAYOUT = [
+    ['host_card', 'path_card', 'threshold_card'],
+    ['usage_card', 'avail_card', 'total_card'],
+    ['chart'],
+    ['logs'],
+]
 
 
 class DiskSpacePlugin(BasePlugin):

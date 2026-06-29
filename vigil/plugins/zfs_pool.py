@@ -4,17 +4,11 @@ from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.ui.components import info_card, history_chart
 
 
-_DEFAULT_LAYOUT = {
-    'grid_columns': 4,
-    'widgets': {
-        'host_card':      {'col_span': 1},
-        'pool_card':      {'col_span': 1},
-        'usage_card':     {'col_span': 1},
-        'threshold_card': {'col_span': 1},
-        'chart':          {'col_span': 4},
-        'logs':           {'col_span': 4},
-    }
-}
+_DEFAULT_LAYOUT = [
+    ['host_card', 'pool_card', 'usage_card', 'threshold_card'],
+    ['chart'],
+    ['logs'],
+]
 
 
 class ZFSPoolPlugin(BasePlugin):

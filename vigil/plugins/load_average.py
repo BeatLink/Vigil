@@ -15,17 +15,11 @@ def _level_for(value: float, warning: float, failed: float) -> str:
     return 'online'
 
 
-_DEFAULT_LAYOUT = {
-    'grid_columns': 4,
-    'widgets': {
-        'host_card':    {'col_span': 1},
-        'load_1m_card': {'col_span': 1},
-        'load_5m_card': {'col_span': 1},
-        'load_15m_card':{'col_span': 1},
-        'chart':        {'col_span': 4},
-        'logs':         {'col_span': 4},
-    }
-}
+_DEFAULT_LAYOUT = [
+    ['host_card', 'load_1m_card', 'load_5m_card', 'load_15m_card'],
+    ['chart'],
+    ['logs'],
+]
 
 
 class LoadAveragePlugin(BasePlugin):

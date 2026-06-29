@@ -20,16 +20,11 @@ def _fmt_gb(gb: float) -> str:
     return f"{gb:.1f} GB"
 
 
-_DEFAULT_LAYOUT = {
-    'grid_columns': 3,
-    'widgets': {
-        'host_card':    {'col_span': 1},
-        'mem_pct_card': {'col_span': 1},
-        'mem_used_card':{'col_span': 1},
-        'chart':        {'col_span': 3},
-        'logs':         {'col_span': 3},
-    }
-}
+_DEFAULT_LAYOUT = [
+    ['host_card', 'mem_pct_card', 'mem_used_card'],
+    ['chart'],
+    ['logs'],
+]
 
 
 class MemoryUsagePlugin(BasePlugin):

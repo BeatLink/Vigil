@@ -42,18 +42,12 @@ def _format_rate(kbps: float) -> str:
     return f"{kbps:.1f} KB/s"
 
 
-_DEFAULT_LAYOUT = {
-    'grid_columns': 4,
-    'widgets': {
-        'host_card':  {'col_span': 1},
-        'iface_card': {'col_span': 1},
-        'rx_card':    {'col_span': 1},
-        'tx_card':    {'col_span': 1},
-        'rx_chart':   {'col_span': 4},
-        'tx_chart':   {'col_span': 4},
-        'logs':       {'col_span': 4},
-    }
-}
+_DEFAULT_LAYOUT = [
+    ['host_card', 'iface_card', 'rx_card', 'tx_card'],
+    ['rx_chart'],
+    ['tx_chart'],
+    ['logs'],
+]
 
 
 class NetworkUsagePlugin(BasePlugin):

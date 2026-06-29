@@ -6,16 +6,11 @@ from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.ui.components import info_card, history_chart
 
-_DEFAULT_LAYOUT = {
-    'grid_columns': 3,
-    'widgets': {
-        'host_card':    {'col_span': 1},
-        'status_card':  {'col_span': 1},
-        'latency_card': {'col_span': 1},
-        'chart':        {'col_span': 3},
-        'logs':         {'col_span': 3},
-    }
-}
+_DEFAULT_LAYOUT = [
+    ['host_card', 'status_card', 'latency_card'],
+    ['chart'],
+    ['logs'],
+]
 
 
 class UptimePlugin(BasePlugin):
