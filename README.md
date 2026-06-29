@@ -663,6 +663,12 @@ nix run . -- --config config.yaml
 
 ---
 
+## Credits
+
+- App icon: [Guard Protection Safe 3](https://www.svgrepo.com/svg/421980/guard-protection-safe-3) from [SVG Repo](https://www.svgrepo.com)
+
+---
+
 ## License
 
 GPL 3.0

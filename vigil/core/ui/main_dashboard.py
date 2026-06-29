@@ -1,10 +1,13 @@
 import json
 import logging
+from pathlib import Path
+from typing import Any, Dict, Optional
 from nicegui import app, ui
 from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory, Setting
-from typing import Any, Dict, Optional
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
 from .components import action_chip, card, section_title
+
+_ICON = Path(__file__).parent.parent.parent / 'static' / 'icon.svg'
 
 # Global state/helper for cross-component navigation
 _navigation_state = {'switch_func': None}
@@ -29,6 +32,8 @@ def init_gui(engine: Any, port: int = 8080):
         logging.error(f"Could not connect to database: {e}")
         return
 
+    app.add_static_file(local_file=_ICON, url_path='/icon.svg')
+
     if engine_run_func:
         app.on_startup(engine_run_func)
 
@@ -49,8 +54,8 @@ def init_gui(engine: Any, port: int = 8080):
 
     with ui.header().classes('items-center p-4').style(f'background-color: {PRIMARY}; color: {BACKGROUND}'):
         ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
-        ui.icon('security', size='md')
-        ui.label('Vigil System Monitor').classes('text-2xl font-bold ml-2')
+        ui.image('/icon.svg').style('width: 2rem; height: 2rem;')
+        ui.label('Vigil').classes('text-2xl font-bold ml-2')
 
     with ui.left_drawer(value=True).classes('p-0 shadow-lg').props('width=350').style(f'background-color: {BACKGROUND}') as left_drawer:
         with ui.list().classes('w-full').props('dense'):
@@ -370,4 +375,4 @@ def init_gui(engine: Any, port: int = 8080):
     render_main()
 
     # Run the NiceGUI app
-    ui.run(title='Vigil', favicon='🔭', port=port, reload=False, show=False)
+    ui.run(title='Vigil', favicon=_ICON, port=port, reload=False, show=False)

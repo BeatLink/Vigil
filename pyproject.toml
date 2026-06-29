@@ -33,3 +33,6 @@ testpaths = ["tests"]
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["vigil*"]
+
+[tool.setuptools.package-data]
+vigil = ["static/*"]
