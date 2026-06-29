@@ -72,6 +72,11 @@ class BasePlugin(ABC):
         await self.on_collect()
 
     @abstractmethod
-    def render_ui(self):
-        """Default UI implementation showing metrics and events. Override this in subclasses."""
+    def render_ui(self, context: str = 'page'):
+        """Render the plugin UI.
+
+        context:
+          'page'   — standalone full-page view (all widgets visible).
+          'inline' — embedded inside a group panel (host_card and logs hidden).
+        """
         pass

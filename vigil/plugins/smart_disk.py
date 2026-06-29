@@ -80,13 +80,13 @@ class SmartDiskPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
-    def render_ui(self):
+    def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
         from vigil.core.ui.theme import STATUS_COLORS
-        from vigil.core.ui.layout import PluginLayout
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()

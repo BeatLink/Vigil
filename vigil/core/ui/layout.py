@@ -1,5 +1,21 @@
 from contextlib import contextmanager
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
+
+
+def make_inline_layout(
+    default_layout: dict,
+    hidden: Tuple[str, ...] = ('host_card', 'logs'),
+) -> dict:
+    """Return a copy of *default_layout* with *hidden* widgets set to visible=False.
+
+    Used to produce the compact variant rendered inside group expansion panels,
+    where the host header and log table are redundant context.
+    """
+    widgets = {
+        name: ({**defn, 'visible': False} if name in hidden else {**defn})
+        for name, defn in default_layout.get('widgets', {}).items()
+    }
+    return {**default_layout, 'widgets': widgets}
 
 
 class PluginLayout:

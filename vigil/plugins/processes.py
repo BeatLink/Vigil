@@ -144,12 +144,12 @@ class ProcessesPlugin(BasePlugin):
         self.db_logger.write(f"Sent SIG{signal} to PID {pid}", level="INFO")
         return True
 
-    def render_ui(self):
+    def render_ui(self, context: str = 'page'):
         from nicegui import ui
         import asyncio
-        from vigil.core.ui.layout import PluginLayout
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT)
+        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()

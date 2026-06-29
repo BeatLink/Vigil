@@ -51,7 +51,7 @@ class GroupPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
-    def render_ui(self):
+    def render_ui(self, context: str = 'page'):
         """Render children as collapsible sections in a configurable grid layout."""
         from nicegui import ui
 
@@ -93,7 +93,7 @@ class GroupPlugin(BasePlugin):
                             </div>
                         ''')
                         with ui.column().classes('w-full p-4'):
-                            child.render_ui()
+                            child.render_ui(context='inline')
 
                     def _track(e, cid=child.id):
                         self._expanded[cid] = bool(e.args)

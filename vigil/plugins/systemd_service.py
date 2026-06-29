@@ -177,18 +177,18 @@ class SystemdPlugin(BasePlugin):
     # UI
     # -------------------------------------------------------------------------
 
-    def render_ui(self):
+    def render_ui(self, context: str = 'page'):
         if self.max_age is not None:
-            self._render_oneshot_ui()
+            self._render_oneshot_ui(context)
         else:
-            self._render_continuous_ui()
+            self._render_continuous_ui(context)
 
-    def _render_continuous_ui(self):
+    def _render_continuous_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import StatusHistory
-        from vigil.core.ui.layout import PluginLayout
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
-        layout = PluginLayout(self.config, _CONTINUOUS_LAYOUT)
+        layout = PluginLayout(self.config, _CONTINUOUS_LAYOUT if context == 'page' else make_inline_layout(_CONTINUOUS_LAYOUT))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -215,13 +215,13 @@ class SystemdPlugin(BasePlugin):
 
         ui.timer(2.0, update_time)
 
-    def _render_oneshot_ui(self):
+    def _render_oneshot_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
         from vigil.core.ui.theme import STATUS_COLORS
-        from vigil.core.ui.layout import PluginLayout
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
-        layout = PluginLayout(self.config, _ONESHOT_LAYOUT)
+        layout = PluginLayout(self.config, _ONESHOT_LAYOUT if context == 'page' else make_inline_layout(_ONESHOT_LAYOUT))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()

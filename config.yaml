@@ -88,41 +88,15 @@ plugins:
             type: "uptime"
             target_host: "sensor-bathroom.lan"
 
-  - name: "Processes"
-    type: "group"
-    grid_columns: 3
-    children:
-      - name: "Ragnarok Processes"
-        id: "ragnarok-processes"
-        type: "processes"
-        interval: 30s
-        max_processes: 20
-        ssh_config:
-          host: "ragnarok.technet"
-      - name: "Heimdall Processes"
-        id: "heimdall-processes"
-        type: "processes"
-        interval: 30s
-        max_processes: 20
-        ssh_config:
-          host: "heimdall.technet"
-      - name: "Odin Processes"
-        id: "odin-processes"
-        type: "processes"
-        interval: 30s
-        max_processes: 20
-        ssh_config:
-          host: "odin.technet"
-
   - name: "System Stats"
     type: "group"
     grid_columns: 3
     children:
-      - name: "Ragnarok System"
+      - name: "Ragnarok"
         type: "group"
         grid_columns: 4
         children:
-          - name: "Ragnarok CPU"
+          - name: "CPU"
             id: "ragnarok-cpu"
             type: "cpu_usage"
             interval: 1m
@@ -130,7 +104,7 @@ plugins:
             cpu_threshold: 85
             ssh_config:
               host: "ragnarok.technet"
-          - name: "Ragnarok Memory"
+          - name: "Memory"
             id: "ragnarok-memory"
             type: "memory_usage"
             interval: 1m
@@ -138,7 +112,7 @@ plugins:
             memory_threshold: 90
             ssh_config:
               host: "ragnarok.technet"
-          - name: "Ragnarok Temperature"
+          - name: "Temperature"
             id: "ragnarok-temperature"
             type: "temperature"
             interval: 1m
@@ -146,7 +120,7 @@ plugins:
             temp_threshold: 80
             ssh_config:
               host: "ragnarok.technet"
-          - name: "Ragnarok Load"
+          - name: "Load"
             id: "ragnarok-load"
             type: "load_average"
             interval: 1m
@@ -154,11 +128,67 @@ plugins:
             load_threshold: 100
             ssh_config:
               host: "ragnarok.technet"
-      - name: "Heimdall System"
+          - name: "Processes"
+            id: "ragnarok-processes"
+            type: "processes"
+            interval: 30s
+            max_processes: 20
+            grid_col_span: 4
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "Network"
+            id: "ragnarok-network"
+            type: "network_usage"
+            interval: 30s
+            grid_col_span: 4
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "SMART"
+            id: "ragnarok-smart"
+            type: "smart_disk"
+            interval: 1h
+            grid_col_span: 2
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "ZFS Health"
+            id: "ragnarok-zfs-health"
+            type: "zfs_health"
+            interval: 1h
+            grid_col_span: 2
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "/"
+            id: "ragnarok-disk-root"
+            type: "disk_space"
+            path: "/"
+            threshold: 90
+            interval: 10m
+            grid_col_span: 2
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "/Storage"
+            id: "ragnarok-disk-storage"
+            type: "disk_space"
+            path: "/Storage"
+            threshold: 90
+            interval: 10m
+            grid_col_span: 2
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "/boot"
+            id: "ragnarok-disk-boot"
+            type: "disk_space"
+            path: "/boot"
+            threshold: 90
+            interval: 10m
+            grid_col_span: 2
+            ssh_config:
+              host: "ragnarok.technet"
+      - name: "Heimdall"
         type: "group"
         grid_columns: 4
         children:
-          - name: "Heimdall CPU"
+          - name: "CPU"
             id: "heimdall-cpu"
             type: "cpu_usage"
             interval: 1m
@@ -166,7 +196,7 @@ plugins:
             cpu_threshold: 85
             ssh_config:
               host: "heimdall.technet"
-          - name: "Heimdall Memory"
+          - name: "Memory"
             id: "heimdall-memory"
             type: "memory_usage"
             interval: 1m
@@ -174,7 +204,7 @@ plugins:
             memory_threshold: 90
             ssh_config:
               host: "heimdall.technet"
-          - name: "Heimdall Temperature"
+          - name: "Temperature"
             id: "heimdall-temperature"
             type: "temperature"
             interval: 1m
@@ -182,7 +212,7 @@ plugins:
             temp_threshold: 80
             ssh_config:
               host: "heimdall.technet"
-          - name: "Heimdall Load"
+          - name: "Load"
             id: "heimdall-load"
             type: "load_average"
             interval: 1m
@@ -190,11 +220,67 @@ plugins:
             load_threshold: 100
             ssh_config:
               host: "heimdall.technet"
-      - name: "Odin System"
+          - name: "Processes"
+            id: "heimdall-processes"
+            type: "processes"
+            interval: 30s
+            max_processes: 20
+            grid_col_span: 4
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Network"
+            id: "heimdall-network"
+            type: "network_usage"
+            interval: 30s
+            grid_col_span: 4
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "SMART"
+            id: "heimdall-smart"
+            type: "smart_disk"
+            interval: 1h
+            grid_col_span: 2
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "ZFS Health"
+            id: "heimdall-zfs-health"
+            type: "zfs_health"
+            interval: 1h
+            grid_col_span: 2
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "/"
+            id: "heimdall-disk-root"
+            type: "disk_space"
+            path: "/"
+            threshold: 90
+            interval: 10m
+            grid_col_span: 2
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "/Storage"
+            id: "heimdall-disk-storage"
+            type: "disk_space"
+            path: "/Storage"
+            threshold: 90
+            interval: 10m
+            grid_col_span: 2
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "/boot"
+            id: "heimdall-disk-boot"
+            type: "disk_space"
+            path: "/boot"
+            threshold: 90
+            interval: 10m
+            grid_col_span: 2
+            ssh_config:
+              host: "heimdall.technet"
+      - name: "Odin"
         type: "group"
         grid_columns: 4
         children:
-          - name: "Odin CPU"
+          - name: "CPU"
             id: "odin-cpu"
             type: "cpu_usage"
             interval: 1m
@@ -202,7 +288,7 @@ plugins:
             cpu_threshold: 85
             ssh_config:
               host: "odin.technet"
-          - name: "Odin Memory"
+          - name: "Memory"
             id: "odin-memory"
             type: "memory_usage"
             interval: 1m
@@ -210,7 +296,7 @@ plugins:
             memory_threshold: 90
             ssh_config:
               host: "odin.technet"
-          - name: "Odin Temperature"
+          - name: "Temperature"
             id: "odin-temperature"
             type: "temperature"
             interval: 1m
@@ -218,7 +304,7 @@ plugins:
             temp_threshold: 80
             ssh_config:
               host: "odin.technet"
-          - name: "Odin Load"
+          - name: "Load"
             id: "odin-load"
             type: "load_average"
             interval: 1m
@@ -226,11 +312,67 @@ plugins:
             load_threshold: 100
             ssh_config:
               host: "odin.technet"
+          - name: "Processes"
+            id: "odin-processes"
+            type: "processes"
+            interval: 30s
+            max_processes: 20
+            grid_col_span: 4
+            ssh_config:
+              host: "odin.technet"
+          - name: "Network"
+            id: "odin-network"
+            type: "network_usage"
+            interval: 30s
+            grid_col_span: 4
+            ssh_config:
+              host: "odin.technet"
+          - name: "SMART"
+            id: "odin-smart"
+            type: "smart_disk"
+            interval: 1h
+            grid_col_span: 2
+            ssh_config:
+              host: "odin.technet"
+          - name: "ZFS Health"
+            id: "odin-zfs-health"
+            type: "zfs_health"
+            interval: 1h
+            grid_col_span: 2
+            ssh_config:
+              host: "odin.technet"
+          - name: "/"
+            id: "odin-disk-root"
+            type: "disk_space"
+            path: "/"
+            threshold: 90
+            interval: 10m
+            grid_col_span: 2
+            ssh_config:
+              host: "odin.technet"
+          - name: "/Storage"
+            id: "odin-disk-storage"
+            type: "disk_space"
+            path: "/Storage"
+            threshold: 90
+            interval: 10m
+            grid_col_span: 2
+            ssh_config:
+              host: "odin.technet"
+          - name: "/boot"
+            id: "odin-disk-boot"
+            type: "disk_space"
+            path: "/boot"
+            threshold: 90
+            interval: 10m
+            grid_col_span: 2
+            ssh_config:
+              host: "odin.technet"
 
   - name: "Running Services"
     type: "group"
     children:
-      - name: "Ragnarok Services"
+      - name: "Ragnarok"
         id: "ragnarok-services"
         type: "group"
         children:
@@ -242,7 +384,7 @@ plugins:
             max_age: 1w
             ssh_config:
               host: "ragnarok.technet"
-      - name: "Heimdall Services"
+      - name: "Heimdall"
         id: "heimdall-services"
         type: "group"
         children:
@@ -415,7 +557,7 @@ plugins:
             service_name: "trilium-server.service"
             ssh_config:
               host: "heimdall.technet"
-      - name: "Odin Services"
+      - name: "Odin"
         id: "odin-services"
         type: "group"
         children:
@@ -442,158 +584,3 @@ plugins:
             ssh_config:
               host: "odin.technet"
 
-  - name: "Network Usage"
-    type: "group"
-    children:
-      - name: "Ragnarok Network"
-        id: "ragnarok-network"
-        type: "network_usage"
-        interval: 30s
-        ssh_config:
-          host: "ragnarok.technet"
-      - name: "Heimdall Network"
-        id: "heimdall-network"
-        type: "network_usage"
-        interval: 30s
-        ssh_config:
-          host: "heimdall.technet"
-      - name: "Odin Network"
-        id: "odin-network"
-        type: "network_usage"
-        interval: 30s
-        ssh_config:
-          host: "odin.technet"
-
-  - name: "Disk Health"
-    type: "group"
-    children:
-      - name: "Ragnarok Disk Health"
-        type: "group"
-        children:
-          - name: "Ragnarok SMART"
-            id: "ragnarok-smart"
-            type: "smart_disk"
-            interval: 1h
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "Ragnarok ZFS Health"
-            id: "ragnarok-zfs-health"
-            type: "zfs_health"
-            interval: 1h
-            ssh_config:
-              host: "ragnarok.technet"
-      - name: "Heimdall Disk Health"
-        type: "group"
-        children:
-          - name: "Heimdall SMART"
-            id: "heimdall-smart"
-            type: "smart_disk"
-            interval: 1h
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Heimdall ZFS Health"
-            id: "heimdall-zfs-health"
-            type: "zfs_health"
-            interval: 1h
-            ssh_config:
-              host: "heimdall.technet"
-      - name: "Odin Disk Health"
-        type: "group"
-        children:
-          - name: "Odin SMART"
-            id: "odin-smart"
-            type: "smart_disk"
-            interval: 1h
-            ssh_config:
-              host: "odin.technet"
-          - name: "Odin ZFS Health"
-            id: "odin-zfs-health"
-            type: "zfs_health"
-            interval: 1h
-            ssh_config:
-              host: "odin.technet"
-
-  - name: "Disk Space"
-    type: "group"
-    children:
-      - name: "Ragnarok Disk Space"
-        type: "group"
-        children:
-          - name: "Ragnarok /"
-            id: "ragnarok-disk-root"
-            type: "disk_space"
-            path: "/"
-            threshold: 90
-            interval: 10m
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "Ragnarok /Storage"
-            id: "ragnarok-disk-storage"
-            type: "disk_space"
-            path: "/Storage"
-            threshold: 90
-            interval: 10m
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "Ragnarok /boot"
-            id: "ragnarok-disk-boot"
-            type: "disk_space"
-            path: "/boot"
-            threshold: 90
-            interval: 10m
-            ssh_config:
-              host: "ragnarok.technet"
-      - name: "Heimdall Disk Space"
-        type: "group"
-        children:
-          - name: "Heimdall /"
-            id: "heimdall-disk-root"
-            type: "disk_space"
-            path: "/"
-            threshold: 90
-            interval: 10m
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Heimdall /Storage"
-            id: "heimdall-disk-storage"
-            type: "disk_space"
-            path: "/Storage"
-            threshold: 90
-            interval: 10m
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Heimdall /boot"
-            id: "heimdall-disk-boot"
-            type: "disk_space"
-            path: "/boot"
-            threshold: 90
-            interval: 10m
-            ssh_config:
-              host: "heimdall.technet"
-      - name: "Odin Disk Space"
-        type: "group"
-        children:
-          - name: "Odin /"
-            id: "odin-disk-root"
-            type: "disk_space"
-            path: "/"
-            threshold: 90
-            interval: 10m
-            ssh_config:
-              host: "odin.technet"
-          - name: "Odin /Storage"
-            id: "odin-disk-storage"
-            type: "disk_space"
-            path: "/Storage"
-            threshold: 90
-            interval: 10m
-            ssh_config:
-              host: "odin.technet"
-          - name: "Odin /boot"
-            id: "odin-disk-boot"
-            type: "disk_space"
-            path: "/boot"
-            threshold: 90
-            interval: 10m
-            ssh_config:
-              host: "odin.technet"
