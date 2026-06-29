@@ -338,6 +338,35 @@ Monitors system load averages over SSH via `/proc/loadavg`. Load values are norm
 
 ---
 
+### `processes`
+Monitors running processes over SSH via `ps`, sorted by CPU usage. Process data is ephemeral and stored in memory only — not persisted to the database. Per-row SIGTERM and SIGKILL buttons are available directly in the UI.
+
+| Option          | Description                                                                  |
+|-----------------|------------------------------------------------------------------------------|
+| `max_processes` | Maximum number of processes to display (default: `20`)                       |
+| `require_sudo`  | Prefix kill commands with `sudo` (default: `false`)                          |
+| `kill_signal`   | Default signal for the kill action: `TERM` or `KILL` (default: `TERM`). Per-row buttons always offer both regardless of this setting. |
+| `cpu_warning`   | Top-process CPU % that triggers `warning` (optional — omit to disable)       |
+| `cpu_threshold` | Top-process CPU % that triggers `failed`  (optional — omit to disable)       |
+| `interval`      | Polling frequency (default: `60`)                                             |
+| `ssh_config`    | SSH connection details — see [SSH Config](#ssh-config) below                 |
+
+**Metrics**: `process_count`, `top_cpu_pct`
+
+```yaml
+- name: "Heimdall Processes"
+  id: "heimdall-processes"
+  type: "processes"
+  interval: 30s
+  max_processes: 20
+  cpu_warning: 80
+  cpu_threshold: 95
+  ssh_config:
+    host: "heimdall.example.com"
+```
+
+---
+
 ### `network_usage`
 Monitors network interface throughput over SSH. Takes two snapshots of `/proc/net/dev` one second apart in a single SSH command — no extra tools required on the remote host.
 
@@ -373,24 +402,53 @@ The interface to monitor can be specified explicitly or auto-detected. In auto-d
 ---
 
 ### `group`
-A logical container for other monitors. Aggregates the worst-case status of all descendants and displays a summary card for each child.
+A logical container for other monitors. Aggregates the worst-case status of all descendants and displays each child as a collapsible card. Expansion state is preserved across page refreshes within the same server session.
 
-| Option     | Description                                  |
-|------------|----------------------------------------------|
-| `children` | A list of nested plugin definitions          |
+Groups support a CSS grid layout, configurable at both the group level and per-child.
 
-Groups can be nested to arbitrary depth.
+| Option          | Description                                                                                  |
+|-----------------|----------------------------------------------------------------------------------------------|
+| `children`      | A list of nested plugin definitions                                                           |
+| `grid_columns`  | Number of equal-width columns in the grid (default: `1` — full-width stacked layout)         |
+
+Each child entry can also set:
+
+| Child Option     | Description                                                                                  |
+|------------------|----------------------------------------------------------------------------------------------|
+| `grid_col_span`  | How many grid columns this child occupies (default: `1`)                                     |
+| `grid_height`    | Explicit CSS height for the child cell, e.g. `"400px"` (default: auto). Adds a scrollbar if content overflows. |
+
+Groups can be nested to arbitrary depth. Inner groups inherit their own `grid_columns` independently.
 
 ```yaml
-- name: "Infrastructure"
+- name: "System Stats"
   type: "group"
+  grid_columns: 3       # 3 equal columns — one subgroup per host
   children:
-    - name: "Web Tier"
+    - name: "Ragnarok System"
       type: "group"
+      grid_columns: 4   # 4 columns — one card per stat (CPU / Mem / Temp / Load)
       children:
-        - name: "Nginx"
-          type: "systemd_service"
+        - name: "Ragnarok CPU"
+          type: "cpu_usage"
           ...
+        - name: "Ragnarok Memory"
+          type: "memory_usage"
+          ...
+
+# Child spanning multiple columns
+- name: "Overview"
+  type: "group"
+  grid_columns: 3
+  children:
+    - name: "Processes"
+      type: "processes"
+      grid_col_span: 2   # spans 2 of 3 columns
+      grid_height: "600px"
+      ...
+    - name: "Uptime"
+      type: "uptime"
+      ...
 ```
 
 ---

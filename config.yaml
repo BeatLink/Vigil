@@ -90,6 +90,7 @@ plugins:
 
   - name: "Processes"
     type: "group"
+    grid_columns: 3
     children:
       - name: "Ragnarok Processes"
         id: "ragnarok-processes"
@@ -115,9 +116,11 @@ plugins:
 
   - name: "System Stats"
     type: "group"
+    grid_columns: 3
     children:
       - name: "Ragnarok System"
         type: "group"
+        grid_columns: 4
         children:
           - name: "Ragnarok CPU"
             id: "ragnarok-cpu"
@@ -153,6 +156,7 @@ plugins:
               host: "ragnarok.technet"
       - name: "Heimdall System"
         type: "group"
+        grid_columns: 4
         children:
           - name: "Heimdall CPU"
             id: "heimdall-cpu"
@@ -188,6 +192,7 @@ plugins:
               host: "heimdall.technet"
       - name: "Odin System"
         type: "group"
+        grid_columns: 4
         children:
           - name: "Odin CPU"
             id: "odin-cpu"
