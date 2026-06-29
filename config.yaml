@@ -92,47 +92,110 @@ plugins:
     type: "group"
     children:
       - name: "Ragnarok System"
-        id: "ragnarok-system"
-        type: "system_stats"
-        interval: 1m
-        cpu_warning: 70
-        cpu_threshold: 85
-        memory_warning: 75
-        memory_threshold: 90
-        temp_warning: 70
-        temp_threshold: 80
-        load_warning: 70
-        load_threshold: 100
-        ssh_config:
-          host: "ragnarok.technet"
+        type: "group"
+        children:
+          - name: "Ragnarok CPU"
+            id: "ragnarok-cpu"
+            type: "cpu_usage"
+            interval: 1m
+            cpu_warning: 70
+            cpu_threshold: 85
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "Ragnarok Memory"
+            id: "ragnarok-memory"
+            type: "memory_usage"
+            interval: 1m
+            memory_warning: 75
+            memory_threshold: 90
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "Ragnarok Temperature"
+            id: "ragnarok-temperature"
+            type: "temperature"
+            interval: 1m
+            temp_warning: 70
+            temp_threshold: 80
+            ssh_config:
+              host: "ragnarok.technet"
+          - name: "Ragnarok Load"
+            id: "ragnarok-load"
+            type: "load_average"
+            interval: 1m
+            load_warning: 70
+            load_threshold: 100
+            ssh_config:
+              host: "ragnarok.technet"
       - name: "Heimdall System"
-        id: "heimdall-system"
-        type: "system_stats"
-        interval: 1m
-        cpu_warning: 70
-        cpu_threshold: 85
-        memory_warning: 75
-        memory_threshold: 90
-        temp_warning: 70
-        temp_threshold: 80
-        load_warning: 70
-        load_threshold: 100
-        ssh_config:
-          host: "heimdall.technet"
+        type: "group"
+        children:
+          - name: "Heimdall CPU"
+            id: "heimdall-cpu"
+            type: "cpu_usage"
+            interval: 1m
+            cpu_warning: 70
+            cpu_threshold: 85
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Heimdall Memory"
+            id: "heimdall-memory"
+            type: "memory_usage"
+            interval: 1m
+            memory_warning: 75
+            memory_threshold: 90
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Heimdall Temperature"
+            id: "heimdall-temperature"
+            type: "temperature"
+            interval: 1m
+            temp_warning: 70
+            temp_threshold: 80
+            ssh_config:
+              host: "heimdall.technet"
+          - name: "Heimdall Load"
+            id: "heimdall-load"
+            type: "load_average"
+            interval: 1m
+            load_warning: 70
+            load_threshold: 100
+            ssh_config:
+              host: "heimdall.technet"
       - name: "Odin System"
-        id: "odin-system"
-        type: "system_stats"
-        interval: 1m
-        cpu_warning: 70
-        cpu_threshold: 85
-        memory_warning: 75
-        memory_threshold: 90
-        temp_warning: 70
-        temp_threshold: 80
-        load_warning: 70
-        load_threshold: 100
-        ssh_config:
-          host: "odin.technet"
+        type: "group"
+        children:
+          - name: "Odin CPU"
+            id: "odin-cpu"
+            type: "cpu_usage"
+            interval: 1m
+            cpu_warning: 70
+            cpu_threshold: 85
+            ssh_config:
+              host: "odin.technet"
+          - name: "Odin Memory"
+            id: "odin-memory"
+            type: "memory_usage"
+            interval: 1m
+            memory_warning: 75
+            memory_threshold: 90
+            ssh_config:
+              host: "odin.technet"
+          - name: "Odin Temperature"
+            id: "odin-temperature"
+            type: "temperature"
+            interval: 1m
+            temp_warning: 70
+            temp_threshold: 80
+            ssh_config:
+              host: "odin.technet"
+          - name: "Odin Load"
+            id: "odin-load"
+            type: "load_average"
+            interval: 1m
+            load_warning: 70
+            load_threshold: 100
+            ssh_config:
+              host: "odin.technet"
 
   - name: "Running Services"
     type: "group"

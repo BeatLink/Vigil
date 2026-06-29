@@ -100,7 +100,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`, `system_stats`, `group` |
+| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -238,39 +238,100 @@ Monitors disk space usage for a path or mountpoint over SSH via `df`. Works on a
 
 ---
 
-### `system_stats`
-Monitors CPU usage, memory usage, temperature, and load averages over SSH. Uses `/proc/stat` (two 1-second samples) for CPU, `/proc/meminfo` for memory, `/sys/class/thermal/thermal_zone*/temp` for temperature, and `/proc/loadavg` for the 1m/5m/15m load averages — no extra tools required on the remote host. Temperature monitoring is gracefully skipped on hosts with no thermal zones (e.g. some VMs).
+### `cpu_usage`
+Monitors CPU utilization over SSH. Takes two `/proc/stat` snapshots one second apart in a single SSH command and computes the usage delta — no agents or extra tools required.
 
-Each metric has independent warning and failed thresholds. The overall status is the worst level across all metrics — `online`, `warning`, or `failed`. Load thresholds are optional — when omitted, load averages are collected and displayed but do not influence status. Since load average is relative to CPU core count, set `load_warning` and `load_threshold` to values appropriate for the target host.
+| Option          | Description                                      |
+|-----------------|--------------------------------------------------|
+| `cpu_warning`   | CPU % that triggers `warning` (default: `70`)   |
+| `cpu_threshold` | CPU % that triggers `failed`  (default: `85`)   |
+| `interval`      | Polling frequency (default: `60`)                |
+| `ssh_config`    | SSH connection details — see [SSH Config](#ssh-config) below |
 
-| Option              | Description                                                                        |
-|---------------------|------------------------------------------------------------------------------------|
-| `cpu_warning`       | CPU % that triggers `warning` (default: `70`)                                     |
-| `cpu_threshold`     | CPU % that triggers `failed` (default: `85`)                                      |
-| `memory_warning`    | Memory usage % that triggers `warning` (default: `75`)                            |
-| `memory_threshold`  | Memory usage % that triggers `failed` (default: `90`)                             |
-| `temp_warning`      | Max thermal zone °C that triggers `warning` (default: `70`)                       |
-| `temp_threshold`    | Max thermal zone °C that triggers `failed` (default: `80`)                        |
-| `load_warning`      | 1m load average that triggers `warning` (optional — omit to disable alerting)     |
-| `load_threshold`    | 1m load average that triggers `failed`  (optional — omit to disable alerting)     |
-| `interval`          | Polling frequency (default: `60`)                                                  |
-| `ssh_config`        | SSH connection details — see [SSH Config](#ssh-config) below                      |
-
-**Metrics**: `cpu_pct`, `memory_pct`, `memory_used_gb`, `memory_total_gb`, `temp_c`, `load_avg_1m`, `load_avg_5m`, `load_avg_15m`
+**Metrics**: `cpu_pct`
 
 ```yaml
-- name: "Heimdall System"
-  id: "heimdall-system"
-  type: "system_stats"
+- name: "Heimdall CPU"
+  id: "heimdall-cpu"
+  type: "cpu_usage"
   interval: 1m
   cpu_warning: 70
   cpu_threshold: 85
+  ssh_config:
+    host: "heimdall.example.com"
+```
+
+---
+
+### `memory_usage`
+Monitors memory usage over SSH via `/proc/meminfo`. Uses `MemAvailable` (not `MemFree`) so filesystem cache is not counted as used. Single SSH read — no sleep required.
+
+| Option              | Description                                           |
+|---------------------|-------------------------------------------------------|
+| `memory_warning`    | Memory % that triggers `warning` (default: `75`)     |
+| `memory_threshold`  | Memory % that triggers `failed`  (default: `90`)     |
+| `interval`          | Polling frequency (default: `60`)                     |
+| `ssh_config`        | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `memory_pct`, `memory_used_gb`, `memory_total_gb`
+
+```yaml
+- name: "Heimdall Memory"
+  id: "heimdall-memory"
+  type: "memory_usage"
+  interval: 1m
   memory_warning: 75
   memory_threshold: 90
+  ssh_config:
+    host: "heimdall.example.com"
+```
+
+---
+
+### `temperature`
+Monitors system temperature over SSH via `/sys/class/thermal/thermal_zone*/temp`. Reports the maximum temperature across all thermal zones. Gracefully stays `online` with no metric when no thermal zones are present (e.g. VMs).
+
+| Option           | Description                                            |
+|------------------|--------------------------------------------------------|
+| `temp_warning`   | °C that triggers `warning` (default: `70`)            |
+| `temp_threshold` | °C that triggers `failed`  (default: `80`)            |
+| `interval`       | Polling frequency (default: `60`)                      |
+| `ssh_config`     | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `temp_c`
+
+```yaml
+- name: "Heimdall Temperature"
+  id: "heimdall-temperature"
+  type: "temperature"
+  interval: 1m
   temp_warning: 70
   temp_threshold: 80
-  load_warning: 2.0    # tune to CPU count (e.g. n_cores × 0.5 for warning)
-  load_threshold: 4.0  # e.g. n_cores × 1.0 for failed
+  ssh_config:
+    host: "heimdall.example.com"
+```
+
+---
+
+### `load_average`
+Monitors system load averages over SSH via `/proc/loadavg`. Load values are normalized by CPU core count (via `nproc`) and stored as a percentage — 100% means the system is exactly at capacity. Falls back to treating core count as 1 if `nproc` is unavailable. Thresholds are optional — when unset, load is collected and displayed but does not affect status.
+
+| Option           | Description                                                                  |
+|------------------|------------------------------------------------------------------------------|
+| `load_warning`   | 1m load as % of cores that triggers `warning` (optional — omit to disable)  |
+| `load_threshold` | 1m load as % of cores that triggers `failed`  (optional — omit to disable)  |
+| `interval`       | Polling frequency (default: `60`)                                             |
+| `ssh_config`     | SSH connection details — see [SSH Config](#ssh-config) below                 |
+
+**Metrics**: `load_pct_1m`, `load_pct_5m`, `load_pct_15m`
+
+```yaml
+- name: "Heimdall Load"
+  id: "heimdall-load"
+  type: "load_average"
+  interval: 1m
+  load_warning: 70    # warn when 1m load exceeds 70% of available cores
+  load_threshold: 100 # fail when 1m load exceeds 100% of available cores
   ssh_config:
     host: "heimdall.example.com"
 ```
@@ -457,7 +518,10 @@ nix run . -- --config config.yaml
 - [x] Disk space monitor (any path/mountpoint via `df`, threshold alerting)
 - [x] ZFS pool health monitor (DEGRADED/FAULTED detection)
 - [x] SMART disk health monitor
-- [x] System stats monitor (CPU %, memory %, temperature via `/proc` and `/sys`, per-metric thresholds)
+- [x] CPU usage monitor (via `/proc/stat` two-sample delta, warning/failed thresholds)
+- [x] Memory usage monitor (via `/proc/meminfo`, warning/failed thresholds)
+- [x] Temperature monitor (via `/sys/class/thermal`, graceful degradation on VMs)
+- [x] Load average monitor (via `/proc/loadavg` normalized by `nproc`, optional thresholds)
 - [x] Network usage monitor (RX/TX throughput via `/proc/net/dev`, auto-detect or explicit interface)
 - [ ] SSH collector module with standard metric parsing (CPU, RAM, Disk)
 - [ ] Basic alerting (Email, Slack, or Webhook)
