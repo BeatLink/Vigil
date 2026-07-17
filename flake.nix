@@ -15,8 +15,25 @@
         flake-utils.lib.eachDefaultSystem (
             system:
             let
+                # inline-snapshot 0.32.5 fails its own documentation tests in
+                # current nixpkgs and is not cached by Hydra, which breaks the
+                # build of anything pulling it in as a check dependency (pydantic
+                # → FastAPI → NiceGUI, in our case). Disable its test suite so
+                # the package builds from source without running those tests.
+                inlineSnapshotFix = final: prev: {
+                    python312 = prev.python312.override {
+                        packageOverrides = pyfinal: pyprev: {
+                            inline-snapshot = pyprev.inline-snapshot.overridePythonAttrs (old: {
+                                doCheck = false;
+                                pytestCheckPhase = "true";
+                            });
+                        };
+                    };
+                    python312Packages = final.python312.pkgs;
+                };
                 pkgs = import nixpkgs {
                     inherit system;
+                    overlays = [ inlineSnapshotFix ];
                 };
                 pyproject = builtins.fromTOML (builtins.readFile ./pyproject.toml);
 
