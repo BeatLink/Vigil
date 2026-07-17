@@ -141,6 +141,15 @@ class BorgPlugin(BasePlugin):
             env.append("BORG_PASSCOMMAND=" + shlex.quote(self.passphrase_command))
         # Never prompt interactively — fail fast instead of hanging the poll.
         env.append("BORG_RELOCATED_REPO_ACCESS_IS_OK=no")
+        # Point borg's config/cache/security dirs at a fresh writable temp dir on
+        # the remote host. Vigil often logs in as a locked-down system account
+        # whose home is /var/empty (non-writable), where borg otherwise dies with
+        # "Operation not permitted: '/var/empty/.config'" before it reads a single
+        # archive — surfacing as a red monitor with no useful log. BORG_BASE_DIR
+        # relocates all three dirs (~/.config/borg, ~/.cache/borg, ~/.config/borg/
+        # security) under it. A throwaway dir is fine for a read-only list; the
+        # small cost is borg can't reuse its chunk cache between polls.
+        env.append("BORG_BASE_DIR=\"$(mktemp -d)\"")
 
         args = [
             self.borg_bin, "list",

@@ -143,6 +143,15 @@ class TestCommand:
         p = make_plugin(BorgPlugin, BASE_CFG)
         assert "--bypass-lock" in p._list_command()
 
+    def test_command_sets_writable_borg_base_dir(self, make_plugin):
+        # Vigil often logs in as a system account with home /var/empty, where
+        # borg dies creating ~/.config/borg. BORG_BASE_DIR must relocate its
+        # dirs to a writable temp dir on the remote host.
+        cmd = make_plugin(BorgPlugin, BASE_CFG)._list_command()
+        assert "BORG_BASE_DIR=" in cmd
+        # Must run the substitution on the remote shell (unquoted $(...)).
+        assert "$(mktemp -d)" in cmd
+
     def test_passphrase_passed_as_env_not_argv(self, make_plugin):
         p = make_plugin(BorgPlugin, {**BASE_CFG, "passphrase": "s3cret"})
         cmd = p._list_command()
