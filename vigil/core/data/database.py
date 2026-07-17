@@ -1,11 +1,79 @@
 import logging
 import hashlib
+import queue
+import threading
 from datetime import datetime, timedelta
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Callable
 from peewee import *
 
 # Initialize a Peewee database instance
 db = SqliteDatabase(None)
+
+
+class _AsyncWriter:
+    """
+    Single background thread that owns all DB writes.
+
+    The polling loop runs on the asyncio event loop thread; committing to SQLite
+    fsyncs, and on ZFS that can block for a noticeable time. Doing it inline
+    stalls the whole async web server. Instead, writes are enqueued (non-blocking
+    for the caller) and this one thread drains the queue and commits them, so the
+    fsync never happens on the event loop. A single writer also means SQLite only
+    ever sees one writer, which is exactly what it wants.
+    """
+    def __init__(self):
+        self._q: "queue.Queue[Optional[Callable[[], None]]]" = queue.Queue()
+        self._thread: Optional[threading.Thread] = None
+        # When True, submit() executes inline instead of queueing. Used by tests
+        # so a write is immediately visible to the following read.
+        self.synchronous = False
+
+    def start(self):
+        if self.synchronous or (self._thread and self._thread.is_alive()):
+            return
+        self._thread = threading.Thread(target=self._run, name="vigil-db-writer", daemon=True)
+        self._thread.start()
+
+    def submit(self, fn: Callable[[], None]):
+        """Enqueue a write. Returns immediately; the writer thread executes it."""
+        if self.synchronous:
+            with db.connection_context():
+                fn()
+            return
+        self._q.put(fn)
+
+    def flush(self, timeout: Optional[float] = None):
+        """Block until all currently-queued writes have been executed."""
+        self._q.join()
+
+    def _run(self):
+        while True:
+            fn = self._q.get()
+            if fn is None:  # sentinel (unused today; kept for clean shutdown)
+                self._q.task_done()
+                break
+            try:
+                # This thread gets its own connection via connection_context();
+                # WAL lets it write while reader threads (web UI) read on theirs.
+                with db.connection_context():
+                    fn()
+            except Exception as e:
+                logging.error(f"DB write failed: {e}")
+            finally:
+                self._q.task_done()
+
+
+_writer = _AsyncWriter()
+
+
+def flush_writes(timeout: Optional[float] = None):
+    """Block until all queued DB writes have been committed.
+
+    Writes are asynchronous (queued to the background writer), so anything that
+    needs to read its own writes back immediately — chiefly tests — must call
+    this first.
+    """
+    _writer.flush(timeout)
 
 # DATABASE MODELS ###################################################################################################################################
 class BaseModel(Model):
@@ -75,16 +143,16 @@ class InternalDatabaseLogger:
         """Writes a metric entry into the Metric table."""
         self.db.insert_metric(self.target, self.plugin_name, name, value, metadata)
 
-    def log_line(self, message: str, level: str = "INFO", log_time: Optional[str] = None) -> bool:
+    def log_line(self, message: str, level: str = "INFO", log_time: Optional[str] = None):
         """
         Persist a raw log line collected from the target, deduplicated.
 
         `log_time` should be the line's own timestamp (e.g. the journald
         timestamp) when available — it makes the dedup identity stable across
-        cycles so the same line is stored exactly once. Returns True if the line
-        was newly stored, False if it was a duplicate.
+        cycles so the same line is stored exactly once. The write is queued to
+        the background writer, so this returns immediately.
         """
-        return self.db.insert_log_line(self.target, self.plugin_name, level, message, log_time)
+        self.db.insert_log_line(self.target, self.plugin_name, level, message, log_time)
 
 # DATABASE MANAGER ##################################################################################################################################
 class DatabaseManager:
@@ -96,38 +164,53 @@ class DatabaseManager:
     def _connect_and_init(self):
         """Connects to the database and creates tables if they don't exist."""
         try:
-            # WAL + synchronous=NORMAL is the standard fix for SQLite-on-ZFS
-            # fsync stalls: writes go to a write-ahead log and are fsync'd far
-            # less often, so a busy polling loop doesn't block the process on
-            # ZFS ZIL commits every insert. busy_timeout lets readers (the web
-            # UI) wait briefly for a writer instead of erroring immediately.
+            # Pragmas are applied to every connection peewee opens (it keeps one
+            # connection per thread). Tuned to lean on RAM/cache over disk:
+            #   journal_mode=WAL    writes append to a log and fsync at
+            #                       checkpoints, not per commit — and let readers
+            #                       run concurrently with the writer.
+            #   synchronous=NORMAL  in WAL, only fsync at checkpoints, not on
+            #                       every commit (safe against app crashes; only
+            #                       a power loss at a checkpoint risks the last
+            #                       few durable writes — fine for monitoring).
+            #   cache_size=-65536   64 MB page cache in memory (negative = KiB).
+            #   mmap_size=256 MB    memory-map the DB file so reads come from the
+            #                       page cache instead of read() syscalls.
+            #   temp_store=MEMORY   keep temp tables / sort scratch in RAM.
+            #   wal_autocheckpoint  checkpoint less often (bigger WAL, fewer
+            #                       fsyncs) — 2000 pages ≈ 8 MB.
+            #   busy_timeout        wait for a writer rather than erroring.
             db.init(self.db_path, pragmas={
                 'journal_mode': 'wal',
-                'synchronous': 1,        # NORMAL
-                'busy_timeout': 5000,    # ms
+                'synchronous': 1,            # NORMAL
+                'cache_size': -65536,        # 64 MB, in KiB
+                'mmap_size': 268435456,      # 256 MB
+                'temp_store': 2,             # MEMORY
+                'wal_autocheckpoint': 2000,  # pages (~8 MB) between checkpoints
+                'busy_timeout': 5000,        # ms
                 'foreign_keys': 1,
             })
             db.connect()
             db.create_tables([Metric, Event, Setting, StatusHistory, LogLine])
+            db.close()  # release the init connection; per-thread ones open on demand
             logging.info(f"Database initialized and connected at {self.db_path}")
         except OperationalError as e:
             logging.error(f"Failed to connect or initialize database at {self.db_path}: {e}")
             raise
-        finally:
-            if not db.is_closed():
-                db.close()
+        _writer.start()
 
     def insert_metric(self, target: str, collector: str, metric_name: str, value: float, metadata: Optional[str] = None):
-        """Inserts a new metric record."""
-        with db.connection_context():
-            Metric.create(target=target, collector=collector, metric_name=metric_name, value=value, metadata=metadata)
-            logging.debug(f"Inserted metric: {metric_name}={value} for {target}")
+        """Queue a metric record for the background writer (non-blocking)."""
+        _writer.submit(lambda: Metric.create(
+            target=target, collector=collector, metric_name=metric_name, value=value, metadata=metadata))
 
     def insert_status(self, collector_id: str, state: str):
-        """Inserts a new status history record."""
-        with db.connection_context():
-            StatusHistory.create(collector_id=collector_id, state=state)
-            logging.debug(f"Recorded status for {collector_id}: {state}")
+        """Queue a status history record for the background writer (non-blocking)."""
+        _writer.submit(lambda: StatusHistory.create(collector_id=collector_id, state=state))
+
+    def flush(self, timeout: Optional[float] = None):
+        """Block until all queued writes have been committed (mainly for tests)."""
+        _writer.flush(timeout)
 
     def latest_statuses(self) -> Dict[str, str]:
         """
@@ -154,39 +237,31 @@ class DatabaseManager:
             return {row.collector_id: row.state for row in query}
 
     def insert_event(self, level: str, message: str, target: Optional[str] = None):
-        """Inserts a new event record."""
-        with db.connection_context():
-            Event.create(level=level, message=message, target=target) # Ensure target is passed
-            logging.debug(f"Inserted event: {level} - {message}")
+        """Queue an event record for the background writer (non-blocking)."""
+        _writer.submit(lambda: Event.create(level=level, message=message, target=target))
 
     def insert_log_line(self, target: str, source: str, level: str, message: str,
-                        log_time: Optional[str] = None) -> bool:
+                        log_time: Optional[str] = None):
         """
-        Insert a raw log line, deduplicated by content.
+        Queue a raw log line for the background writer, deduplicated by content.
 
         The dedup key is a hash of (target, source, log_time, message). Because
-        collectors re-fetch the same trailing lines each cycle, an INSERT that
-        collides on the UNIQUE dedup_hash is ignored rather than duplicated.
-
-        Returns True if a new row was written, False if it was already present.
+        collectors re-fetch the same trailing lines each cycle, the UNIQUE
+        dedup_hash + on_conflict_ignore turns a re-insert into a no-op — dedup is
+        enforced by the DB itself, so no read is needed on the hot path. Queued,
+        so it never blocks the caller (use flush() to await it in tests).
         """
         # log_time anchors the identity to the line's own timestamp when the
         # source provides one; without it we fall back to (target, source, msg)
         # so identical repeated lines still collapse to a single row.
         key = f"{target}\x1f{source}\x1f{log_time or ''}\x1f{message}"
         dedup_hash = hashlib.sha1(key.encode('utf-8', 'replace')).hexdigest()
-        with db.connection_context():
-            # The UNIQUE constraint on dedup_hash is what actually guarantees
-            # dedup; on_conflict_ignore turns a re-insert into a no-op. We check
-            # existence first only to report whether the line was newly stored.
-            existed = LogLine.select().where(LogLine.dedup_hash == dedup_hash).exists()
-            if not existed:
-                (LogLine
-                 .insert(target=target, source=source, level=level,
-                         message=message, dedup_hash=dedup_hash)
-                 .on_conflict_ignore()
-                 .execute())
-        return not existed
+        _writer.submit(lambda: (
+            LogLine
+            .insert(target=target, source=source, level=level,
+                    message=message, dedup_hash=dedup_hash)
+            .on_conflict_ignore()
+            .execute()))
 
     def prune_logs(self, retention_days: int) -> int:
         """
@@ -196,11 +271,14 @@ class DatabaseManager:
         if retention_days is None or retention_days <= 0:
             return 0
         cutoff = datetime.now() - timedelta(days=retention_days)
-        with db.connection_context():
+
+        def _do_prune():
             deleted = LogLine.delete().where(LogLine.timestamp < cutoff).execute()
-        if deleted:
-            logging.info(f"Pruned {deleted} log line(s) older than {retention_days}d")
-        return deleted
+            if deleted:
+                logging.info(f"Pruned {deleted} log line(s) older than {retention_days}d")
+
+        _writer.submit(_do_prune)
+        return 0  # pruning is asynchronous; count is logged by the writer
 
     def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """Retrieves a runtime setting from the database."""
@@ -211,10 +289,8 @@ class DatabaseManager:
                 return default
 
     def set_setting(self, key: str, value: str):
-        """Sets or updates a runtime setting in the database."""
-        with db.connection_context():
-            Setting.insert(key=key, value=value).on_conflict_replace().execute()
-            logging.debug(f"Updated setting: {key}")
+        """Queue a runtime setting update for the background writer (non-blocking)."""
+        _writer.submit(lambda: Setting.insert(key=key, value=value).on_conflict_replace().execute())
 
     def get_logger(self, target: str, plugin_name: str) -> InternalDatabaseLogger:
         """Factory method to provide a scoped logger for a specific plugin instance."""

@@ -2,7 +2,7 @@ import time
 import pytest
 from unittest.mock import AsyncMock
 from vigil.plugins.systemd_service import SystemdPlugin
-from vigil.core.data.database import db, StatusHistory, Metric, LogLine
+from vigil.core.data.database import db, StatusHistory, Metric, LogLine, flush_writes
 
 
 CONTINUOUS_CFG = {
@@ -24,6 +24,7 @@ ONESHOT_CFG = {
 
 
 def _latest_status(plugin_id: str) -> str | None:
+    flush_writes()  # writes are async; wait for them before reading back
     with db.connection_context():
         row = StatusHistory.select().where(
             StatusHistory.collector_id == plugin_id
@@ -32,6 +33,7 @@ def _latest_status(plugin_id: str) -> str | None:
 
 
 def _latest_metric(plugin_name: str, metric: str) -> float | None:
+    flush_writes()  # writes are async; wait for them before reading back
     with db.connection_context():
         row = Metric.select().where(
             (Metric.collector == plugin_name) & (Metric.metric_name == metric)
@@ -102,6 +104,7 @@ class TestContinuousMode:
             (0, "2024-05-01T12:00:00+0000 host nginx[1]: started", ""),  # journalctl short-iso
         ])
         await plugin.on_collect()
+        flush_writes()
         with db.connection_context():
             rows = list(LogLine.select().where(LogLine.source == "test-nginx"))
         assert len(rows) == 1
@@ -116,6 +119,7 @@ class TestContinuousMode:
                 (0, line, ""),
             ])
             await plugin.on_collect()
+        flush_writes()
         with db.connection_context():
             count = LogLine.select().where(LogLine.source == "test-nginx").count()
         assert count == 1
@@ -126,6 +130,7 @@ class TestContinuousMode:
             (0, "2024-05-01T12:00:00+0000 host nginx[1]: FAILED to bind", ""),
         ])
         await plugin.on_collect()
+        flush_writes()
         with db.connection_context():
             row = LogLine.select().where(LogLine.source == "test-nginx").first()
         assert row.level == "ERROR"

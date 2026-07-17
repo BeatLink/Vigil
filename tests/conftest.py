@@ -13,6 +13,20 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
+@pytest.fixture(autouse=True)
+def _synchronous_db_writes():
+    """
+    Run DB writes inline during tests so a write is immediately visible to the
+    next read. In production writes are queued to a background thread (to keep
+    fsync off the event loop); tests don't want that indirection.
+    """
+    from vigil.core.data.database import _writer
+    prev = _writer.synchronous
+    _writer.synchronous = True
+    yield
+    _writer.synchronous = prev
+
+
 @pytest.fixture
 def db_manager(tmp_path):
     """DatabaseManager backed by a temp SQLite file. Cleans up on teardown."""
