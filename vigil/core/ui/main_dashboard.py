@@ -46,333 +46,347 @@ def init_gui(engine: Any, port: int = 8080):
     def switch_view(view_type: str, plugin: Optional[Any] = None):
         state['current_view'] = view_type
         state['selected_plugin'] = plugin
-        render_main()
+        # render_main is defined inside the page function (below); it registers
+        # itself in `state` so navigation from this outer scope can reach it.
+        render = state.get('render_main')
+        if render:
+            render()
 
     _navigation_state['switch_func'] = switch_view
 
-    ui.query('body').style(f'background-color: {BACKGROUND_MUTED}')
+    # Build the dashboard as an explicit page route rather than relying on
+    # NiceGUI's auto-index page. In NiceGUI 3.x the auto-index re-executes the
+    # main script via runpy.run_path(sys.argv[0]); under the Nix wrapper,
+    # sys.argv[0] is a shell script, so that parse fails with a SyntaxError and
+    # every request 500s. A @ui.page function is served directly and avoids it.
+    @ui.page('/')
+    def index_page():
+      ui.query('body').style(f'background-color: {BACKGROUND_MUTED}')
 
-    with ui.header().classes('items-center p-4').style(f'background-color: {PRIMARY}; color: {BACKGROUND}'):
-        ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
-        ui.image('/icon.svg').style('width: 2rem; height: 2rem;')
-        ui.label('Vigil').classes('text-2xl font-bold ml-2')
+      with ui.header().classes('items-center p-4').style(f'background-color: {PRIMARY}; color: {BACKGROUND}'):
+          ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
+          ui.image('/icon.svg').style('width: 2rem; height: 2rem;')
+          ui.label('Vigil').classes('text-2xl font-bold ml-2')
 
-    with ui.left_drawer(value=True).classes('p-0 shadow-lg').props('width=350').style(f'background-color: {BACKGROUND}') as left_drawer:
-        with ui.list().classes('w-full').props('dense'):
-            ui.item('All Monitors', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {TEXT}')
+      with ui.left_drawer(value=True).classes('p-0 shadow-lg').props('width=350').style(f'background-color: {BACKGROUND}') as left_drawer:
+          with ui.list().classes('w-full').props('dense'):
+              ui.item('All Monitors', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {TEXT}')
             
-        def build_tree_nodes(plugins):
-            """Recursive helper to build data structure for ui.tree."""
-            with StatusHistory._meta.database.connection_context():
-                nodes = []
-                for p in plugins:
-                    # Fetch the latest status to determine the icon color
-                    latest = StatusHistory.select().where(StatusHistory.collector_id == p.id).order_by(StatusHistory.timestamp.desc()).first()
-                    state = latest.state if latest else 'offline'
+          def build_tree_nodes(plugins):
+              """Recursive helper to build data structure for ui.tree."""
+              with StatusHistory._meta.database.connection_context():
+                  nodes = []
+                  for p in plugins:
+                      # Fetch the latest status to determine the icon color
+                      latest = StatusHistory.select().where(StatusHistory.collector_id == p.id).order_by(StatusHistory.timestamp.desc()).first()
+                      state = latest.state if latest else 'offline'
 
-                    node = {
-                        'id': p.id,
-                        'label': p.name,
-                        'icon': 'circle',
-                        'color': STATUS_COLORS[state]
-                    }
-                    if p.children:
-                        node['children'] = build_tree_nodes(p.children)
-                    nodes.append(node)
-                return nodes
+                      node = {
+                          'id': p.id,
+                          'label': p.name,
+                          'icon': 'circle',
+                          'color': STATUS_COLORS[state]
+                      }
+                      if p.children:
+                          node['children'] = build_tree_nodes(p.children)
+                      nodes.append(node)
+                  return nodes
 
-        def find_plugin_by_id(plugins, target_id):
-            """Helper to locate a plugin instance by its unique ID."""
-            for p in plugins:
-                if p.id == target_id:
-                    return p
-                found = find_plugin_by_id(p.children, target_id)
-                if found:
-                    return found
-            return None
+          def find_plugin_by_id(plugins, target_id):
+              """Helper to locate a plugin instance by its unique ID."""
+              for p in plugins:
+                  if p.id == target_id:
+                      return p
+                  found = find_plugin_by_id(p.children, target_id)
+                  if found:
+                      return found
+              return None
 
-        def handle_select(e):
-            if e.value:
-                target_plugin = find_plugin_by_id(engine.plugins, e.value)
-                if target_plugin:
-                    switch_view('plugin', target_plugin)
+          def handle_select(e):
+              if e.value:
+                  target_plugin = find_plugin_by_id(engine.plugins, e.value)
+                  if target_plugin:
+                      switch_view('plugin', target_plugin)
 
-        # Initialize the built-in tree component
-        tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).props('').classes('w-full px-6 text-lg').style(f'color: {TEXT}')
+          # Initialize the built-in tree component
+          tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).props('').classes('w-full px-6 text-lg').style(f'color: {TEXT}')
 
-        tree.add_slot('default-header', f'''
-            <span class="flex items-center gap-2" style="color: {TEXT}">
-                <q-icon name="circle" :style="{{ color: props.node.color }}" size="12px" />
-                {{{{ props.node.label }}}}
-            </span>
-        ''')
+          tree.add_slot('default-header', f'''
+              <span class="flex items-center gap-2" style="color: {TEXT}">
+                  <q-icon name="circle" :style="{{ color: props.node.color }}" size="12px" />
+                  {{{{ props.node.label }}}}
+              </span>
+          ''')
         
-        def refresh_tree():
-            tree._props['nodes'] = build_tree_nodes(engine.plugins)
-            tree.update()
+          def refresh_tree():
+              tree._props['nodes'] = build_tree_nodes(engine.plugins)
+              tree.update()
 
-        # Periodically refresh tree data (dots and nodes)
-        ui.timer(5.0, refresh_tree)
+          # Periodically refresh tree data (dots and nodes)
+          ui.timer(5.0, refresh_tree)
 
-        # Restore previously saved expanded state
-        def _load_expanded() -> list:
-            with Setting._meta.database.connection_context():
-                try:
-                    return json.loads(Setting.get(Setting.key == 'tree_expanded').value)
-                except Exception:
-                    return []
+          # Restore previously saved expanded state
+          def _load_expanded() -> list:
+              with Setting._meta.database.connection_context():
+                  try:
+                      return json.loads(Setting.get(Setting.key == 'tree_expanded').value)
+                  except Exception:
+                      return []
 
-        def _save_expanded(e):
-            ids = e.args if isinstance(e.args, list) else []
-            with Setting._meta.database.connection_context():
-                Setting.insert(key='tree_expanded', value=json.dumps(ids)).on_conflict_replace().execute()
+          def _save_expanded(e):
+              ids = e.args if isinstance(e.args, list) else []
+              with Setting._meta.database.connection_context():
+                  Setting.insert(key='tree_expanded', value=json.dumps(ids)).on_conflict_replace().execute()
 
-        tree._props['expanded'] = _load_expanded()
-        tree.update()
-        tree.on('update:expanded', _save_expanded)
+          tree._props['expanded'] = _load_expanded()
+          tree.update()
+          tree.on('update:expanded', _save_expanded)
 
-    main_container = ui.column().classes('w-full p-6 bg-transparent')
+      main_container = ui.column().classes('w-full p-6 bg-transparent')
 
-    def render_main():
-        main_container.clear()
-        with main_container:
-            if state['current_view'] == 'overview':
-                render_overview()
-            else:
-                render_plugin_detail(state['selected_plugin'])
+      def render_main():
+          main_container.clear()
+          with main_container:
+              if state['current_view'] == 'overview':
+                  render_overview()
+              else:
+                  render_plugin_detail(state['selected_plugin'])
 
-    def render_overview():
-        section_title('Monitors', 'mb-6 font-light')
+      # Expose render_main to switch_view (defined in the outer scope).
+      state['render_main'] = render_main
 
-        # Collect all leaf monitors once — shared by charts, table, and filter logic
-        all_monitors = []
-        def collect_leafs(plist):
-            for p in plist:
-                if not p.children: all_monitors.append(p)
-                else: collect_leafs(p.children)
-        collect_leafs(engine.plugins)
-        plugin_by_id = {p.id: p for p in all_monitors}
+      def render_overview():
+          section_title('Monitors', 'mb-6 font-light')
 
-        # Active filter: {'field': 'status'|'type'|None, 'value': str|None}
-        filter_state = {'field': None, 'value': None}
+          # Collect all leaf monitors once — shared by charts, table, and filter logic
+          all_monitors = []
+          def collect_leafs(plist):
+              for p in plist:
+                  if not p.children: all_monitors.append(p)
+                  else: collect_leafs(p.children)
+          collect_leafs(engine.plugins)
+          plugin_by_id = {p.id: p for p in all_monitors}
 
-        with ui.row().classes('w-full gap-4 mb-6'):
-            with card('flex-1 h-80'):
-                ui.label('MONITORS BY STATUS').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
-                status_chart = ui.echart({
-                    'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
-                    'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
-                    'series': [{
-                        'type': 'pie',
-                        'radius': ['40%', '70%'],
-                        'avoidLabelOverlap': False,
-                        'cursor': 'pointer',
-                        'itemStyle': {'borderRadius': 10, 'borderColor': '#fff', 'borderWidth': 2},
-                        'label': {'show': False},
-                        'data': []
-                    }]
-                }).classes('w-full h-64')
+          # Active filter: {'field': 'status'|'type'|None, 'value': str|None}
+          filter_state = {'field': None, 'value': None}
 
-            with card('flex-1 h-80'):
-                ui.label('MONITORS BY TYPE').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
-                type_chart = ui.echart({
-                    'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
-                    'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
-                    'series': [{
-                        'type': 'pie',
-                        'radius': ['40%', '70%'],
-                        'avoidLabelOverlap': False,
-                        'cursor': 'pointer',
-                        'itemStyle': {'borderRadius': 10, 'borderColor': '#fff', 'borderWidth': 2},
-                        'label': {'show': False},
-                        'data': []
-                    }]
-                }).classes('w-full h-64')
+          with ui.row().classes('w-full gap-4 mb-6'):
+              with card('flex-1 h-80'):
+                  ui.label('MONITORS BY STATUS').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
+                  status_chart = ui.echart({
+                      'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
+                      'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
+                      'series': [{
+                          'type': 'pie',
+                          'radius': ['40%', '70%'],
+                          'avoidLabelOverlap': False,
+                          'cursor': 'pointer',
+                          'itemStyle': {'borderRadius': 10, 'borderColor': '#fff', 'borderWidth': 2},
+                          'label': {'show': False},
+                          'data': []
+                      }]
+                  }).classes('w-full h-64')
 
-        # Monitors table
-        with card('w-full mb-6'):
-            with ui.row().classes('w-full items-center justify-between mb-3'):
-                ui.label('ALL MONITORS').classes('text-xs font-bold').style(f'color: {TEXT_MUTED}')
-                with ui.row().classes('items-center gap-1') as filter_row:
-                    filter_label = ui.label('').classes('text-xs italic').style(f'color: {TEXT_MUTED}')
-                    ui.button(icon='close', on_click=lambda: _clear_filter()).props('flat dense round size=xs').style(f'color: {TEXT_MUTED}')
-            filter_row.set_visibility(False)
+              with card('flex-1 h-80'):
+                  ui.label('MONITORS BY TYPE').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
+                  type_chart = ui.echart({
+                      'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
+                      'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
+                      'series': [{
+                          'type': 'pie',
+                          'radius': ['40%', '70%'],
+                          'avoidLabelOverlap': False,
+                          'cursor': 'pointer',
+                          'itemStyle': {'borderRadius': 10, 'borderColor': '#fff', 'borderWidth': 2},
+                          'label': {'show': False},
+                          'data': []
+                      }]
+                  }).classes('w-full h-64')
 
-            monitor_columns = [
-                {'name': 'name',   'label': 'Monitor', 'field': 'name',   'align': 'left', 'sortable': True},
-                {'name': 'type',   'label': 'Type',    'field': 'type',   'align': 'left', 'sortable': True},
-                {'name': 'host',   'label': 'Host',    'field': 'host',   'align': 'left', 'sortable': True},
-                {'name': 'status', 'label': 'Status',  'field': 'status', 'align': 'left', 'sortable': True},
-            ]
-            monitor_table = ui.table(columns=monitor_columns, rows=[]).classes('w-full border-none')
+          # Monitors table
+          with card('w-full mb-6'):
+              with ui.row().classes('w-full items-center justify-between mb-3'):
+                  ui.label('ALL MONITORS').classes('text-xs font-bold').style(f'color: {TEXT_MUTED}')
+                  with ui.row().classes('items-center gap-1') as filter_row:
+                      filter_label = ui.label('').classes('text-xs italic').style(f'color: {TEXT_MUTED}')
+                      ui.button(icon='close', on_click=lambda: _clear_filter()).props('flat dense round size=xs').style(f'color: {TEXT_MUTED}')
+              filter_row.set_visibility(False)
 
-            # Name column: clickable link that navigates to the monitor's detail page
-            monitor_table.add_slot('body-cell-name', f'''
-                <q-td :props="props">
-                    <span class="cursor-pointer font-medium hover:underline"
-                          style="color: {PRIMARY}"
-                          @click="$parent.$emit('navigate', props.row)">
-                        {{{{ props.row.name }}}}
-                    </span>
-                </q-td>
-            ''')
+              monitor_columns = [
+                  {'name': 'name',   'label': 'Monitor', 'field': 'name',   'align': 'left', 'sortable': True},
+                  {'name': 'type',   'label': 'Type',    'field': 'type',   'align': 'left', 'sortable': True},
+                  {'name': 'host',   'label': 'Host',    'field': 'host',   'align': 'left', 'sortable': True},
+                  {'name': 'status', 'label': 'Status',  'field': 'status', 'align': 'left', 'sortable': True},
+              ]
+              monitor_table = ui.table(columns=monitor_columns, rows=[]).classes('w-full border-none')
 
-            # Status column: color-coded text
-            monitor_table.add_slot('body-cell-status', '''
-                <q-td :props="props">
-                    <span :style="{ color: props.row.status_color }" class="font-semibold text-xs">
-                        {{ props.row.status }}
-                    </span>
-                </q-td>
-            ''')
+              # Name column: clickable link that navigates to the monitor's detail page
+              monitor_table.add_slot('body-cell-name', f'''
+                  <q-td :props="props">
+                      <span class="cursor-pointer font-medium hover:underline"
+                            style="color: {PRIMARY}"
+                            @click="$parent.$emit('navigate', props.row)">
+                          {{{{ props.row.name }}}}
+                      </span>
+                  </q-td>
+              ''')
 
-            def _navigate_to_row(e):
-                row_id = (e.args or {}).get('id')
-                if row_id and row_id in plugin_by_id:
-                    navigate_to(plugin_by_id[row_id])
-            monitor_table.on('navigate', _navigate_to_row)
+              # Status column: color-coded text
+              monitor_table.add_slot('body-cell-status', '''
+                  <q-td :props="props">
+                      <span :style="{ color: props.row.status_color }" class="font-semibold text-xs">
+                          {{ props.row.status }}
+                      </span>
+                  </q-td>
+              ''')
 
-        # -- Update functions ------------------------------------------------
+              def _navigate_to_row(e):
+                  row_id = (e.args or {}).get('id')
+                  if row_id and row_id in plugin_by_id:
+                      navigate_to(plugin_by_id[row_id])
+              monitor_table.on('navigate', _navigate_to_row)
 
-        def _update_filter_ui():
-            if filter_state['field']:
-                filter_label.text = f'Showing: {filter_state["value"].upper()} — click again to clear'
-                filter_row.set_visibility(True)
-            else:
-                filter_row.set_visibility(False)
+          # -- Update functions ------------------------------------------------
 
-        def _clear_filter():
-            filter_state['field'] = None
-            filter_state['value'] = None
-            _update_filter_ui()
-            update_table()
+          def _update_filter_ui():
+              if filter_state['field']:
+                  filter_label.text = f'Showing: {filter_state["value"].upper()} — click again to clear'
+                  filter_row.set_visibility(True)
+              else:
+                  filter_row.set_visibility(False)
 
-        def _set_filter(field: str, raw_value: str):
-            value = raw_value.lower()
-            if filter_state['field'] == field and filter_state['value'] == value:
-                filter_state['field'] = None
-                filter_state['value'] = None
-            else:
-                filter_state['field'] = field
-                filter_state['value'] = value
-            _update_filter_ui()
-            update_table()
+          def _clear_filter():
+              filter_state['field'] = None
+              filter_state['value'] = None
+              _update_filter_ui()
+              update_table()
 
-        status_chart.on_point_click(lambda e: _set_filter('status', e.name))
-        type_chart.on_point_click(lambda e: _set_filter('type', e.name))
+          def _set_filter(field: str, raw_value: str):
+              value = raw_value.lower()
+              if filter_state['field'] == field and filter_state['value'] == value:
+                  filter_state['field'] = None
+                  filter_state['value'] = None
+              else:
+                  filter_state['field'] = field
+                  filter_state['value'] = value
+              _update_filter_ui()
+              update_table()
 
-        def update_table():
-            rows = []
-            with StatusHistory._meta.database.connection_context():
-                for m in all_monitors:
-                    latest = StatusHistory.select().where(
-                        StatusHistory.collector_id == m.id
-                    ).order_by(StatusHistory.timestamp.desc()).first()
-                    st = latest.state if latest else 'offline'
-                    mtype = m.config.get('type', 'unknown')
+          status_chart.on_point_click(lambda e: _set_filter('status', e.name))
+          type_chart.on_point_click(lambda e: _set_filter('type', e.name))
 
-                    if filter_state['field'] == 'status' and st != filter_state['value']:
-                        continue
-                    if filter_state['field'] == 'type' and mtype != filter_state['value']:
-                        continue
+          def update_table():
+              rows = []
+              with StatusHistory._meta.database.connection_context():
+                  for m in all_monitors:
+                      latest = StatusHistory.select().where(
+                          StatusHistory.collector_id == m.id
+                      ).order_by(StatusHistory.timestamp.desc()).first()
+                      st = latest.state if latest else 'offline'
+                      mtype = m.config.get('type', 'unknown')
 
-                    rows.append({
-                        'id': m.id,
-                        'name': m.name,
-                        'type': mtype.upper(),
-                        'host': m.target,
-                        'status': st.upper(),
-                        'status_color': STATUS_COLORS.get(st, STATUS_COLORS['offline']),
-                    })
-            monitor_table.rows[:] = rows
+                      if filter_state['field'] == 'status' and st != filter_state['value']:
+                          continue
+                      if filter_state['field'] == 'type' and mtype != filter_state['value']:
+                          continue
 
-        def update_charts():
-            status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'offline': 0}
-            type_counts = {}
-            with StatusHistory._meta.database.connection_context():
-                for m in all_monitors:
-                    latest = StatusHistory.select().where(
-                        StatusHistory.collector_id == m.id
-                    ).order_by(StatusHistory.timestamp.desc()).first()
-                    st = latest.state if latest else 'offline'
-                    status_counts[st] = status_counts.get(st, 0) + 1
-                    mtype = m.config.get('type', 'unknown')
-                    type_counts[mtype] = type_counts.get(mtype, 0) + 1
+                      rows.append({
+                          'id': m.id,
+                          'name': m.name,
+                          'type': mtype.upper(),
+                          'host': m.target,
+                          'status': st.upper(),
+                          'status_color': STATUS_COLORS.get(st, STATUS_COLORS['offline']),
+                      })
+              monitor_table.rows[:] = rows
 
-            status_chart.options['series'][0]['data'] = [
-                {'value': status_counts['online'],  'name': 'Online',  'itemStyle': {'color': STATUS_COLORS['online']}},
-                {'value': status_counts['failed'],  'name': 'Failed',  'itemStyle': {'color': STATUS_COLORS['failed']}},
-                {'value': status_counts['warning'], 'name': 'Warning', 'itemStyle': {'color': STATUS_COLORS['warning']}},
-                {'value': status_counts['offline'], 'name': 'Offline', 'itemStyle': {'color': STATUS_COLORS['offline']}},
-            ]
-            type_chart.options['series'][0]['data'] = [
-                {'value': v, 'name': k.upper()} for k, v in type_counts.items()
-            ]
-            status_chart.update()
-            type_chart.update()
-            update_table()
+          def update_charts():
+              status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'offline': 0}
+              type_counts = {}
+              with StatusHistory._meta.database.connection_context():
+                  for m in all_monitors:
+                      latest = StatusHistory.select().where(
+                          StatusHistory.collector_id == m.id
+                      ).order_by(StatusHistory.timestamp.desc()).first()
+                      st = latest.state if latest else 'offline'
+                      status_counts[st] = status_counts.get(st, 0) + 1
+                      mtype = m.config.get('type', 'unknown')
+                      type_counts[mtype] = type_counts.get(mtype, 0) + 1
 
-        update_charts()
-        ui.timer(10.0, update_charts)
+              status_chart.options['series'][0]['data'] = [
+                  {'value': status_counts['online'],  'name': 'Online',  'itemStyle': {'color': STATUS_COLORS['online']}},
+                  {'value': status_counts['failed'],  'name': 'Failed',  'itemStyle': {'color': STATUS_COLORS['failed']}},
+                  {'value': status_counts['warning'], 'name': 'Warning', 'itemStyle': {'color': STATUS_COLORS['warning']}},
+                  {'value': status_counts['offline'], 'name': 'Offline', 'itemStyle': {'color': STATUS_COLORS['offline']}},
+              ]
+              type_chart.options['series'][0]['data'] = [
+                  {'value': v, 'name': k.upper()} for k, v in type_counts.items()
+              ]
+              status_chart.update()
+              type_chart.update()
+              update_table()
 
-        with ui.row().classes('w-full gap-4'):
-            with card('flex-1'):
-                ui.label('Recent System Metrics').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
-                metric_columns = [
-                    {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
-                    {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
-                    {'name': 'collector', 'label': 'Plugin', 'field': 'collector', 'align': 'left'},
-                    {'name': 'metric_name', 'label': 'Metric', 'field': 'metric_name', 'align': 'left'},
-                    {'name': 'value', 'label': 'Value', 'field': 'value', 'align': 'left'},
-                ]
-                m_table = ui.table(columns=metric_columns, rows=[]).classes('w-full')
+          update_charts()
+          ui.timer(10.0, update_charts)
 
-                def update_m():
-                    query = Metric.select().order_by(Metric.timestamp.desc()).limit(20)
-                    m_table.rows[:] = [m.__data__ for m in query]
-                ui.timer(5.0, update_m)
+          with ui.row().classes('w-full gap-4'):
+              with card('flex-1'):
+                  ui.label('Recent System Metrics').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
+                  metric_columns = [
+                      {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
+                      {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
+                      {'name': 'collector', 'label': 'Plugin', 'field': 'collector', 'align': 'left'},
+                      {'name': 'metric_name', 'label': 'Metric', 'field': 'metric_name', 'align': 'left'},
+                      {'name': 'value', 'label': 'Value', 'field': 'value', 'align': 'left'},
+                  ]
+                  m_table = ui.table(columns=metric_columns, rows=[]).classes('w-full')
 
-            with card('flex-1'):
-                ui.label('Recent Events').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
-                event_columns = [
-                    {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
-                    {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left'},
-                    {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
-                    {'name': 'message', 'label': 'Message', 'field': 'message', 'align': 'left'},
-                ]
-                e_table = ui.table(columns=event_columns, rows=[]).classes('w-full')
+                  def update_m():
+                      query = Metric.select().order_by(Metric.timestamp.desc()).limit(20)
+                      m_table.rows[:] = [m.__data__ for m in query]
+                  ui.timer(5.0, update_m)
 
-                def update_e():
-                    query = Event.select().order_by(Event.timestamp.desc()).limit(20)
-                    e_table.rows[:] = [e.__data__ for e in query]
-                ui.timer(5.0, update_e)
+              with card('flex-1'):
+                  ui.label('Recent Events').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
+                  event_columns = [
+                      {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
+                      {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left'},
+                      {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
+                      {'name': 'message', 'label': 'Message', 'field': 'message', 'align': 'left'},
+                  ]
+                  e_table = ui.table(columns=event_columns, rows=[]).classes('w-full')
 
-    def render_plugin_detail(plugin: Any):
-        info = plugin.present()
-        with ui.row().classes('w-full items-center justify-between mb-6'):
-            with ui.column():
-                ui.label(info['name']).classes('text-3xl font-bold').style(f'color: {TEXT}')
+                  def update_e():
+                      query = Event.select().order_by(Event.timestamp.desc()).limit(20)
+                      e_table.rows[:] = [e.__data__ for e in query]
+                  ui.timer(5.0, update_e)
 
-            with ui.row().classes('gap-2 items-center'):
-                async def poll_now():
-                    await plugin.run_cycle()
-                    ui.notify(f'{info["name"]} polled', type='positive')
-                action_chip('Poll Now', on_click=poll_now, icon='refresh')
+      def render_plugin_detail(plugin: Any):
+          info = plugin.present()
+          with ui.row().classes('w-full items-center justify-between mb-6'):
+              with ui.column():
+                  ui.label(info['name']).classes('text-3xl font-bold').style(f'color: {TEXT}')
 
-                for action in info.get('actions', []):
-                    async def do_action(aid=action['action_id']):
-                        success = await plugin.on_action(aid)
-                        ui.notify('Action completed successfully' if success else 'Action failed',
-                                  type='positive' if success else 'negative')
+              with ui.row().classes('gap-2 items-center'):
+                  async def poll_now():
+                      await plugin.run_cycle()
+                      ui.notify(f'{info["name"]} polled', type='positive')
+                  action_chip('Poll Now', on_click=poll_now, icon='refresh')
 
-                    btn_color = PRIMARY if action.get('variant') != 'danger' else STATUS_COLORS['failed']
-                    action_chip(action['name'], on_click=do_action, color=btn_color, icon=action.get('icon', 'play_arrow'))
+                  for action in info.get('actions', []):
+                      async def do_action(aid=action['action_id']):
+                          success = await plugin.on_action(aid)
+                          ui.notify('Action completed successfully' if success else 'Action failed',
+                                    type='positive' if success else 'negative')
 
-        # Delegate specific UI rendering to the plugin instance
-        plugin.render_ui()
+                      btn_color = PRIMARY if action.get('variant') != 'danger' else STATUS_COLORS['failed']
+                      action_chip(action['name'], on_click=do_action, color=btn_color, icon=action.get('icon', 'play_arrow'))
 
-    # Initial render
-    render_main()
+          # Delegate specific UI rendering to the plugin instance
+          plugin.render_ui()
+
+      # Initial render
+      render_main()
 
     # Run the NiceGUI app
     svg = _ICON.read_text()
