@@ -38,9 +38,14 @@ class SSHConnection:
             
             connect_kwargs = {
                 "hostname": self.host,
+                # TCP connect + banner timeout. Kept short so unreachable hosts
+                # (e.g. flaky LAN/IoT devices) fail fast instead of tying up an
+                # SSH worker for the full command timeout on every cycle.
                 "port": self.port,
                 "username": self.username,
-                "timeout": 15,
+                "timeout": 5,
+                "banner_timeout": 5,
+                "auth_timeout": 5,
                 "allow_agent": True
             }
             
