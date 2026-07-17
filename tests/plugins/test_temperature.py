@@ -21,7 +21,8 @@ _TEMPS_FAILED  = [85_000, 90_000]            # max 90°C  → failed
 
 
 def _make_output(temps_mc):
-    return "".join(f"TEMP:{t}\n" for t in temps_mc)
+    # The plugin emits one "SENSOR:<zone_type>:<millidegrees>" line per zone.
+    return "".join(f"SENSOR:x86_pkg_temp_{i}:{t}\n" for i, t in enumerate(temps_mc))
 
 
 @pytest.fixture
