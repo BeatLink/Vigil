@@ -110,8 +110,16 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
 
-      # The uptime plugin shells out to `ping`, so iputils must be on PATH.
-      path = [ pkgs.iputils ];
+      # ping (uptime plugin) and the ssh client (multiplexed remote commands)
+      # must be on PATH.
+      path = [
+        pkgs.iputils
+        pkgs.openssh
+      ];
+
+      # OpenSSH ControlMaster sockets + known_hosts live here (writable, and
+      # ProtectHome hides ~/.ssh). Under the service's private /tmp.
+      environment.VIGIL_SSH_CONTROL_DIR = "/tmp/vigil-ssh";
 
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/vigil --config ${configFile} --db ${cfg.dataDir}/vigil.db --port ${toString cfg.port}";

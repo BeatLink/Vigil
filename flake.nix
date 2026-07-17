@@ -38,7 +38,6 @@
                 pyproject = builtins.fromTOML (builtins.readFile ./pyproject.toml);
 
                 pythonDeps = with pkgs.python312Packages; [
-                    paramiko
                     requests
                     pyyaml
                     peewee

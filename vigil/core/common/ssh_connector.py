@@ -1,138 +1,133 @@
-import paramiko
 import logging
-import threading
-import time
+import os
+import shlex
+import subprocess
+import tempfile
+from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
 
-# One shared SSHConnection per (host, username, port). Every monitor that
-# targets the same host reuses the same connection instead of opening its own.
-# This collapses the ~one-connection-per-monitor storm (which trips sshd's
-# MaxStartups and resets connections) down to a single connection per host.
-_connection_pool: Dict[tuple, "SSHConnection"] = {}
-_pool_lock = threading.Lock()
+# Directory holding OpenSSH ControlMaster sockets. One master connection is
+# established per target host on first use and reused (multiplexed) by every
+# subsequent command, so ~90 monitors against 3 hosts open 3 real SSH
+# connections instead of one per monitor per cycle — which is what tripped
+# sshd's MaxStartups before. OpenSSH handles the master lifecycle, keepalive
+# and reconnect, so there is no pooling/locking to maintain here.
+_CONTROL_DIR = Path(os.environ.get("VIGIL_SSH_CONTROL_DIR",
+                                   Path(tempfile.gettempdir()) / "vigil-ssh"))
 
 
 class SSHConnection:
     """
-    A core utility for managing SSH connections to remote nodes.
-    Supports both command execution and metric retrieval.
+    Runs commands on remote nodes via the system `ssh` client with connection
+    multiplexing (ControlMaster/ControlPersist).
 
-    Instances are shared per target via from_config()/get_shared(), and each
-    instance serializes its own command execution with a lock so concurrent
-    monitors on the shared thread pool don't use one paramiko transport at once.
+    Unlike a library client, this holds no long-lived object state: each
+    ``execute`` invokes ``ssh``, and OpenSSH transparently reuses the shared
+    master socket for the host. Multiple commands to the same host therefore run
+    concurrently over one connection (separate channels), rather than being
+    serialized. The public surface (from_config, host, username, execute) is
+    unchanged so collectors/controllers need no changes.
     """
     @classmethod
-    def from_config(cls, config: Dict[str, Any]):
-        """Factory method to get a shared connection from a plugin config dictionary."""
+    def from_config(cls, config: Dict[str, Any]) -> "SSHConnection":
+        """Factory method to create a connection from a plugin config dictionary."""
         ssh_cfg = config.get('ssh_config', {})
-        return cls.get_shared(
+        return cls(
             host=ssh_cfg.get('host', config.get('target_host', 'localhost')),
             username=ssh_cfg.get('username'),
             key_path=ssh_cfg.get('key_path'),
             password=ssh_cfg.get('password'),
-            port=ssh_cfg.get('port')
+            port=ssh_cfg.get('port'),
         )
 
-    @classmethod
-    def get_shared(cls, host: str, username: Optional[str] = None, key_path: Optional[str] = None,
-                   password: Optional[str] = None, port: Optional[int] = None) -> "SSHConnection":
-        """Return the pooled connection for this target, creating it on first use."""
-        key = (host, username, port if port is not None else 22)
-        with _pool_lock:
-            conn = _connection_pool.get(key)
-            if conn is None:
-                conn = cls(host, username, key_path, password, port)
-                _connection_pool[key] = conn
-            return conn
-
-    def __init__(self, host: str, username: Optional[str] = None, key_path: Optional[str] = None, password: Optional[str] = None, port: Optional[int] = 22):
+    def __init__(self, host: str, username: Optional[str] = None, key_path: Optional[str] = None,
+                 password: Optional[str] = None, port: Optional[int] = 22):
         self.host = host
         self.username = username
         self.key_path = key_path
+        # Password auth is not supported over the multiplexed ssh client (it
+        # cannot prompt non-interactively). Key/agent auth only.
         self.password = password
         self.port = port if port is not None else 22
-        self.client = None
-        # Serializes connect()/execute() so a single paramiko transport is not
-        # driven by multiple worker threads targeting this host at once.
-        self._lock = threading.Lock()
-        # Cooldown so a dead host isn't reconnected on every command in a cycle.
-        self._last_connect_fail = 0.0
 
-    # Seconds to wait before retrying connect() after a failure.
-    CONNECT_COOLDOWN = 30.0
+    def _control_path(self) -> str:
+        # One socket per (user@host:port). %C would also work, but an explicit
+        # name keeps sockets identifiable and lets us reason about reuse.
+        user = self.username or os.environ.get("USER", "")
+        safe = f"{user}@{self.host}:{self.port}".replace("/", "_")
+        return str(_CONTROL_DIR / safe)
 
-    def connect(self):
-        """Establishes the SSH connection using keys or password."""
-        if self.client:
-            return
+    def _ssh_base(self, connect_timeout: int) -> list:
+        """Common ssh argv: multiplexing, non-interactive, key/host options."""
+        _CONTROL_DIR.mkdir(parents=True, exist_ok=True)
+        argv = [
+            "ssh",
+            # Multiplexing: reuse a shared master, spawning one automatically if
+            # none exists, and keep it alive 60s past the last use for reuse
+            # across polling cycles.
+            "-o", "ControlMaster=auto",
+            "-o", f"ControlPath={self._control_path()}",
+            "-o", "ControlPersist=60",
+            # Non-interactive, key-only. Never block on prompts.
+            "-o", "BatchMode=yes",
+            "-o", "StrictHostKeyChecking=accept-new",
+            # Keep known_hosts inside our control dir — the service runs with
+            # ProtectHome and may have no writable ~/.ssh.
+            "-o", f"UserKnownHostsFile={_CONTROL_DIR / 'known_hosts'}",
+            "-o", f"ConnectTimeout={connect_timeout}",
+            # Detect a dead master reasonably fast rather than hanging.
+            "-o", "ServerAliveInterval=5",
+            "-o", "ServerAliveCountMax=2",
+            "-p", str(self.port),
+        ]
+        if self.key_path:
+            argv += ["-o", "IdentitiesOnly=yes", "-i", self.key_path]
+        return argv
 
-        # Skip reconnect attempts during the cooldown after a recent failure,
-        # so an unreachable host fails fast instead of re-paying the connect
-        # timeout for each of its monitors every polling cycle.
-        since_fail = time.monotonic() - self._last_connect_fail
-        if since_fail < self.CONNECT_COOLDOWN:
-            raise ConnectionError(
-                f"{self.host}: in connect cooldown ({self.CONNECT_COOLDOWN - since_fail:.0f}s left)"
-            )
+    def execute(self, command: str, timeout: float = 30.0,
+                connect_timeout: int = 5) -> Tuple[int, str, str]:
+        """
+        Execute a command on the target and return (exit_status, stdout, stderr).
 
+        Runs the system ssh client; the first call to a host establishes the
+        master connection and later calls reuse it. A wall-clock ``timeout``
+        bounds the whole call so a stuck host is abandoned, not hung on.
+        """
+        target = f"{self.username}@{self.host}" if self.username else self.host
+        argv = self._ssh_base(connect_timeout) + [target, command]
         try:
-            self.client = paramiko.SSHClient()
-            self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            
-            connect_kwargs = {
-                "hostname": self.host,
-                # TCP connect + banner timeout. Kept short so unreachable hosts
-                # (e.g. flaky LAN/IoT devices) fail fast instead of tying up an
-                # SSH worker for the full command timeout on every cycle.
-                "port": self.port,
-                "username": self.username,
-                "timeout": 5,
-                "banner_timeout": 5,
-                "auth_timeout": 5,
-                "allow_agent": True
-            }
-            
-            if self.key_path:
-                connect_kwargs["key_filename"] = self.key_path
-            if self.password:
-                connect_kwargs["password"] = self.password
-                
-            self.client.connect(**connect_kwargs)
-            logging.debug(f"SSH connection established to {self.host}")
-            self._last_connect_fail = 0.0
+            proc = subprocess.run(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=timeout,
+            )
+            return (
+                proc.returncode,
+                proc.stdout.decode(errors="replace").strip(),
+                proc.stderr.decode(errors="replace").strip(),
+            )
+        except subprocess.TimeoutExpired:
+            logging.error(f"SSH command timed out after {timeout}s on {self.host}: {command!r}")
+            return -1, "", f"Timed out after {timeout}s"
         except Exception as e:
-            self._last_connect_fail = time.monotonic()
-            logging.error(f"SSH connection failed to {self.host}: {e}")
-            self.client = None
-            raise
-
-    def execute(self, command: str, timeout: float = 30.0) -> Tuple[int, str, str]:
-        """Executes a command and returns (exit_status, stdout, stderr)."""
-        # Serialize per-host: the shared connection has one transport, and
-        # concurrent monitors run on the same thread pool. The lock also means
-        # only the first caller pays the connect cost; the rest reuse it.
-        with self._lock:
-            if not self.client:
-                self.connect()
-
-            try:
-                _, stdout, stderr = self.client.exec_command(command, timeout=timeout)
-                exit_status = stdout.channel.recv_exit_status()
-                return exit_status, stdout.read().decode().strip(), stderr.read().decode().strip()
-            except Exception as e:
-                logging.error(f"Command execution failed on {self.host}: {e}")
-                self.client = None  # Force reconnect on the next call
-                raise
+            logging.error(f"SSH execution failed on {self.host}: {e}")
+            return -1, "", str(e)
 
     def close(self):
-        """Safely closes the SSH client."""
-        if self.client:
-            self.client.close()
-            self.client = None
+        """Tear down the shared master connection for this host, if any."""
+        try:
+            subprocess.run(
+                ["ssh", "-O", "exit",
+                 "-o", f"ControlPath={self._control_path()}",
+                 (f"{self.username}@{self.host}" if self.username else self.host)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5,
+            )
+        except Exception:
+            pass
 
     def __enter__(self):
-        self.connect()
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
