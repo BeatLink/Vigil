@@ -72,6 +72,22 @@ class TestPluginsProperty:
         assert cfg.plugins == []
 
 
+class TestSSHDefaults:
+    def test_returns_configured_defaults(self, write_yaml):
+        path = write_yaml({"ssh_defaults": {"username": "beatlink", "key_path": "/run/vigil.key"}})
+        cfg = ConfigFileManager(path)
+        assert cfg.ssh_defaults == {"username": "beatlink", "key_path": "/run/vigil.key"}
+
+    def test_empty_when_missing(self, write_yaml):
+        path = write_yaml({"plugins": []})
+        cfg = ConfigFileManager(path)
+        assert cfg.ssh_defaults == {}
+
+    def test_empty_when_file_missing(self, tmp_path):
+        cfg = ConfigFileManager(str(tmp_path / "missing.yaml"))
+        assert cfg.ssh_defaults == {}
+
+
 class TestAlertAndControlProperties:
     def test_alert_handlers_empty_when_missing(self, write_yaml):
         path = write_yaml({"plugins": []})

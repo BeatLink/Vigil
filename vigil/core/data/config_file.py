@@ -46,6 +46,17 @@ class ConfigFileManager:
         return self.data.get('theme', {})
 
     @property
+    def ssh_defaults(self) -> Dict[str, Any]:
+        """
+        Returns global SSH connection defaults (may be empty).
+
+        These are merged into every plugin's ``ssh_config`` unless the plugin
+        overrides a given key, so a single ``username``/``key_path`` can apply
+        across all monitors instead of being repeated on each one.
+        """
+        return self.data.get('ssh_defaults', {})
+
+    @property
     def controllers(self) -> List[Dict[str, Any]]:
         """Returns the list of control/remediation configurations."""
         return self.data.get('control', [])

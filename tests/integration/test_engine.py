@@ -116,6 +116,62 @@ class TestPluginLoading:
         assert engine.plugins[0].name == "Good"
 
 
+class TestSSHDefaultsMerge:
+    """Global ssh_defaults are merged into each plugin's ssh_config."""
+
+    def test_defaults_applied_to_ssh_config(self, tmp_path):
+        db_path = str(tmp_path / "test.db")
+        cfg_path = _write_config(tmp_path, {
+            "database": {"path": db_path},
+            "ssh_defaults": {"username": "beatlink", "key_path": "/run/vigil.key"},
+            "plugins": [{
+                "name": "CPU", "id": "cpu", "type": "cpu_usage",
+                "ssh_config": {"host": "server.technet"},
+            }],
+        })
+        with patch("vigil.core.common.base_plugin.SSHConnection") as mock_ssh:
+            engine = VigilEngine(cfg_path)
+            engine.setup_modules()
+        passed_cfg = mock_ssh.from_config.call_args[0][0]
+        assert passed_cfg["ssh_config"] == {
+            "host": "server.technet",
+            "username": "beatlink",
+            "key_path": "/run/vigil.key",
+        }
+
+    def test_plugin_value_overrides_default(self, tmp_path):
+        db_path = str(tmp_path / "test.db")
+        cfg_path = _write_config(tmp_path, {
+            "database": {"path": db_path},
+            "ssh_defaults": {"username": "beatlink"},
+            "plugins": [{
+                "name": "CPU", "id": "cpu", "type": "cpu_usage",
+                "ssh_config": {"host": "server.technet", "username": "root"},
+            }],
+        })
+        with patch("vigil.core.common.base_plugin.SSHConnection") as mock_ssh:
+            engine = VigilEngine(cfg_path)
+            engine.setup_modules()
+        passed_cfg = mock_ssh.from_config.call_args[0][0]
+        assert passed_cfg["ssh_config"]["username"] == "root"
+
+    def test_no_ssh_config_left_untouched(self, tmp_path):
+        db_path = str(tmp_path / "test.db")
+        cfg_path = _write_config(tmp_path, {
+            "database": {"path": db_path},
+            "ssh_defaults": {"username": "beatlink"},
+            "plugins": [{
+                "name": "Host", "id": "host", "type": "uptime",
+                "target_host": "127.0.0.1",
+            }],
+        })
+        with patch("vigil.core.common.base_plugin.SSHConnection") as mock_ssh:
+            engine = VigilEngine(cfg_path)
+            engine.setup_modules()
+        passed_cfg = mock_ssh.from_config.call_args[0][0]
+        assert "ssh_config" not in passed_cfg
+
+
 class TestBFSPollOrdering:
     """Group plugins must aggregate AFTER their children have written fresh status."""
 

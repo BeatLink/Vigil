@@ -25,6 +25,24 @@ class VigilEngine:
             logging.critical(f"Failed to initialize database: {e}. Exiting.")
             sys.exit(1)
 
+    def _apply_ssh_defaults(self, plugin_cfg: Dict) -> Dict:
+        """
+        Return a copy of ``plugin_cfg`` with the global ``ssh_defaults`` merged
+        into its ``ssh_config``. Keys already present on the plugin take
+        precedence, so a monitor can override the username, key, etc. locally.
+
+        Only applied to plugins that actually use SSH (those with an
+        ``ssh_config`` block); leaf plugins that connect by ``target_host``
+        alone (e.g. uptime/ICMP) and plain groups are left untouched.
+        """
+        defaults = self.config_loader.ssh_defaults
+        if not defaults or 'ssh_config' not in plugin_cfg:
+            return plugin_cfg
+
+        merged = dict(plugin_cfg)
+        merged['ssh_config'] = {**defaults, **plugin_cfg['ssh_config']}
+        return merged
+
     def setup_modules(self, plugins_cfg: Optional[List[Dict]] = None) -> List[BasePlugin]:
         """
         Dynamically instantiates plugins and injects internal modules.
@@ -36,6 +54,9 @@ class VigilEngine:
         for plugin_cfg in target_cfg:
             name = plugin_cfg.get('name')
             p_type = plugin_cfg.get('type')
+            # Merge global SSH defaults (e.g. username, key_path) into this
+            # plugin's ssh_config. Per-plugin values always win over defaults.
+            plugin_cfg = self._apply_ssh_defaults(plugin_cfg)
             # Dynamically load the plugin class and inject dependencies
             try:
                 module_path = f"vigil.plugins.{p_type}"
