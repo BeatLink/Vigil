@@ -8,6 +8,12 @@
 database:
   path: "vigil.db"
 
+# Log storage settings
+# Collected log lines (e.g. journald output) are stored persistently and
+# deduplicated. Old lines are pruned automatically.
+logging:
+  retention_days: 30   # Days to keep log lines; 0 disables pruning (keep forever)
+
 # Global SSH connection defaults.
 # Merged into every plugin's `ssh_config` unless the plugin overrides a given
 # key, so a single username/key can apply across all SSH-based monitors instead

@@ -172,6 +172,44 @@ class TestSSHDefaultsMerge:
         assert "ssh_config" not in passed_cfg
 
 
+class TestLogRetention:
+    def test_retention_days_loaded_from_config(self, tmp_path):
+        cfg_path = _write_config(tmp_path, {
+            "database": {"path": str(tmp_path / "t.db")},
+            "logging": {"retention_days": 14},
+            "plugins": [],
+        })
+        with patch("vigil.core.common.base_plugin.SSHConnection"):
+            engine = VigilEngine(cfg_path)
+        assert engine.log_retention_days == 14
+
+    def test_maybe_prune_throttles(self, tmp_path):
+        cfg_path = _write_config(tmp_path, {
+            "database": {"path": str(tmp_path / "t.db")},
+            "logging": {"retention_days": 30},
+            "plugins": [],
+        })
+        with patch("vigil.core.common.base_plugin.SSHConnection"):
+            engine = VigilEngine(cfg_path)
+        engine.db = MagicMock()
+        engine._maybe_prune_logs()          # first call prunes
+        engine._maybe_prune_logs()          # immediate second call is throttled
+        assert engine.db.prune_logs.call_count == 1
+        engine.db.prune_logs.assert_called_with(30)
+
+    def test_prune_disabled_when_retention_zero(self, tmp_path):
+        cfg_path = _write_config(tmp_path, {
+            "database": {"path": str(tmp_path / "t.db")},
+            "logging": {"retention_days": 0},
+            "plugins": [],
+        })
+        with patch("vigil.core.common.base_plugin.SSHConnection"):
+            engine = VigilEngine(cfg_path)
+        engine.db = MagicMock()
+        engine._maybe_prune_logs()
+        engine.db.prune_logs.assert_not_called()
+
+
 class TestBFSPollOrdering:
     """Group plugins must aggregate AFTER their children have written fresh status."""
 

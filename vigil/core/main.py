@@ -3,6 +3,7 @@ import logging
 import importlib
 import inspect
 import sys
+import time
 from typing import List, Optional, Dict
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.data.config_file import ConfigFileManager as VigilConfig
@@ -14,6 +15,8 @@ class VigilEngine:
         self.config_loader = VigilConfig(config_path)
         self.config = self.config_loader.data
         self.plugins: List[BasePlugin] = []
+        self.log_retention_days = self.config_loader.log_retention_days
+        self._last_prune = 0.0  # monotonic time of the last retention prune
         if db_path_override:
             self.db_path = db_path_override
         else:
@@ -114,4 +117,22 @@ class VigilEngine:
             else:
                 logging.debug("No plugins configured.")
 
+            self._maybe_prune_logs()
+
             await asyncio.sleep(60)
+
+    def _maybe_prune_logs(self, interval: float = 3600.0):
+        """
+        Prune expired log lines at most once per `interval` seconds, so the
+        retention sweep runs roughly hourly rather than every polling cycle.
+        """
+        if self.log_retention_days <= 0:
+            return
+        now = time.monotonic()
+        if now - self._last_prune < interval:
+            return
+        self._last_prune = now
+        try:
+            self.db.prune_logs(self.log_retention_days)
+        except Exception as e:
+            logging.error(f"Log retention prune failed: {e}")

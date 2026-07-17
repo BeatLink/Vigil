@@ -42,6 +42,47 @@ class SystemdPlugin(BasePlugin):
     # Collection
     # -------------------------------------------------------------------------
 
+    async def _collect_journal(self) -> bool:
+        """
+        Fetch the last `lines` journald entries for the unit and persist them
+        with per-line deduplication.
+
+        Uses `--output=short-iso` so each line is prefixed with a stable,
+        sortable timestamp. That timestamp anchors the dedup identity, so the
+        same line re-appearing on the next cycle is stored only once. Returns
+        True on a successful fetch, False on error (caller decides status).
+        """
+        ret, stdout, stderr = await self.ssh_collector.fetch_output(
+            f"journalctl -u {self.service_name} -n {self.lines} "
+            f"--no-pager --output=short-iso"
+        )
+        if ret != 0:
+            self.db_logger.write(f"Log collection failed: {stderr}", level="ERROR")
+            return False
+
+        for line in stdout.splitlines():
+            if not line.strip():
+                continue
+            log_time, message = self._split_iso_line(line)
+            level = 'ERROR' if any(k in line.upper() for k in ('ERROR', 'FAIL', 'CRITICAL')) else 'INFO'
+            self.db_logger.log_line(message, level=level, log_time=log_time)
+        return True
+
+    @staticmethod
+    def _split_iso_line(line: str):
+        """
+        Split a `short-iso` journald line into (timestamp, message).
+
+        Format: '2024-05-01T12:00:00+0000 host unit[pid]: message'. The first
+        three whitespace-separated tokens are the ISO timestamp, host, and unit
+        prefix; we keep the timestamp for dedup and store the full line as the
+        message so nothing is lost. Falls back gracefully on unexpected shapes.
+        """
+        parts = line.split(' ', 1)
+        if len(parts) == 2 and 'T' in parts[0] and parts[0][:4].isdigit():
+            return parts[0], line
+        return None, line
+
     async def on_collect(self):
         if self.max_age is not None:
             await self._collect_oneshot()
@@ -56,16 +97,9 @@ class SystemdPlugin(BasePlugin):
         is_active = s_ret == 0 and s_out.strip() == 'active'
         self.db_metrics.metric('active', 1.0 if is_active else 0.0)
 
-        l_ret, stdout, stderr = await self.ssh_collector.fetch_output(
-            f"journalctl -u {self.service_name} -n {self.lines} --no-pager"
-        )
-        if l_ret == 0:
-            for line in stdout.splitlines():
-                lvl = 'ERROR' if any(k in line.upper() for k in ('ERROR', 'FAIL', 'CRITICAL')) else 'INFO'
-                self.db_logger.write(line, level=lvl)
+        if await self._collect_journal():
             self.set_status('online' if is_active else 'warning')
         else:
-            self.db_logger.write(f"Log collection failed: {stderr}", level="ERROR")
             self.set_status('failed')
 
     async def _collect_oneshot(self):
@@ -148,14 +182,8 @@ class SystemdPlugin(BasePlugin):
             self.db_logger.write(f"Last run {format_age(age)}, result: {result}", level="INFO")
             self.set_status('online')
 
-        # Fetch recent logs regardless of result
-        l_ret, log_out, _ = await self.ssh_collector.fetch_output(
-            f"journalctl -u {self.service_name} -n {self.lines} --no-pager"
-        )
-        if l_ret == 0:
-            for line in log_out.splitlines():
-                lvl = 'ERROR' if any(k in line.upper() for k in ('ERROR', 'FAIL', 'CRITICAL')) else 'INFO'
-                self.db_logger.write(line, level=lvl)
+        # Fetch recent logs regardless of result (deduplicated + persisted)
+        await self._collect_journal()
 
     # -------------------------------------------------------------------------
     # UI

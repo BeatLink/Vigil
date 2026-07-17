@@ -1,5 +1,6 @@
+from datetime import datetime, timedelta
 import pytest
-from vigil.core.data.database import DatabaseManager, Metric, Event, Setting, StatusHistory, db
+from vigil.core.data.database import DatabaseManager, Metric, Event, Setting, StatusHistory, LogLine, db
 
 
 @pytest.fixture
@@ -19,6 +20,7 @@ class TestDatabaseManagerInit:
             assert Event.table_exists()
             assert Setting.table_exists()
             assert StatusHistory.table_exists()
+            assert LogLine.table_exists()
 
 
 class TestMetrics:
@@ -82,6 +84,106 @@ class TestStatusHistory:
                 StatusHistory.collector_id == "plugin-b"
             ).order_by(StatusHistory.timestamp.desc()).first()
         assert latest.state == "failed"
+
+
+class TestLogLineStorage:
+    def test_creates_logline_table(self, mgr):
+        with db.connection_context():
+            assert LogLine.table_exists()
+
+    def test_insert_stores_line(self, mgr):
+        assert mgr.insert_log_line("host1", "nginx", "INFO", "started ok") is True
+        with db.connection_context():
+            row = LogLine.select().where(LogLine.target == "host1").first()
+        assert row is not None
+        assert row.message == "started ok"
+        assert row.source == "nginx"
+        assert row.level == "INFO"
+
+    def test_duplicate_line_not_stored_twice(self, mgr):
+        first = mgr.insert_log_line("h", "svc", "INFO", "same line", log_time="2024-01-01T00:00:00")
+        second = mgr.insert_log_line("h", "svc", "INFO", "same line", log_time="2024-01-01T00:00:00")
+        assert first is True
+        assert second is False
+        with db.connection_context():
+            count = LogLine.select().where(LogLine.message == "same line").count()
+        assert count == 1
+
+    def test_same_text_different_time_stored_separately(self, mgr):
+        mgr.insert_log_line("h", "svc", "INFO", "tick", log_time="2024-01-01T00:00:00")
+        mgr.insert_log_line("h", "svc", "INFO", "tick", log_time="2024-01-01T00:00:01")
+        with db.connection_context():
+            count = LogLine.select().where(LogLine.message == "tick").count()
+        assert count == 2
+
+    def test_same_text_different_target_stored_separately(self, mgr):
+        mgr.insert_log_line("hostA", "svc", "INFO", "boot")
+        mgr.insert_log_line("hostB", "svc", "INFO", "boot")
+        with db.connection_context():
+            count = LogLine.select().where(LogLine.message == "boot").count()
+        assert count == 2
+
+    def test_dedup_without_log_time_collapses_repeats(self, mgr):
+        # No log_time provided — identical (target, source, message) still dedups.
+        mgr.insert_log_line("h", "svc", "INFO", "repeated")
+        mgr.insert_log_line("h", "svc", "INFO", "repeated")
+        with db.connection_context():
+            count = LogLine.select().where(LogLine.message == "repeated").count()
+        assert count == 1
+
+
+class TestLogRetention:
+    def _insert_aged(self, days_old: int, message: str):
+        # Insert directly with a backdated timestamp to simulate old rows.
+        with db.connection_context():
+            LogLine.create(
+                timestamp=datetime.now() - timedelta(days=days_old),
+                target="h", source="svc", level="INFO", message=message,
+                dedup_hash=f"hash-{message}",
+            )
+
+    def test_prune_removes_old_lines(self, mgr):
+        self._insert_aged(40, "old")
+        self._insert_aged(1, "fresh")
+        deleted = mgr.prune_logs(retention_days=30)
+        assert deleted == 1
+        with db.connection_context():
+            remaining = [r.message for r in LogLine.select()]
+        assert remaining == ["fresh"]
+
+    def test_prune_zero_disables_and_keeps_all(self, mgr):
+        self._insert_aged(400, "ancient")
+        assert mgr.prune_logs(retention_days=0) == 0
+        with db.connection_context():
+            assert LogLine.select().count() == 1
+
+    def test_prune_negative_disables(self, mgr):
+        self._insert_aged(400, "ancient")
+        assert mgr.prune_logs(retention_days=-1) == 0
+
+    def test_prune_keeps_lines_within_window(self, mgr):
+        self._insert_aged(5, "recent")
+        assert mgr.prune_logs(retention_days=30) == 0
+        with db.connection_context():
+            assert LogLine.select().count() == 1
+
+
+class TestLogLineLogger:
+    def test_log_line_via_logger(self, mgr):
+        logger = mgr.get_logger("host1", "my-plugin")
+        stored = logger.log_line("a log message", level="ERROR", log_time="2024-01-01T00:00:00")
+        assert stored is True
+        with db.connection_context():
+            row = LogLine.select().where(LogLine.source == "my-plugin").first()
+        assert row is not None
+        assert row.message == "a log message"
+        assert row.level == "ERROR"
+        assert row.target == "host1"
+
+    def test_logger_dedups_repeated_line(self, mgr):
+        logger = mgr.get_logger("host1", "my-plugin")
+        assert logger.log_line("dup", log_time="t1") is True
+        assert logger.log_line("dup", log_time="t1") is False
 
 
 class TestSettings:

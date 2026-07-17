@@ -2,7 +2,7 @@ import time
 import pytest
 from unittest.mock import AsyncMock
 from vigil.plugins.systemd_service import SystemdPlugin
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.data.database import db, StatusHistory, Metric, LogLine
 
 
 CONTINUOUS_CFG = {
@@ -94,6 +94,41 @@ class TestContinuousMode:
         ])
         await plugin.on_collect()
         assert _latest_status("test-nginx") == "failed"
+
+
+    async def test_journal_lines_persisted(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
+            (0, "active", ""),                                        # is-active
+            (0, "2024-05-01T12:00:00+0000 host nginx[1]: started", ""),  # journalctl short-iso
+        ])
+        await plugin.on_collect()
+        with db.connection_context():
+            rows = list(LogLine.select().where(LogLine.source == "test-nginx"))
+        assert len(rows) == 1
+        assert "started" in rows[0].message
+
+    async def test_repeated_journal_line_deduplicated(self, plugin):
+        line = "2024-05-01T12:00:00+0000 host nginx[1]: same message"
+        # Two identical collection cycles: the line must be stored only once.
+        for _ in range(2):
+            plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
+                (0, "active", ""),
+                (0, line, ""),
+            ])
+            await plugin.on_collect()
+        with db.connection_context():
+            count = LogLine.select().where(LogLine.source == "test-nginx").count()
+        assert count == 1
+
+    async def test_error_line_classified_as_error(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
+            (0, "active", ""),
+            (0, "2024-05-01T12:00:00+0000 host nginx[1]: FAILED to bind", ""),
+        ])
+        await plugin.on_collect()
+        with db.connection_context():
+            row = LogLine.select().where(LogLine.source == "test-nginx").first()
+        assert row.level == "ERROR"
 
 
 # ---------------------------------------------------------------------------

@@ -45,6 +45,34 @@ class ConfigFileManager:
         """Returns the theme overrides section (may be empty)."""
         return self.data.get('theme', {})
 
+    # Default log retention in days when not configured. Chosen to keep a
+    # useful history without letting the SQLite file grow without bound.
+    DEFAULT_LOG_RETENTION_DAYS = 30
+
+    @property
+    def logging_settings(self) -> Dict[str, Any]:
+        """Returns the logging section (may be empty)."""
+        return self.data.get('logging', {})
+
+    @property
+    def log_retention_days(self) -> int:
+        """
+        Number of days to keep collected log lines before pruning.
+
+        Read from `logging.retention_days`; defaults to
+        DEFAULT_LOG_RETENTION_DAYS. A value <= 0 disables pruning (logs kept
+        indefinitely).
+        """
+        value = self.logging_settings.get('retention_days', self.DEFAULT_LOG_RETENTION_DAYS)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logging.warning(
+                f"Invalid logging.retention_days={value!r}; "
+                f"falling back to {self.DEFAULT_LOG_RETENTION_DAYS}"
+            )
+            return self.DEFAULT_LOG_RETENTION_DAYS
+
     @property
     def ssh_defaults(self) -> Dict[str, Any]:
         """

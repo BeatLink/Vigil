@@ -45,8 +45,15 @@ def metric_table(collector: str, title: str = 'Monitor Metrics', limit: int = 15
         return table
 
 def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', limit: int = 15, full_height: bool = False):
-    """A standardized table for displaying log events, optionally filling available height."""
-    from vigil.core.data.database import Event
+    """
+    A standardized table for displaying persisted log lines, optionally filling
+    available height.
+
+    Reads from the LogLine table (deduplicated, retained log storage). When
+    `filter_prefix` is given it scopes to that source (the plugin name); with no
+    prefix it shows every source for the target.
+    """
+    from vigil.core.data.database import LogLine
     card_classes = 'w-full overflow-hidden flex-grow' if full_height else ''
     
     with card(card_classes, padding=not full_height):
@@ -71,10 +78,10 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
             table.props('virtual-scroll')
 
         def update_logs():
-            condition = (Event.target == target)
+            condition = (LogLine.target == target)
             if filter_prefix:
-                condition &= (Event.message.contains(f"[{filter_prefix}]"))
-            query = Event.select().where(condition).order_by(Event.timestamp.desc()).limit(limit)
+                condition &= (LogLine.source == filter_prefix)
+            query = LogLine.select().where(condition).order_by(LogLine.timestamp.desc()).limit(limit)
             table.rows[:] = [e.__data__ for e in query]
 
         ui.timer(5.0, update_logs)

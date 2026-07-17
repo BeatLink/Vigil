@@ -88,6 +88,32 @@ class TestSSHDefaults:
         assert cfg.ssh_defaults == {}
 
 
+class TestLogRetentionConfig:
+    def test_defaults_to_30_days(self, write_yaml):
+        path = write_yaml({"plugins": []})
+        cfg = ConfigFileManager(path)
+        assert cfg.log_retention_days == 30
+
+    def test_reads_configured_value(self, write_yaml):
+        path = write_yaml({"logging": {"retention_days": 7}})
+        cfg = ConfigFileManager(path)
+        assert cfg.log_retention_days == 7
+
+    def test_zero_disables_pruning(self, write_yaml):
+        path = write_yaml({"logging": {"retention_days": 0}})
+        cfg = ConfigFileManager(path)
+        assert cfg.log_retention_days == 0
+
+    def test_invalid_value_falls_back_to_default(self, write_yaml):
+        path = write_yaml({"logging": {"retention_days": "not-a-number"}})
+        cfg = ConfigFileManager(path)
+        assert cfg.log_retention_days == 30
+
+    def test_missing_when_file_missing(self, tmp_path):
+        cfg = ConfigFileManager(str(tmp_path / "missing.yaml"))
+        assert cfg.log_retention_days == 30
+
+
 class TestAlertAndControlProperties:
     def test_alert_handlers_empty_when_missing(self, write_yaml):
         path = write_yaml({"plugins": []})
