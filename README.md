@@ -979,6 +979,12 @@ exporters:
 - [x] Prometheus `/metrics` export endpoint (pull)
 - [x] InfluxDB export (push, 1.x and 2.x)
 - [ ] Basic alerting (Email, Slack, or Webhook)
+- [ ] Authentication + HTTPS for the dashboard and REST API
+- [ ] Boot-uptime monitor (`uptime -p` — how long the host has been up, distinct from ping reachability)
+- [ ] Public IP / geolocation monitor
+- [ ] CSV / JSON file export (flat-file dump alongside the Prometheus/InfluxDB exporters)
+- [ ] Additional export backends (Graphite, MQTT, Elasticsearch, …)
+- [ ] Per-core CPU breakdown in the CPU monitor
 
 ---
 
