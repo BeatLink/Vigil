@@ -136,6 +136,13 @@ class TestCommand:
         assert "--json" in cmd
         assert "ssh://borg@host/srv/repo" in cmd
 
+    def test_command_bypasses_lock(self, make_plugin):
+        # Read-only health check on a repo Vigil can read but not write (e.g.
+        # a 0750 borg-group repo): borg's normal lock writes into the repo dir
+        # and fails with EACCES, so the poll must skip locking entirely.
+        p = make_plugin(BorgPlugin, BASE_CFG)
+        assert "--bypass-lock" in p._list_command()
+
     def test_passphrase_passed_as_env_not_argv(self, make_plugin):
         p = make_plugin(BorgPlugin, {**BASE_CFG, "passphrase": "s3cret"})
         cmd = p._list_command()

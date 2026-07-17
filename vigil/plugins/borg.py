@@ -105,6 +105,13 @@ class BorgPlugin(BasePlugin):
             self.borg_bin, "list",
             "--last", "1",
             "--json",
+            # Read-only health check: skip lock acquisition entirely. Vigil
+            # typically reads a repo it can traverse but not write (e.g. the
+            # `borg` group on a 0750 repo), where taking borg's normal lock —
+            # which writes lock.exclusive into the repo dir — fails with
+            # "Permission denied" and the poll never reads an archive. Bypassing
+            # the lock also means a concurrent backup can't block the poll.
+            "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             self.repo,
         ]
