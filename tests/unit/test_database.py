@@ -86,6 +86,32 @@ class TestStatusHistory:
         assert latest.state == "failed"
 
 
+class TestLatestStatuses:
+    def test_empty_when_no_status(self, mgr):
+        assert mgr.latest_statuses() == {}
+
+    def test_returns_latest_per_monitor(self, mgr):
+        mgr.insert_status("a", "online")
+        mgr.insert_status("b", "failed")
+        mgr.insert_status("a", "warning")  # newer for 'a'
+        result = mgr.latest_statuses()
+        assert result == {"a": "warning", "b": "failed"}
+
+    def test_missing_monitor_absent_from_map(self, mgr):
+        mgr.insert_status("a", "online")
+        result = mgr.latest_statuses()
+        assert "nonexistent" not in result
+
+    def test_single_query_shape(self, mgr):
+        # Many monitors, one call — result covers each exactly once.
+        for i in range(20):
+            mgr.insert_status(f"m{i}", "online")
+            mgr.insert_status(f"m{i}", "failed")  # latest
+        result = mgr.latest_statuses()
+        assert len(result) == 20
+        assert all(v == "failed" for v in result.values())
+
+
 class TestLogLineStorage:
     def test_creates_logline_table(self, mgr):
         with db.connection_context():

@@ -1,7 +1,7 @@
 import logging
 import hashlib
 from datetime import datetime, timedelta
-from typing import Optional, Any
+from typing import Optional, Any, Dict
 from peewee import *
 
 # Initialize a Peewee database instance
