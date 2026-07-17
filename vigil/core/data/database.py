@@ -119,6 +119,30 @@ class DatabaseManager:
             StatusHistory.create(collector_id=collector_id, state=state)
             logging.debug(f"Recorded status for {collector_id}: {state}")
 
+    def latest_statuses(self) -> Dict[str, str]:
+        """
+        Return {collector_id: state} with the most recent status for every
+        monitor, in a single query.
+
+        The dashboard renders a status per monitor in several places (tree,
+        table, charts). Doing one 'latest row' query per monitor means hundreds
+        of sequential SQLite reads at page load — slow, and worse while the
+        polling loop holds the write lock. This collapses that to one grouped
+        query. Monitors with no status row yet simply won't appear in the map;
+        callers treat a missing id as 'offline'.
+        """
+        with db.connection_context():
+            # Highest id per collector_id == its most recent row (id is a
+            # monotonic rowid, so it breaks timestamp ties deterministically
+            # and avoids a second lookup). One grouped subquery + one join.
+            newest = (StatusHistory
+                      .select(fn.MAX(StatusHistory.id).alias('max_id'))
+                      .group_by(StatusHistory.collector_id))
+            query = (StatusHistory
+                     .select(StatusHistory.collector_id, StatusHistory.state)
+                     .where(StatusHistory.id.in_(newest)))
+            return {row.collector_id: row.state for row in query}
+
     def insert_event(self, level: str, message: str, target: Optional[str] = None):
         """Inserts a new event record."""
         with db.connection_context():

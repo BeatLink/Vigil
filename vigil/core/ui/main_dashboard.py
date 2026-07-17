@@ -72,25 +72,26 @@ def init_gui(engine: Any, port: int = 8080):
           with ui.list().classes('w-full').props('dense'):
               ui.item('All Monitors', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {TEXT}')
             
-          def build_tree_nodes(plugins):
+          def build_tree_nodes(plugins, statuses=None):
               """Recursive helper to build data structure for ui.tree."""
-              with StatusHistory._meta.database.connection_context():
-                  nodes = []
-                  for p in plugins:
-                      # Fetch the latest status to determine the icon color
-                      latest = StatusHistory.select().where(StatusHistory.collector_id == p.id).order_by(StatusHistory.timestamp.desc()).first()
-                      state = latest.state if latest else 'offline'
+              # Fetch every monitor's latest status in one query, then reuse the
+              # map across the whole (recursive) tree instead of querying per node.
+              if statuses is None:
+                  statuses = engine.db.latest_statuses()
+              nodes = []
+              for p in plugins:
+                  state = statuses.get(p.id, 'offline')
 
-                      node = {
-                          'id': p.id,
-                          'label': p.name,
-                          'icon': 'circle',
-                          'color': STATUS_COLORS[state]
-                      }
-                      if p.children:
-                          node['children'] = build_tree_nodes(p.children)
-                      nodes.append(node)
-                  return nodes
+                  node = {
+                      'id': p.id,
+                      'label': p.name,
+                      'icon': 'circle',
+                      'color': STATUS_COLORS[state]
+                  }
+                  if p.children:
+                      node['children'] = build_tree_nodes(p.children, statuses)
+                  nodes.append(node)
+              return nodes
 
           def find_plugin_by_id(plugins, target_id):
               """Helper to locate a plugin instance by its unique ID."""
@@ -277,41 +278,35 @@ def init_gui(engine: Any, port: int = 8080):
 
           def update_table():
               rows = []
-              with StatusHistory._meta.database.connection_context():
-                  for m in all_monitors:
-                      latest = StatusHistory.select().where(
-                          StatusHistory.collector_id == m.id
-                      ).order_by(StatusHistory.timestamp.desc()).first()
-                      st = latest.state if latest else 'offline'
-                      mtype = m.config.get('type', 'unknown')
+              statuses = engine.db.latest_statuses()
+              for m in all_monitors:
+                  st = statuses.get(m.id, 'offline')
+                  mtype = m.config.get('type', 'unknown')
 
-                      if filter_state['field'] == 'status' and st != filter_state['value']:
-                          continue
-                      if filter_state['field'] == 'type' and mtype != filter_state['value']:
-                          continue
+                  if filter_state['field'] == 'status' and st != filter_state['value']:
+                      continue
+                  if filter_state['field'] == 'type' and mtype != filter_state['value']:
+                      continue
 
-                      rows.append({
-                          'id': m.id,
-                          'name': m.name,
-                          'type': mtype.upper(),
-                          'host': m.target,
-                          'status': st.upper(),
-                          'status_color': STATUS_COLORS.get(st, STATUS_COLORS['offline']),
-                      })
+                  rows.append({
+                      'id': m.id,
+                      'name': m.name,
+                      'type': mtype.upper(),
+                      'host': m.target,
+                      'status': st.upper(),
+                      'status_color': STATUS_COLORS.get(st, STATUS_COLORS['offline']),
+                  })
               monitor_table.rows[:] = rows
 
           def update_charts():
               status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'offline': 0}
               type_counts = {}
-              with StatusHistory._meta.database.connection_context():
-                  for m in all_monitors:
-                      latest = StatusHistory.select().where(
-                          StatusHistory.collector_id == m.id
-                      ).order_by(StatusHistory.timestamp.desc()).first()
-                      st = latest.state if latest else 'offline'
-                      status_counts[st] = status_counts.get(st, 0) + 1
-                      mtype = m.config.get('type', 'unknown')
-                      type_counts[mtype] = type_counts.get(mtype, 0) + 1
+              statuses = engine.db.latest_statuses()
+              for m in all_monitors:
+                  st = statuses.get(m.id, 'offline')
+                  status_counts[st] = status_counts.get(st, 0) + 1
+                  mtype = m.config.get('type', 'unknown')
+                  type_counts[mtype] = type_counts.get(mtype, 0) + 1
 
               status_chart.options['series'][0]['data'] = [
                   {'value': status_counts['online'],  'name': 'Online',  'itemStyle': {'color': STATUS_COLORS['online']}},
