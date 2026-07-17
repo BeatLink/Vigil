@@ -156,6 +156,36 @@ class TestCommand:
         assert "BORG_PASSCOMMAND=" in cmd
         assert "BORG_PASSPHRASE=" not in cmd
 
+    def test_passphrase_file_inlined_as_passphrase(self, make_plugin, tmp_path):
+        # The file is read on the Vigil host and its contents inlined as
+        # BORG_PASSPHRASE, so the remote host needs no copy of the secret.
+        pf = tmp_path / "borg.pass"
+        pf.write_text("s3cret-from-file\n")  # trailing newline must be stripped
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "passphrase_file": str(pf)})
+        cmd = p._list_command()
+        assert "BORG_PASSPHRASE=s3cret-from-file" in cmd
+        assert "BORG_PASSCOMMAND=" not in cmd
+        # Never passed as a passcommand path — the secret value is inlined.
+        assert str(pf) not in cmd
+
+    def test_passphrase_beats_passphrase_file(self, make_plugin, tmp_path):
+        pf = tmp_path / "borg.pass"
+        pf.write_text("from-file")
+        p = make_plugin(BorgPlugin, {
+            **BASE_CFG, "passphrase": "inline-wins", "passphrase_file": str(pf),
+        })
+        cmd = p._list_command()
+        assert "BORG_PASSPHRASE=inline-wins" in cmd
+        assert "from-file" not in cmd
+
+    def test_missing_passphrase_file_omits_env(self, make_plugin, tmp_path):
+        # An unreadable file must not crash command building; it logs and falls
+        # through to no passphrase (borg then fails clearly on the encrypted repo).
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "passphrase_file": str(tmp_path / "nope")})
+        cmd = p._list_command()
+        assert "BORG_PASSPHRASE=" not in cmd
+        assert "BORG_PASSCOMMAND=" not in cmd
+
     def test_no_passphrase_omits_env(self, make_plugin):
         p = make_plugin(BorgPlugin, BASE_CFG)
         cmd = p._list_command()

@@ -64,19 +64,30 @@ class BorgPlugin(BasePlugin):
                          (e.g. "1d", "36h"). Defaults to "1d".
       passphrase         Repo passphrase for encrypted repos. Exported as
                          BORG_PASSPHRASE for the borg call. Optional.
+      passphrase_file    Path to a file on the Vigil host whose contents are the
+                         passphrase. Read locally each poll and exported as
+                         BORG_PASSPHRASE in the (remote) borg command, so the
+                         secret only lives on the machine Vigil runs on — the
+                         monitored host never needs a copy. Ideal for a sops- or
+                         agenix-managed secret. Optional.
       passphrase_command A shell command whose stdout is the passphrase (exported
                          as BORG_PASSCOMMAND, e.g. "cat /etc/vigil/repo.pass").
-                         Mutually exclusive with `passphrase`. Optional.
+                         Runs on the *remote* borg host, so the file must exist
+                         there. Optional.
       borg_bin           Path to the borg executable. Defaults to "borg".
       lock_wait          Seconds borg waits for a repo lock before giving up, so a
                          concurrent backup does not hang the poll. Defaults to 5.
       ssh_config.host    Host to run borg on (via BasePlugin's SSH config).
+
+    Passphrase precedence when more than one is set: `passphrase` >
+    `passphrase_file` > `passphrase_command`.
     """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.repo = config.get('repo')
         self.max_age = parse_duration(config.get('max_age', '1d'))
         self.passphrase = config.get('passphrase')
+        self.passphrase_file = config.get('passphrase_file')
         self.passphrase_command = config.get('passphrase_command')
         self.borg_bin = config.get('borg_bin', 'borg')
         self.lock_wait = config.get('lock_wait', 5)
@@ -85,19 +96,49 @@ class BorgPlugin(BasePlugin):
     # Collection
     # -------------------------------------------------------------------------
 
+    def _read_passphrase_file(self) -> Optional[str]:
+        """
+        Read the passphrase from `passphrase_file` on the local (Vigil) host.
+
+        The file is read fresh on every poll so a rotated secret is picked up
+        without restarting Vigil. A trailing newline (as `echo`/editors add) is
+        stripped. Returns None and logs on any read error, letting the caller
+        fall through to no passphrase (borg then fails clearly rather than the
+        poll raising).
+        """
+        try:
+            with open(self.passphrase_file, "r") as f:
+                return f.read().rstrip("\n")
+        except OSError as e:
+            self.db_logger.write(
+                f"Could not read passphrase_file {self.passphrase_file!r}: {e}",
+                level="ERROR",
+            )
+            return None
+
     def _list_command(self) -> str:
         """
         Build the shell command run on the SSH host: query the newest archive as
         JSON. Any passphrase is passed as an environment prefix so it never
         appears in argv (which is world-visible via `ps`).
 
+        A `passphrase_file` is read here, on the Vigil host, and its contents are
+        inlined as BORG_PASSPHRASE — so the secret only ever lives on the machine
+        Vigil runs on, and the monitored host needs no local copy. It still
+        crosses to the remote host, but inside the encrypted SSH channel and as
+        an env prefix (not argv), so it stays out of the remote `ps` listing.
+
         All arguments are shlex-quoted so repo paths/URLs with spaces are safe.
         """
         env = []
-        if self.passphrase_command is not None:
-            env.append("BORG_PASSCOMMAND=" + shlex.quote(self.passphrase_command))
-        elif self.passphrase is not None:
+        if self.passphrase is not None:
             env.append("BORG_PASSPHRASE=" + shlex.quote(self.passphrase))
+        elif self.passphrase_file is not None:
+            secret = self._read_passphrase_file()
+            if secret is not None:
+                env.append("BORG_PASSPHRASE=" + shlex.quote(secret))
+        elif self.passphrase_command is not None:
+            env.append("BORG_PASSCOMMAND=" + shlex.quote(self.passphrase_command))
         # Never prompt interactively — fail fast instead of hanging the poll.
         env.append("BORG_RELOCATED_REPO_ACCESS_IS_OK=no")
 
