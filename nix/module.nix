@@ -110,6 +110,9 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
 
+      # The uptime plugin shells out to `ping`, so iputils must be on PATH.
+      path = [ pkgs.iputils ];
+
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/vigil --config ${configFile} --db ${cfg.dataDir}/vigil.db --port ${toString cfg.port}";
         User = cfg.user;
@@ -125,7 +128,10 @@ in
         ProtectSystem = "strict";
         ProtectHome = true;
         ReadWritePaths = [ cfg.dataDir ];
-        CapabilityBoundingSet = "";
+        # ping needs CAP_NET_RAW to open its ICMP socket; grant just that one
+        # (ambient so the unprivileged service process actually receives it).
+        CapabilityBoundingSet = [ "CAP_NET_RAW" ];
+        AmbientCapabilities = [ "CAP_NET_RAW" ];
         LockPersonality = true;
         RestrictNamespaces = true;
         RestrictRealtime = true;
