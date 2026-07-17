@@ -87,9 +87,28 @@ class VigilEngine:
 
         return current_level_plugins
 
+    def _start_exporters(self):
+        """Launch configured push exporters (e.g. InfluxDB) as background tasks.
+
+        Pull exporters (Prometheus) need no task — they're served on demand by
+        the REST API's /metrics endpoint. Only push exporters run a loop here.
+        """
+        exporters_cfg = self.config_loader.exporters or {}
+        influx_cfg = exporters_cfg.get('influxdb')
+        if influx_cfg and influx_cfg.get('url'):
+            try:
+                from vigil.core.modules.exporters.influxdb import InfluxDBExporter
+                exporter = InfluxDBExporter(self.db, influx_cfg)
+                asyncio.create_task(exporter.run())
+                logging.info("InfluxDB exporter task started.")
+            except Exception as e:
+                logging.error(f"Failed to start InfluxDB exporter: {e}")
+
     async def run(self):
         logging.info("Vigil Engine started...")
         self.db.insert_event("INFO", "Vigil Engine started polling loop.", "vigil_core")
+
+        self._start_exporters()
 
         while True:
             # Build levels via BFS, then run bottom-up so group plugins always

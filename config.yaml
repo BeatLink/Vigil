@@ -14,6 +14,20 @@ database:
 logging:
   retention_days: 30   # Days to keep log lines; 0 disables pruning (keep forever)
 
+# Metric export (optional).
+# Prometheus is always available (pull) at GET /metrics — no config needed.
+# InfluxDB is a push exporter: enable it here to periodically ship metrics.
+# exporters:
+#   influxdb:
+#     url: "http://localhost:8086"
+#     interval: 30            # seconds between pushes
+#     # InfluxDB 2.x:
+#     org: "my-org"
+#     bucket: "vigil"
+#     token: "my-api-token"
+#     # InfluxDB 1.x (use instead of org/bucket/token):
+#     # database: "vigil"
+
 # Global SSH connection defaults.
 # Merged into every plugin's `ssh_config` unless the plugin overrides a given
 # key, so a single username/key can apply across all SSH-based monitors instead
@@ -218,5 +232,48 @@ plugins:
         # No pattern -> status is driven by exit code (0 = online, non-zero = below).
         command: "test ! -f /var/run/reboot-required"
         nonzero_is_warning: true   # reboot pending -> warning, not failed
+        ssh_config:
+          host: "server.example.com"
+
+  - name: "Storage & VMs"
+    type: "group"
+    children:
+      - name: "Filesystems"
+        id: "server-filesystems"
+        type: "filesystems"    # auto-discovers ALL real mounts (no per-path config)
+        interval: 5m
+        warning: 80            # usage % (warn / fail), applied to every filesystem
+        threshold: 90
+        ssh_config:
+          host: "server.example.com"
+      - name: "Folders"
+        id: "server-folders"
+        type: "folders"        # watch sizes of arbitrary directories via du
+        interval: 1h
+        folders:
+          - path: "/var/log"
+            warning: 5          # GB (warn / fail)
+            threshold: 10
+          - path: "/srv/media"  # size-only (no thresholds) — just track growth
+        ssh_config:
+          host: "server.example.com"
+      - name: "Virtual Machines"
+        id: "server-vms"
+        type: "vms"            # libvirt/KVM via virsh
+        interval: 1m
+        # uri: "qemu:///system"       # optional; this is the default
+        expect_running:               # these must be up, else failed; gives Start/Shutdown actions
+          - "web"
+        ssh_config:
+          host: "server.example.com"
+
+  - name: "Cloud"
+    type: "group"
+    children:
+      - name: "Instance Metadata"
+        id: "server-cloud"
+        type: "cloud"          # detects AWS/GCP/Azure via the metadata endpoint
+        interval: 15m
+        provider: "auto"       # or "aws" / "gcp" / "azure"
         ssh_config:
           host: "server.example.com"

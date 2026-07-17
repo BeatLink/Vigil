@@ -34,6 +34,13 @@ def init_gui(engine: Any, port: int = 8080):
 
     app.add_static_file(local_file=_ICON, url_path='/icon.svg')
 
+    # Register the REST API + Prometheus /metrics routes on the FastAPI app.
+    try:
+        from vigil.core.api import register_api
+        register_api(app, engine)
+    except Exception as e:
+        logging.error(f"Failed to register REST API: {e}")
+
     if engine_run_func:
         app.on_startup(engine_run_func)
 
@@ -71,6 +78,7 @@ def init_gui(engine: Any, port: int = 8080):
       with ui.left_drawer(value=True).classes('p-0 shadow-lg').props('width=350').style(f'background-color: {BACKGROUND}') as left_drawer:
           with ui.list().classes('w-full').props('dense'):
               ui.item('All Monitors', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {TEXT}')
+              ui.item('Events', on_click=lambda: switch_view('events')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {TEXT}')
             
           def build_tree_nodes(plugins, statuses=None):
               """Recursive helper to build data structure for ui.tree."""
@@ -150,11 +158,84 @@ def init_gui(engine: Any, port: int = 8080):
           with main_container:
               if state['current_view'] == 'overview':
                   render_overview()
+              elif state['current_view'] == 'events':
+                  render_events()
               else:
                   render_plugin_detail(state['selected_plugin'])
 
       # Expose render_main to switch_view (defined in the outer scope).
       state['render_main'] = render_main
+
+      def render_events():
+          """Unified, filterable feed of every event Vigil has recorded across all
+          monitors (status changes, threshold crossings, collection errors)."""
+          section_title('Events', 'mb-6 font-light')
+
+          _LEVEL_COLORS = {
+              'ERROR': STATUS_COLORS['failed'],
+              'WARNING': STATUS_COLORS['warning'],
+              'INFO': TEXT_MUTED,
+          }
+
+          # Filter controls: level, target host, free-text search.
+          ev_filter = {'level': None, 'target': None, 'search': None}
+
+          with ui.row().classes('w-full gap-4 mb-4 items-end'):
+              level_sel = ui.select(
+                  {None: 'All levels', 'ERROR': 'Error', 'WARNING': 'Warning', 'INFO': 'Info'},
+                  value=None, label='Level',
+              ).props('outlined dense options-dense').classes('w-40')
+              target_in = ui.input(label='Target').props('outlined dense clearable').classes('w-56')
+              search_in = ui.input(label='Search message').props('outlined dense clearable').classes('flex-1')
+
+          columns = [
+              {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left', 'sortable': True},
+              {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left', 'sortable': True},
+              {'name': 'target', 'label': 'Target', 'field': 'target', 'align': 'left', 'sortable': True},
+              {'name': 'message', 'label': 'Message', 'field': 'message', 'align': 'left'},
+          ]
+          with card('w-full'):
+              events_table = ui.table(columns=columns, rows=[], row_key='timestamp',
+                                      pagination=25).classes('w-full').style(f'color: {TEXT}')
+              # Color the level cell by severity.
+              events_table.add_slot('body-cell-level', '''
+                  <q-td :props="props">
+                      <span :style="{ color: props.row.level === 'ERROR' ? '%s'
+                                          : props.row.level === 'WARNING' ? '%s' : '%s',
+                                      fontWeight: 600 }">
+                          {{ props.row.level }}
+                      </span>
+                  </q-td>
+              ''' % (_LEVEL_COLORS['ERROR'], _LEVEL_COLORS['WARNING'], _LEVEL_COLORS['INFO']))
+
+          def refresh_events():
+              rows = engine.db.recent_events(
+                  limit=500,
+                  level=ev_filter['level'],
+                  target=(ev_filter['target'] or None),
+                  search=(ev_filter['search'] or None),
+              )
+              events_table.rows = rows
+              events_table.update()
+
+          def _on_level(e):
+              ev_filter['level'] = e.value
+              refresh_events()
+
+          def _on_target(e):
+              ev_filter['target'] = (e.value or '').strip() or None
+              refresh_events()
+
+          def _on_search(e):
+              ev_filter['search'] = (e.value or '').strip() or None
+              refresh_events()
+
+          level_sel.on_value_change(_on_level)
+          target_in.on_value_change(_on_target)
+          search_in.on_value_change(_on_search)
+
+          refresh_events()
+          safe_timer(5.0, refresh_events)
 
       def render_overview():
           section_title('Monitors', 'mb-6 font-light')

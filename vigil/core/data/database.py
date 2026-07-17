@@ -236,9 +236,65 @@ class DatabaseManager:
                      .where(StatusHistory.id.in_(newest)))
             return {row.collector_id: row.state for row in query}
 
+    def latest_metrics(self):
+        """
+        Return the most recent value of every (collector, metric_name) pair as a
+        list of dicts: {target, collector, metric_name, value, timestamp}.
+
+        One grouped query (max id per collector+metric) + one join, mirroring
+        latest_statuses(). Used by the Prometheus exporter and the REST API so a
+        scrape/request is a single fast read rather than one query per series.
+        """
+        with db.connection_context():
+            newest = (Metric
+                      .select(fn.MAX(Metric.id).alias('max_id'))
+                      .group_by(Metric.collector, Metric.metric_name))
+            query = (Metric
+                     .select(Metric.target, Metric.collector, Metric.metric_name,
+                             Metric.value, Metric.timestamp)
+                     .where(Metric.id.in_(newest)))
+            return [
+                {
+                    'target': m.target,
+                    'collector': m.collector,
+                    'metric_name': m.metric_name,
+                    'value': m.value,
+                    'timestamp': m.timestamp.isoformat(sep=' ', timespec='seconds'),
+                }
+                for m in query
+            ]
+
     def insert_event(self, level: str, message: str, target: Optional[str] = None):
         """Queue an event record for the background writer (non-blocking)."""
         _writer.submit(lambda: Event.create(level=level, message=message, target=target))
+
+    def recent_events(self, limit: int = 200, level: Optional[str] = None,
+                      target: Optional[str] = None, search: Optional[str] = None):
+        """
+        Return recent events (newest first) for the unified events feed, with
+        optional filtering by level, target host, and message substring.
+
+        Returns a list of plain dicts (not model instances) so callers — the
+        events UI and the REST API — can consume it without holding a DB
+        connection or importing peewee models.
+        """
+        with db.connection_context():
+            query = Event.select().order_by(Event.timestamp.desc())
+            if level:
+                query = query.where(Event.level == level)
+            if target:
+                query = query.where(Event.target == target)
+            if search:
+                query = query.where(Event.message.contains(search))
+            return [
+                {
+                    'timestamp': e.timestamp.isoformat(sep=' ', timespec='seconds'),
+                    'level': e.level,
+                    'target': e.target or '',
+                    'message': e.message,
+                }
+                for e in query.limit(limit)
+            ]
 
     def insert_log_line(self, target: str, source: str, level: str, message: str,
                         log_time: Optional[str] = None):

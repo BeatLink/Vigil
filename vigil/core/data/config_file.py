@@ -45,6 +45,11 @@ class ConfigFileManager:
         """Returns the theme overrides section (may be empty)."""
         return self.data.get('theme', {})
 
+    @property
+    def exporters(self) -> Dict[str, Any]:
+        """Returns the exporters section (e.g. influxdb push config). May be empty."""
+        return self.data.get('exporters', {})
+
     # Default log retention in days when not configured. Chosen to keep a
     # useful history without letting the SQLite file grow without bound.
     DEFAULT_LOG_RETENTION_DAYS = 30

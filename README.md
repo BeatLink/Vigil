@@ -120,6 +120,10 @@ theme:
 | [`containers`](#containers)             | Docker / Podman container states      | SSH (`docker`/`podman ps`)                       | `containers_total`, `containers_running`, `containers_stopped` | Restart (per expected container) |
 | [`raid`](#raid)                         | Linux software RAID (mdadm) health    | SSH (`/proc/mdstat`)                             | `arrays_total`, `arrays_ok`, `arrays_degraded`  | — |
 | [`command`](#command)                   | Arbitrary command (generic check)     | SSH (any command)                                | `exit_code` (+ `value` in pattern mode)         | — |
+| [`filesystems`](#filesystems)           | All mounted filesystems (auto-discovered) | SSH (`df`)                                    | `worst_used_pct`, `fs_<mount>_used_pct`         | — |
+| [`folders`](#folders)                   | Sizes of arbitrary directories        | SSH (`du`)                                        | `worst_folder_gb`, `folder_<path>_gb`           | — |
+| [`vms`](#vms)                           | libvirt/KVM virtual machines          | SSH (`virsh`)                                     | `vms_total`, `vms_running`, `vms_stopped`       | Start, Shutdown (per expected VM) |
+| [`cloud`](#cloud)                       | Cloud instance metadata (AWS/GCP/Azure) | SSH (metadata endpoint)                         | `on_cloud`                                      | — |
 | [`group`](#group)                       | Container for nested monitors         | — (aggregates children)                          | —                                               | — |
 
 All plugin types share these common fields:
@@ -128,7 +132,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `interrupts`, `connections`, `wifi`, `ports`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `borg`, `gpu`, `containers`, `raid`, `command`, `group` |
+| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `interrupts`, `connections`, `wifi`, `ports`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `borg`, `gpu`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -555,6 +559,104 @@ Every run is wrapped in `timeout` so a hung target can't stall the polling loop.
 
 ---
 
+### `filesystems`
+Auto-discovers and monitors **every** mounted filesystem on the target over SSH via a single `df` call — no per-path configuration. This is the fleet-wide counterpart to [`disk_space`](#disk_space) (which watches one explicit path). Pseudo/virtual filesystems (tmpfs, proc, cgroup, overlay, …) are excluded so only real storage appears. Overall status is the worst usage across all filesystems.
+
+| Option       | Description                                                  |
+|--------------|--------------------------------------------------------------|
+| `warning`    | Usage % that triggers warning (default: `80`)               |
+| `threshold`  | Usage % that triggers failed (default: `90`)                |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `worst_used_pct`; `fs_<mount>_used_pct`, `fs_<mount>_size_gb` per filesystem
+
+```yaml
+- name: "Filesystems"
+  id: "server-filesystems"
+  type: "filesystems"
+  interval: 5m
+  warning: 80
+  threshold: 90
+  ssh_config:
+    host: "server.example.com"
+```
+
+---
+
+### `folders`
+Monitors the size of arbitrary directories over SSH via `du` — for watching things a filesystem check can't see: a growing log directory, a download spool, a media library nearing a soft cap. Each folder may set its own `warning`/`threshold` (in GB); a folder with neither is size-only. A folder that can't be read (missing/permission/timeout) reports failed.
+
+| Option     | Description                                                                 |
+|------------|-----------------------------------------------------------------------------|
+| `folders`  | List of `{ path, warning?, threshold? }` — warning/threshold are sizes in GB |
+| `timeout`  | Per-`du` timeout in seconds (default: `60`)                                 |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below              |
+
+**Metrics**: `worst_folder_gb`; `folder_<path>_gb` per folder
+
+```yaml
+- name: "Folders"
+  id: "server-folders"
+  type: "folders"
+  interval: 1h
+  folders:
+    - path: "/var/log"
+      warning: 5
+      threshold: 10
+    - path: "/srv/media"   # size-only
+  ssh_config:
+    host: "server.example.com"
+```
+
+---
+
+### `vms`
+Monitors libvirt/KVM virtual machines over SSH via `virsh list --all`, counting running vs. off. Domains in an error state (paused, crashed) drive warning; "shut off" is treated as benign. Named domains in `expect_running` are required — any not running drives status to **failed** and exposes per-VM **Start**/**Shutdown** actions (restricted to listed domains for safety).
+
+| Option           | Description                                                       |
+|------------------|-------------------------------------------------------------------|
+| `uri`            | libvirt connection URI (default: `qemu:///system`)               |
+| `expect_running` | *(Optional)* Domain names that must be running (→ Start/Shutdown) |
+| `offline_warning`| Any error-state domain => warning (default: `true`)              |
+| `ssh_config`     | SSH connection details — see [SSH Config](#ssh-config) below      |
+
+**Metrics**: `vms_total`, `vms_running`, `vms_stopped`
+
+```yaml
+- name: "Virtual Machines"
+  id: "server-vms"
+  type: "vms"
+  interval: 1m
+  expect_running:
+    - "web"
+  ssh_config:
+    host: "server.example.com"
+```
+
+---
+
+### `cloud`
+Detects the cloud provider of the target and surfaces its instance metadata (id, type, region/zone) over SSH via the link-local metadata endpoint (`169.254.169.254`). Auto-detects across AWS (IMDSv2), GCP, and Azure, or query one provider explicitly. Informational — no thresholds; reports online when metadata is reachable, offline when the host isn't on a recognized cloud.
+
+| Option       | Description                                                   |
+|--------------|--------------------------------------------------------------|
+| `provider`   | `auto` (default), `aws`, `gcp`, or `azure`                   |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `on_cloud` (1 = on a recognized cloud, 0 = not)
+
+```yaml
+- name: "Instance Metadata"
+  id: "server-cloud"
+  type: "cloud"
+  interval: 15m
+  provider: "auto"
+  ssh_config:
+    host: "server.example.com"
+```
+
+---
+
 ### `group`
 A logical container for other monitors. Aggregates the worst-case status of all descendants and displays each child as a collapsible card. Expansion state is preserved across page refreshes within the same server session.
 
@@ -783,6 +885,60 @@ nix run . -- --config config.yaml
 
 ---
 
+## Integrations
+
+Beyond the dashboard, Vigil exposes its state to external tools. All of the following are served on the same port as the web UI.
+
+### Events feed
+
+An **Events** view in the sidebar shows a unified, filterable feed of every event Vigil has recorded across all monitors — status changes, threshold crossings, and collection errors — filterable by level, target host, and message text.
+
+### REST API
+
+Read-only JSON endpoints for consuming Vigil's state programmatically:
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /api/health` | `{"status": "ok"}` |
+| `GET /api/monitors` | All monitors with id, name, type, target, and current status |
+| `GET /api/monitors/{id}` | A single monitor plus its latest metrics |
+| `GET /api/metrics` | Latest value of every collected metric |
+| `GET /api/events` | Recent events — supports `?level=`, `?target=`, `?search=`, `?limit=` |
+
+```bash
+curl http://localhost:8080/api/monitors
+curl "http://localhost:8080/api/events?level=ERROR&limit=50"
+```
+
+### Prometheus
+
+A Prometheus exposition endpoint is always available at `GET /metrics` (pull) — no configuration required. It exports `vigil_up` (per-monitor status: `1` online, `0.5` warning, `0` failed, `-1` offline) and `vigil_metric` (every collected metric, labeled by monitor/target/metric). Point a Prometheus scrape config at it:
+
+```yaml
+scrape_configs:
+  - job_name: vigil
+    static_configs:
+      - targets: ['vigil-host:8080']
+```
+
+### InfluxDB
+
+An optional **push** exporter ships metrics to InfluxDB (1.x or 2.x) on an interval. Enable it under `exporters:` in `config.yaml`:
+
+```yaml
+exporters:
+  influxdb:
+    url: "http://localhost:8086"
+    interval: 30
+    # InfluxDB 2.x:
+    org: "my-org"
+    bucket: "vigil"
+    token: "my-api-token"
+    # InfluxDB 1.x: use `database:` instead of org/bucket/token
+```
+
+---
+
 ## Design Principles
 
 1. **Simplicity First**: Configuration should be intuitive.
@@ -810,10 +966,19 @@ nix run . -- --config config.yaml
 - [x] Temperature monitor (via `/sys/class/thermal`, graceful degradation on VMs)
 - [x] Load average monitor (via `/proc/loadavg` normalized by `nproc`, optional thresholds)
 - [x] Network usage monitor (RX/TX throughput via `/proc/net/dev`, auto-detect or explicit interface)
-- [ ] SSH collector module with standard metric parsing (CPU, RAM, Disk)
+- [x] GPU monitor (NVIDIA util/VRAM/temperature via `nvidia-smi`)
+- [x] Container monitor (Docker/Podman, with per-container restart)
+- [x] Software RAID (mdadm) health monitor
+- [x] Generic command monitor (arbitrary check, exit-code or regex-extracted value)
+- [x] Filesystem auto-discovery monitor (all mounts via `df`)
+- [x] Folder size monitor (arbitrary directories via `du`)
+- [x] VM monitor (libvirt/KVM via `virsh`, with start/shutdown)
+- [x] Cloud instance metadata monitor (AWS/GCP/Azure)
+- [x] Unified, filterable events feed
+- [x] REST API for monitors, metrics, and events
+- [x] Prometheus `/metrics` export endpoint (pull)
+- [x] InfluxDB export (push, 1.x and 2.x)
 - [ ] Basic alerting (Email, Slack, or Webhook)
-- [ ] Control module for service remediation
-- [ ] OpenTelemetry/OpenMetrics export module
 
 ---
 
