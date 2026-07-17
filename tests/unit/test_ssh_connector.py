@@ -1,6 +1,15 @@
 import pytest
 from unittest.mock import MagicMock, patch
+from vigil.core.common import ssh_connector
 from vigil.core.common.ssh_connector import SSHConnection
+
+
+@pytest.fixture(autouse=True)
+def _clear_pool():
+    """Isolate the shared connection pool between tests."""
+    ssh_connector._connection_pool.clear()
+    yield
+    ssh_connector._connection_pool.clear()
 
 
 def _make_paramiko_mock(exit_status=0, stdout_bytes=b"output", stderr_bytes=b""):
@@ -14,6 +23,54 @@ def _make_paramiko_mock(exit_status=0, stdout_bytes=b"output", stderr_bytes=b"")
     mock_client = MagicMock()
     mock_client.exec_command.return_value = (None, mock_stdout, mock_stderr)
     return mock_client
+
+
+class TestConnectionPooling:
+    def test_same_target_returns_same_instance(self):
+        a = SSHConnection.get_shared("h1", username="u", port=22)
+        b = SSHConnection.get_shared("h1", username="u", port=22)
+        assert a is b
+
+    def test_different_host_returns_new_instance(self):
+        a = SSHConnection.get_shared("h1", username="u")
+        b = SSHConnection.get_shared("h2", username="u")
+        assert a is not b
+
+    def test_different_user_returns_new_instance(self):
+        a = SSHConnection.get_shared("h1", username="u1")
+        b = SSHConnection.get_shared("h1", username="u2")
+        assert a is not b
+
+    def test_from_config_pools_by_target(self):
+        a = SSHConnection.from_config({"ssh_config": {"host": "shared.host", "username": "vigil"}})
+        b = SSHConnection.from_config({"ssh_config": {"host": "shared.host", "username": "vigil"}})
+        assert a is b
+
+
+class TestConnectCooldown:
+    def test_connect_skipped_during_cooldown(self):
+        conn = SSHConnection("deadhost")
+        with patch("paramiko.SSHClient") as MockClient:
+            MockClient.return_value.connect.side_effect = OSError("unreachable")
+            # First attempt actually tries to connect and fails.
+            with pytest.raises(OSError):
+                conn.connect()
+            assert MockClient.return_value.connect.call_count == 1
+            # Second attempt within the cooldown must not re-attempt paramiko.
+            with pytest.raises(ConnectionError):
+                conn.connect()
+            assert MockClient.return_value.connect.call_count == 1
+
+    def test_connect_retried_after_cooldown_elapses(self):
+        conn = SSHConnection("deadhost")
+        conn.CONNECT_COOLDOWN = 0.0  # effectively disable the cooldown window
+        with patch("paramiko.SSHClient") as MockClient:
+            MockClient.return_value.connect.side_effect = OSError("unreachable")
+            with pytest.raises(OSError):
+                conn.connect()
+            with pytest.raises(OSError):
+                conn.connect()
+            assert MockClient.return_value.connect.call_count == 2
 
 
 class TestFromConfig:
