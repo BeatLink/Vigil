@@ -1,6 +1,7 @@
 import paramiko
 import logging
 import threading
+import time
 from typing import Tuple, Optional, Dict, Any
 
 # One shared SSHConnection per (host, username, port). Every monitor that
@@ -54,11 +55,25 @@ class SSHConnection:
         # Serializes connect()/execute() so a single paramiko transport is not
         # driven by multiple worker threads targeting this host at once.
         self._lock = threading.Lock()
+        # Cooldown so a dead host isn't reconnected on every command in a cycle.
+        self._last_connect_fail = 0.0
+
+    # Seconds to wait before retrying connect() after a failure.
+    CONNECT_COOLDOWN = 30.0
 
     def connect(self):
         """Establishes the SSH connection using keys or password."""
         if self.client:
             return
+
+        # Skip reconnect attempts during the cooldown after a recent failure,
+        # so an unreachable host fails fast instead of re-paying the connect
+        # timeout for each of its monitors every polling cycle.
+        since_fail = time.monotonic() - self._last_connect_fail
+        if since_fail < self.CONNECT_COOLDOWN:
+            raise ConnectionError(
+                f"{self.host}: in connect cooldown ({self.CONNECT_COOLDOWN - since_fail:.0f}s left)"
+            )
 
         try:
             self.client = paramiko.SSHClient()
@@ -84,7 +99,9 @@ class SSHConnection:
                 
             self.client.connect(**connect_kwargs)
             logging.debug(f"SSH connection established to {self.host}")
+            self._last_connect_fail = 0.0
         except Exception as e:
+            self._last_connect_fail = time.monotonic()
             logging.error(f"SSH connection failed to {self.host}: {e}")
             self.client = None
             raise
