@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart
+from vigil.core.ui.components import info_card, history_chart, safe_timer
 from vigil.core.ui.theme import STATUS_COLORS
 
 
@@ -106,4 +106,4 @@ class DiskSpacePlugin(BasePlugin):
             if total:
                 total_label.text = _format_gb(total.value)
 
-        ui.timer(5.0, update_cards)
+        safe_timer(5.0, update_cards)

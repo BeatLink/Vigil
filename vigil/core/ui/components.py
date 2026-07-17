@@ -1,6 +1,34 @@
 from nicegui import ui
 from .theme import TEXT, TEXT_MUTED, PRIMARY, ACCENT, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
 
+
+def safe_timer(interval: float, callback):
+    """
+    Create a periodic ui.timer whose callback is guarded against firing after
+    its page/element has been torn down.
+
+    When a client disconnects or the page re-renders, the element a timer
+    updates can be deleted while the timer is still scheduled. NiceGUI then
+    raises "The parent slot of the element has been deleted." on every tick,
+    which floods the log and needlessly churns the event loop. We swallow that
+    specific error and cancel the timer so a dead page's timers go quiet.
+    """
+    timer = None
+
+    def _wrapped():
+        try:
+            callback()
+        except RuntimeError as e:
+            if 'parent slot' in str(e) or 'has been deleted' in str(e):
+                if timer is not None:
+                    timer.cancel()
+                return
+            raise
+
+    timer = ui.timer(interval, _wrapped)
+    return timer
+
+
 # Standardized UI Sizing Constants
 LABEL_CLASS = 'text-xs font-bold'
 VALUE_CLASS = 'text-2xl font-bold'
@@ -41,7 +69,7 @@ def metric_table(collector: str, title: str = 'Monitor Metrics', limit: int = 15
             query = Metric.select().where(Metric.collector == collector).order_by(Metric.timestamp.desc()).limit(limit)
             table.rows[:] = [m.__data__ for m in query]
 
-        ui.timer(5.0, update)
+        safe_timer(5.0, update)
         return table
 
 def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', limit: int = 15, full_height: bool = False):
@@ -84,7 +112,7 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
             query = LogLine.select().where(condition).order_by(LogLine.timestamp.desc()).limit(limit)
             table.rows[:] = [e.__data__ for e in query]
 
-        ui.timer(5.0, update_logs)
+        safe_timer(5.0, update_logs)
         return table
 
 def history_chart(title: str, collector: str, metric_name: str, limit: int = 30):
@@ -114,7 +142,7 @@ def history_chart(title: str, collector: str, metric_name: str, limit: int = 30)
             chart.options['series'][0]['data'] = [m.value for m in history]
             chart.update()
 
-        ui.timer(5.0, update)
+        safe_timer(5.0, update)
         update()
         return chart
 
@@ -138,5 +166,5 @@ def render_status_card(collector: str, metric_name: str, title: str = 'STATUS',
             is_on = last.value > 0.5
             lbl.text = on_text if is_on else off_text
             lbl.style(f"color: {STATUS_COLORS['online'] if is_on else STATUS_COLORS['failed']}")
-    ui.timer(2.0, update)
+    safe_timer(2.0, update)
     return lbl

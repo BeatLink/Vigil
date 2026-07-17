@@ -1,6 +1,6 @@
 from typing import Dict, Any, List, Optional
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card
+from vigil.core.ui.components import info_card, safe_timer
 from vigil.core.ui.theme import STATUS_COLORS
 
 _SEVERITY = {'online': 0, 'warning': 1, 'failed': 2}
@@ -204,4 +204,4 @@ class ProcessesPlugin(BasePlugin):
             table.rows[:] = rows
             table.update()
 
-        ui.timer(5.0, update)
+        safe_timer(5.0, update)

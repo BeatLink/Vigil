@@ -2,7 +2,7 @@ import logging
 from typing import Dict, Any, Optional, Tuple
 
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart
+from vigil.core.ui.components import info_card, history_chart, safe_timer
 
 # Interface prefixes treated as virtual/internal — excluded from auto-detection
 _VIRTUAL_PREFIXES = ('lo', 'veth', 'docker', 'virbr', 'br-', 'tun', 'tap')
@@ -148,4 +148,4 @@ class NetworkUsagePlugin(BasePlugin):
             if tx:
                 tx_label.text = _format_rate(tx.value)
 
-        ui.timer(5.0, update_cards)
+        safe_timer(5.0, update_cards)

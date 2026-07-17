@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card
+from vigil.core.ui.components import info_card, safe_timer
 
 # Discovers all physical disks, checks transport type (USB needs -d sat),
 # and runs smartctl -H on each. Outputs one "PASS /dev/sdX" or "FAIL /dev/sdX" per disk.
@@ -106,4 +106,4 @@ class SmartDiskPlugin(BasePlugin):
                 color = STATUS_COLORS['failed'] if failed else STATUS_COLORS['online']
                 failed_label.style(f"color: {color}")
 
-        ui.timer(5.0, update_cards)
+        safe_timer(5.0, update_cards)

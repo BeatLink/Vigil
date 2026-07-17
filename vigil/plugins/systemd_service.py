@@ -2,7 +2,7 @@ import time
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.time_utils import parse_duration, format_duration, format_age
-from vigil.core.ui.components import info_card
+from vigil.core.ui.components import info_card, safe_timer
 
 
 _CONTINUOUS_LAYOUT = [
@@ -225,7 +225,7 @@ class SystemdPlugin(BasePlugin):
             if last:
                 time_label.text = last.timestamp.strftime('%H:%M:%S')
 
-        ui.timer(2.0, update_time)
+        safe_timer(2.0, update_time)
 
     def _render_oneshot_ui(self, context: str = 'page'):
         from nicegui import ui
@@ -296,7 +296,7 @@ class SystemdPlugin(BasePlugin):
                     age_label.style(f"color: {color}")
 
         update()
-        ui.timer(5.0, update)
+        safe_timer(5.0, update)
 
     # -------------------------------------------------------------------------
     # Actions

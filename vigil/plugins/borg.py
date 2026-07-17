@@ -6,7 +6,7 @@ from typing import Dict, Any, List, Optional
 
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.time_utils import parse_duration, format_duration, format_age
-from vigil.core.ui.components import info_card
+from vigil.core.ui.components import info_card, safe_timer
 
 
 _DEFAULT_LAYOUT = [
@@ -240,7 +240,7 @@ class BorgPlugin(BasePlugin):
             age_label.style(f"color: {STATUS_COLORS['online' if is_fresh else 'failed']}")
 
         update()
-        ui.timer(5.0, update)
+        safe_timer(5.0, update)
 
     # -------------------------------------------------------------------------
     # Actions
