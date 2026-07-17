@@ -94,13 +94,41 @@ theme:
 
 ## Plugin Types
 
+### Summary
+
+| Type | Monitors | Collection | Key metrics | Actions |
+|------|----------|------------|-------------|---------|
+| [`uptime`](#uptime)                     | Host reachability                     | ICMP ping                                        | `up`, `latency_ms`                              | — |
+| [`systemd_service`](#systemd_service)   | systemd unit state / last run         | SSH (`systemctl`)                                | `active` *or* `last_run_epoch`, `last_run_success` | Restart, Stop |
+| [`smart_disk`](#smart_disk)             | Physical disk SMART health            | SSH (`smartctl`)                                 | `disks_total`, `disks_ok`, `disks_failed`       | — |
+| [`zfs_health`](#zfs_health)             | ZFS pool health state                 | SSH (`zpool list`)                               | `pools_total`, `pools_ok`, `pools_degraded`     | — |
+| [`zfs_pool`](#zfs_pool)                 | ZFS pool capacity                     | SSH (`zpool list`)                               | `usage_pct`                                     | — |
+| [`disk_space`](#disk_space)             | Filesystem usage for a path           | SSH (`df`)                                       | `used_pct`, `size_gb`, `used_gb`, `avail_gb`    | — |
+| [`cpu_usage`](#cpu_usage)               | CPU utilization                       | SSH (`/proc/stat`, 2-sample)                     | `cpu_pct`                                       | — |
+| [`memory_usage`](#memory_usage)         | RAM usage                             | SSH (`/proc/meminfo`)                            | `memory_pct`, `memory_used_gb`, `memory_total_gb` | — |
+| [`temperature`](#temperature)           | Max thermal-zone temperature          | SSH (`/sys/class/thermal`)                       | `temp_c`                                        | — |
+| [`load_average`](#load_average)         | Load average (normalized by cores)    | SSH (`/proc/loadavg`, `nproc`)                   | `load_pct_1m`, `load_pct_5m`, `load_pct_15m`    | — |
+| [`processes`](#processes)               | Running processes by CPU              | SSH (`ps`)                                       | `process_count`, `top_cpu_pct` *(ephemeral)*    | SIGTERM, SIGKILL |
+| [`network_usage`](#network_usage)       | Network interface throughput          | SSH (`/proc/net/dev`, 2-sample)                  | `rx_kbps`, `tx_kbps`                            | — |
+| [`diskio`](#diskio)                     | Per-disk read/write throughput        | SSH (`/proc/diskstats`, 2-sample)                | `read_kbps`, `write_kbps`                       | — |
+| [`interrupts`](#interrupts)             | Interrupt & context-switch rates      | SSH (`/proc/stat`, 2-sample)                     | `irq_per_sec`, `ctxt_per_sec`                   | — |
+| [`connections`](#connections)           | TCP connection counts by state        | SSH (`/proc/net/tcp`)                            | `total` + per-state (`established`, `listen`, …) | — |
+| [`wifi`](#wifi)                         | WiFi link quality & signal            | SSH (`/proc/net/wireless`)                       | `link_quality`, `signal_dbm`                    | — |
+| [`ports`](#ports)                       | TCP port / URL reachability           | SSH (`/dev/tcp`, `curl`)                         | `<check>_up`, `<check>_latency_ms`              | — |
+| [`borg`](#borg)                         | Borg backup freshness                 | SSH (`borg list`)                                | `archive_count`, `last_backup_epoch`            | — |
+| [`gpu`](#gpu)                           | NVIDIA GPU util / VRAM / temperature  | SSH (`nvidia-smi`)                               | `gpu_util`, `gpu_mem_pct`, `gpu_temp` (+ per-GPU) | — |
+| [`containers`](#containers)             | Docker / Podman container states      | SSH (`docker`/`podman ps`)                       | `containers_total`, `containers_running`, `containers_stopped` | Restart (per expected container) |
+| [`raid`](#raid)                         | Linux software RAID (mdadm) health    | SSH (`/proc/mdstat`)                             | `arrays_total`, `arrays_ok`, `arrays_degraded`  | — |
+| [`command`](#command)                   | Arbitrary command (generic check)     | SSH (any command)                                | `exit_code` (+ `value` in pattern mode)         | — |
+| [`group`](#group)                       | Container for nested monitors         | — (aggregates children)                          | —                                               | — |
+
 All plugin types share these common fields:
 
 | Field    | Description                                                          |
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `group` |
+| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `interrupts`, `connections`, `wifi`, `ports`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `borg`, `gpu`, `containers`, `raid`, `command`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -397,6 +425,132 @@ The interface to monitor can be specified explicitly or auto-detected. In auto-d
   interface: "eth0"
   ssh_config:
     host: "ragnarok.example.com"
+```
+
+---
+
+### `gpu`
+Monitors NVIDIA GPU utilization, VRAM usage, and temperature over SSH via a single `nvidia-smi --query-gpu` call. Handles multiple GPUs per host — each gets its own per-GPU metrics, and the overall status is the worst level across utilization, memory, and temperature for any GPU.
+
+If `nvidia-smi` isn't installed or no NVIDIA GPU is present, the monitor reports **offline** rather than failed, so it degrades gracefully on mixed fleets.
+
+| Option           | Description                                              |
+|------------------|----------------------------------------------------------|
+| `util_warning` / `util_threshold`   | GPU utilization % bounds (default: `85` / `95`)   |
+| `mem_warning` / `mem_threshold`     | VRAM usage % bounds (default: `85` / `95`)        |
+| `temp_warning` / `temp_threshold`   | Temperature °C bounds (default: `80` / `90`)      |
+| `ssh_config`     | SSH connection details — target must have `nvidia-smi`   |
+
+**Metrics**: `gpu_util`, `gpu_mem_pct`, `gpu_temp` (busiest GPU); `gpu<idx>_util`, `gpu<idx>_mem_pct`, `gpu<idx>_temp` (per GPU)
+
+```yaml
+- name: "GPU"
+  id: "server-gpu"
+  type: "gpu"
+  interval: 1m
+  temp_threshold: 88
+  ssh_config:
+    host: "server.example.com"
+```
+
+---
+
+### `containers`
+Monitors Docker or Podman containers over SSH via `<runtime> ps -a`, counting running vs. stopped containers. Paused/created containers are treated as benign. Named containers listed in `expect_running` are required — any that are missing or not running drive the status to **failed** and expose a per-container **Restart** action in the UI. Other unexpectedly-stopped containers drive **warning** (unless `stopped_warning: false`).
+
+For safety, the restart action only ever targets containers explicitly listed in `expect_running`.
+
+| Option            | Description                                                            |
+|-------------------|------------------------------------------------------------------------|
+| `runtime`         | `docker` (default) or `podman`                                         |
+| `expect_running`  | *(Optional)* List of container names that must be running (→ Restart actions) |
+| `stopped_warning` | Treat any stopped container as a warning (default: `true`)             |
+| `ssh_config`      | SSH connection details — see [SSH Config](#ssh-config) below           |
+
+**Metrics**: `containers_total`, `containers_running`, `containers_stopped`
+
+```yaml
+- name: "Docker"
+  id: "server-docker"
+  type: "containers"
+  interval: 1m
+  runtime: "docker"
+  expect_running:
+    - "nginx"
+    - "postgres"
+  ssh_config:
+    host: "server.example.com"
+```
+
+---
+
+### `raid`
+Monitors Linux software RAID (mdadm) array health over SSH by parsing `/proc/mdstat`. Each array's `[N/M] [UU__]` status is checked: any array with a down disk (`_`) or fewer active disks than expected reports **failed**; an array undergoing resync/recovery/reshape reports **warning**; all-clean reports **online**. Complements the ZFS plugins for hosts using classic mdraid. Reports **offline** when no arrays are present.
+
+| Option       | Description                                                  |
+|--------------|--------------------------------------------------------------|
+| `interval`   | Polling frequency (default: `60`; `5m` is usually plenty)   |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `arrays_total`, `arrays_ok`, `arrays_degraded`
+
+```yaml
+- name: "Software RAID"
+  id: "server-raid"
+  type: "raid"
+  interval: 5m
+  ssh_config:
+    host: "server.example.com"
+```
+
+---
+
+### `command`
+The generic escape hatch: runs an arbitrary command over SSH and derives status from it, for checks that don't warrant a dedicated plugin. Two modes:
+
+- **Exit-code mode** (no `pattern`): exit `0` → online, non-zero → failed (or warning with `nonzero_is_warning: true`).
+- **Pattern mode** (`pattern` set): a regex with one capture group extracts a number from stdout, stored as the `value` metric and charted, then compared against `warning`/`threshold` — same semantics as the numeric plugins. Set `invert: true` when *lower* is worse (e.g. free space, days-until-expiry).
+
+Every run is wrapped in `timeout` so a hung target can't stall the polling loop.
+
+| Option              | Description                                                              |
+|---------------------|--------------------------------------------------------------------------|
+| `command`           | Shell command to run on the target *(required)*                         |
+| `timeout`           | Per-run timeout in seconds (default: `30`)                              |
+| `pattern`           | *(Optional)* Regex with one capture group extracting a number           |
+| `warning` / `threshold` | Value bounds (pattern mode only)                                    |
+| `invert`            | If true, values *below* the bounds are bad (default: `false`)           |
+| `nonzero_is_warning`| Treat non-zero exit as warning instead of failed (default: `false`)     |
+| `value_label` / `value_unit` | UI label / unit suffix for the extracted value                 |
+| `ssh_config`        | SSH connection details — see [SSH Config](#ssh-config) below            |
+
+**Metrics**: `exit_code` (always); `value` (pattern mode)
+
+```yaml
+# Pattern mode: TLS cert expiry, fewer days left is worse
+- name: "Cert Expiry"
+  id: "server-cert"
+  type: "command"
+  interval: 6h
+  command: 'echo "days=$(( ($(date -d "$(openssl x509 -enddate -noout -in /etc/ssl/cert.pem | cut -d= -f2)" +%s) - $(date +%s)) / 86400 ))"'
+  pattern: 'days=(-?\d+)'
+  warning: 21
+  threshold: 7
+  invert: true
+  value_label: "DAYS LEFT"
+  value_unit: " d"
+  ssh_config:
+    host: "server.example.com"
+
+# Exit-code mode: pending reboot -> warning
+- name: "Reboot Required"
+  id: "server-reboot"
+  type: "command"
+  interval: 1h
+  command: "test ! -f /var/run/reboot-required"
+  nonzero_is_warning: true
+  ssh_config:
+    host: "server.example.com"
 ```
 
 ---

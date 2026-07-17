@@ -98,3 +98,125 @@ plugins:
         # passphrase_command: "cat /etc/vigil/borg.pass"   # for encrypted repos
         ssh_config:
           host: "server.example.com"
+
+  - name: "Server I/O & Network"
+    type: "group"
+    grid_columns: 4
+    children:
+      - name: "Disk I/O"
+        id: "server-diskio"
+        type: "diskio"
+        interval: 1m
+        # device: "nvme0n1"   # optional; auto-detects the busiest physical disk
+        ssh_config:
+          host: "server.example.com"
+      - name: "Interrupts"
+        id: "server-interrupts"
+        type: "interrupts"
+        interval: 1m
+        irq_warning: 20000     # interrupts/sec
+        irq_threshold: 50000
+        ssh_config:
+          host: "server.example.com"
+      - name: "Connections"
+        id: "server-connections"
+        type: "connections"
+        interval: 1m
+        total_warning: 500     # total TCP connections
+        total_threshold: 1000
+        ssh_config:
+          host: "server.example.com"
+      - name: "WiFi"
+        id: "server-wifi"
+        type: "wifi"
+        interval: 1m
+        # interface: "wlan0"   # optional; auto-detects the strongest link
+        quality_warning: 40    # link quality floor (warn below)
+        quality_threshold: 20  # link quality floor (fail below)
+        ssh_config:
+          host: "server.example.com"
+
+  - name: "Reachability"
+    type: "group"
+    children:
+      - name: "Port & URL Checks"
+        id: "server-ports"
+        type: "ports"
+        interval: 1m
+        timeout: 5             # per-check timeout (seconds)
+        checks:
+          - name: "SSH"        # TCP check (bash /dev/tcp)
+            host: "server.example.com"
+            port: 22
+          - name: "API Health" # URL check (curl; 2xx/3xx = up)
+            url: "https://api.example.com/health"
+        ssh_config:
+          host: "server.example.com"
+
+  - name: "GPU & Containers"
+    type: "group"
+    grid_columns: 4
+    children:
+      - name: "GPU"
+        id: "server-gpu"
+        type: "gpu"
+        interval: 1m
+        util_warning: 85       # GPU util % (warn / fail)
+        util_threshold: 95
+        mem_warning: 85        # VRAM % (warn / fail)
+        mem_threshold: 95
+        temp_warning: 80       # °C (warn / fail)
+        temp_threshold: 90
+        ssh_config:
+          host: "server.example.com"   # target needs nvidia-smi
+      - name: "Docker"
+        id: "server-docker"
+        type: "containers"
+        interval: 1m
+        runtime: "docker"      # or "podman"
+        expect_running:        # these must be up, else failed; also gives Restart actions
+          - "nginx"
+          - "postgres"
+        stopped_warning: true  # any other stopped container -> warning
+        ssh_config:
+          host: "server.example.com"
+
+  - name: "RAID"
+    type: "group"
+    children:
+      - name: "Software RAID"
+        id: "server-raid"
+        type: "raid"           # parses /proc/mdstat (mdadm)
+        interval: 5m
+        ssh_config:
+          host: "server.example.com"
+
+  - name: "Custom Checks"
+    type: "group"
+    children:
+      - name: "Cert Expiry (days)"
+        id: "server-cert-expiry"
+        type: "command"
+        interval: 6h
+        # Extract a number from stdout and threshold it. `invert: true` means
+        # LOWER is worse (fewer days left = more urgent).
+        command: >
+          days=$(( ( $(date -d "$(openssl x509 -enddate -noout -in /etc/ssl/cert.pem | cut -d= -f2)" +%s) - $(date +%s) ) / 86400 ));
+          echo "days=$days"
+        pattern: 'days=(-?\d+)'
+        warning: 21            # warn when <= 21 days
+        threshold: 7           # fail when <= 7 days
+        invert: true
+        value_label: "DAYS LEFT"
+        value_unit: " d"
+        ssh_config:
+          host: "server.example.com"
+      - name: "Reboot Required"
+        id: "server-reboot-required"
+        type: "command"
+        interval: 1h
+        # No pattern -> status is driven by exit code (0 = online, non-zero = below).
+        command: "test ! -f /var/run/reboot-required"
+        nonzero_is_warning: true   # reboot pending -> warning, not failed
+        ssh_config:
+          host: "server.example.com"
