@@ -1,8 +1,20 @@
 # Vigil Configuration Sample
+#
+# This is a minimal example. A full deployment (the TechNet homelab) is defined
+# declaratively in NixOS via services.vigil — see that module for a complete,
+# real-world plugin tree.
 
 # Database settings
 database:
   path: "vigil.db"
+
+# Global SSH connection defaults.
+# Merged into every plugin's `ssh_config` unless the plugin overrides a given
+# key, so a single username/key can apply across all SSH-based monitors instead
+# of being repeated on each one.
+ssh_defaults:
+  username: "beatlink"
+  # key_path: "/path/to/private_key"   # optional; falls back to the SSH agent
 
 # Theme (all fields are optional — defaults shown below)
 theme:
@@ -19,568 +31,64 @@ theme:
 
 # Domain-based Plugins
 plugins:
-  - name: "Device Availability"
+  - name: "Devices"
     type: "group"
     children:
-      - name: "Core Devices"
-        type: "group"
-        children:
-          - name: "Ragnarok"
-            id: "ragnarok"
-            type: "uptime"
-            target_host: "ragnarok.technet"
-            interval: 30s
-          - name: "Heimdall"
-            id: "heimdall"
-            type: "uptime"
-            target_host: "heimdall.technet"
-            interval: 30s
-          - name: "Odin"
-            id: "odin"
-            type: "uptime"
-            target_host: "odin.technet"
-            interval: 30s
-          - name: "Thor"
-            id: "thor"
-            type: "uptime"
-            target_host: "thorx.technet"
-      - name: "IoT Sensors"
-        type: "group"
-        children:
-          - name: "Bedroom Light"
-            id: "bedroom-light"
-            type: "uptime"
-            target_host: "light-bedroom.lan"
-          - name: "Bedroom Desk Light"
-            id: "bedroom-desk-light"
-            type: "uptime"
-            target_host: "light-bedroom-desk.lan"
-          - name: "Kitchen Light"
-            id: "kitchen-light"
-            type: "uptime"
-            target_host: "light-kitchen.lan"
-          - name: "Bathroom Light"
-            id: "bathroom-light"
-            type: "uptime"
-            target_host: "light-bathroom.lan"
-          - name: "Outside Light"
-            id: "outside-light"
-            type: "uptime"
-            target_host: "light-outside.lan"
-          - name: "Fan Socket"
-            id: "fan-socket"
-            type: "uptime"
-            target_host: "socket-fan.lan"
-          - name: "Ragnarok Socket"
-            id: "ragnarok-socket"
-            type: "uptime"
-            target_host: "socket-ragnarok.technet"
-          - name: "Fan IR"
-            id: "fan-ir"
-            type: "uptime"
-            target_host: "ir-fan.lan"
-          - name: "Bedroom Sensor"
-            id: "bedroom-sensor"
-            type: "uptime"
-            target_host: "sensor-bedroom.lan"
-          - name: "Bathroom Sensor"
-            id: "bathroom-sensor"
-            type: "uptime"
-            target_host: "sensor-bathroom.lan"
+      - name: "My Server"
+        id: "my-server"
+        type: "uptime"
+        target_host: "server.example.com"
+        interval: 30s
 
-  - name: "System Stats"
+  - name: "My Server Stats"
     type: "group"
-    grid_columns: 1
+    grid_columns: 4
     children:
-      - name: "Ragnarok"
-        type: "group"
-        grid_columns: 4
-        children:
-          - name: "CPU"
-            id: "ragnarok-cpu"
-            type: "cpu_usage"
-            interval: 1m
-            cpu_warning: 70
-            cpu_threshold: 85
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "Memory"
-            id: "ragnarok-memory"
-            type: "memory_usage"
-            interval: 1m
-            memory_warning: 75
-            memory_threshold: 90
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "Temperature"
-            id: "ragnarok-temperature"
-            type: "temperature"
-            interval: 1m
-            temp_warning: 70
-            temp_threshold: 80
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "Load"
-            id: "ragnarok-load"
-            type: "load_average"
-            interval: 1m
-            load_warning: 70
-            load_threshold: 100
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "Processes"
-            id: "ragnarok-processes"
-            type: "processes"
-            interval: 30s
-            max_processes: 20
-            grid_col_span: 4
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "Network"
-            id: "ragnarok-network"
-            type: "network_usage"
-            interval: 30s
-            grid_col_span: 4
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "SMART"
-            id: "ragnarok-smart"
-            type: "smart_disk"
-            interval: 1h
-            grid_col_span: 2
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "ZFS Health"
-            id: "ragnarok-zfs-health"
-            type: "zfs_health"
-            interval: 1h
-            grid_col_span: 2
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "/"
-            id: "ragnarok-disk-root"
-            type: "disk_space"
-            path: "/"
-            threshold: 90
-            interval: 10m
-            grid_col_span: 2
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "/Storage"
-            id: "ragnarok-disk-storage"
-            type: "disk_space"
-            path: "/Storage"
-            threshold: 90
-            interval: 10m
-            grid_col_span: 2
-            ssh_config:
-              host: "ragnarok.technet"
-          - name: "/boot"
-            id: "ragnarok-disk-boot"
-            type: "disk_space"
-            path: "/boot"
-            threshold: 90
-            interval: 10m
-            grid_col_span: 2
-            ssh_config:
-              host: "ragnarok.technet"
-      - name: "Heimdall"
-        type: "group"
-        grid_columns: 4
-        children:
-          - name: "CPU"
-            id: "heimdall-cpu"
-            type: "cpu_usage"
-            interval: 1m
-            cpu_warning: 70
-            cpu_threshold: 85
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Memory"
-            id: "heimdall-memory"
-            type: "memory_usage"
-            interval: 1m
-            memory_warning: 75
-            memory_threshold: 90
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Temperature"
-            id: "heimdall-temperature"
-            type: "temperature"
-            interval: 1m
-            temp_warning: 70
-            temp_threshold: 80
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Load"
-            id: "heimdall-load"
-            type: "load_average"
-            interval: 1m
-            load_warning: 70
-            load_threshold: 100
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Processes"
-            id: "heimdall-processes"
-            type: "processes"
-            interval: 30s
-            max_processes: 20
-            grid_col_span: 4
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Network"
-            id: "heimdall-network"
-            type: "network_usage"
-            interval: 30s
-            grid_col_span: 4
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "SMART"
-            id: "heimdall-smart"
-            type: "smart_disk"
-            interval: 1h
-            grid_col_span: 2
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "ZFS Health"
-            id: "heimdall-zfs-health"
-            type: "zfs_health"
-            interval: 1h
-            grid_col_span: 2
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "/"
-            id: "heimdall-disk-root"
-            type: "disk_space"
-            path: "/"
-            threshold: 90
-            interval: 10m
-            grid_col_span: 2
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "/Storage"
-            id: "heimdall-disk-storage"
-            type: "disk_space"
-            path: "/Storage"
-            threshold: 90
-            interval: 10m
-            grid_col_span: 2
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "/boot"
-            id: "heimdall-disk-boot"
-            type: "disk_space"
-            path: "/boot"
-            threshold: 90
-            interval: 10m
-            grid_col_span: 2
-            ssh_config:
-              host: "heimdall.technet"
-      - name: "Odin"
-        type: "group"
-        grid_columns: 4
-        children:
-          - name: "CPU"
-            id: "odin-cpu"
-            type: "cpu_usage"
-            interval: 1m
-            cpu_warning: 70
-            cpu_threshold: 85
-            ssh_config:
-              host: "odin.technet"
-          - name: "Memory"
-            id: "odin-memory"
-            type: "memory_usage"
-            interval: 1m
-            memory_warning: 75
-            memory_threshold: 90
-            ssh_config:
-              host: "odin.technet"
-          - name: "Temperature"
-            id: "odin-temperature"
-            type: "temperature"
-            interval: 1m
-            temp_warning: 70
-            temp_threshold: 80
-            ssh_config:
-              host: "odin.technet"
-          - name: "Load"
-            id: "odin-load"
-            type: "load_average"
-            interval: 1m
-            load_warning: 70
-            load_threshold: 100
-            ssh_config:
-              host: "odin.technet"
-          - name: "Processes"
-            id: "odin-processes"
-            type: "processes"
-            interval: 30s
-            max_processes: 20
-            grid_col_span: 4
-            ssh_config:
-              host: "odin.technet"
-          - name: "Network"
-            id: "odin-network"
-            type: "network_usage"
-            interval: 30s
-            grid_col_span: 4
-            ssh_config:
-              host: "odin.technet"
-          - name: "SMART"
-            id: "odin-smart"
-            type: "smart_disk"
-            interval: 1h
-            grid_col_span: 2
-            ssh_config:
-              host: "odin.technet"
-          - name: "ZFS Health"
-            id: "odin-zfs-health"
-            type: "zfs_health"
-            interval: 1h
-            grid_col_span: 2
-            ssh_config:
-              host: "odin.technet"
-          - name: "/"
-            id: "odin-disk-root"
-            type: "disk_space"
-            path: "/"
-            threshold: 90
-            interval: 10m
-            grid_col_span: 2
-            ssh_config:
-              host: "odin.technet"
-          - name: "/Storage"
-            id: "odin-disk-storage"
-            type: "disk_space"
-            path: "/Storage"
-            threshold: 90
-            interval: 10m
-            grid_col_span: 2
-            ssh_config:
-              host: "odin.technet"
-          - name: "/boot"
-            id: "odin-disk-boot"
-            type: "disk_space"
-            path: "/boot"
-            threshold: 90
-            interval: 10m
-            grid_col_span: 2
-            ssh_config:
-              host: "odin.technet"
+      - name: "CPU"
+        id: "server-cpu"
+        type: "cpu_usage"
+        interval: 1m
+        cpu_warning: 70
+        cpu_threshold: 85
+        ssh_config:
+          host: "server.example.com"
+      - name: "Memory"
+        id: "server-memory"
+        type: "memory_usage"
+        interval: 1m
+        memory_warning: 75
+        memory_threshold: 90
+        ssh_config:
+          host: "server.example.com"
+      - name: "/"
+        id: "server-disk-root"
+        type: "disk_space"
+        path: "/"
+        threshold: 90
+        interval: 10m
+        ssh_config:
+          host: "server.example.com"
 
-  - name: "Running Services"
+  - name: "Services"
     type: "group"
     children:
-      - name: "Ragnarok"
-        id: "ragnarok-services"
-        type: "group"
-        children:
-          - name: "NixOS Upgrade"
-            id: "ragnarok-nixos-upgrade"
-            type: "systemd_service"
-            interval: 1h
-            service_name: "nixos-upgrade.service"
-            max_age: 1w
-            ssh_config:
-              host: "ragnarok.technet"
-      - name: "Heimdall"
-        id: "heimdall-services"
-        type: "group"
-        children:
-          - name: "NixOS Upgrade"
-            id: "heimdall-nixos-upgrade"
-            type: "systemd_service"
-            interval: 1h
-            service_name: "nixos-upgrade.service"
-            max_age: 1w
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Unbound"
-            id: "heimdall-unbound"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "unbound.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "VLC"
-            id: "heimdall-vlc"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "vlc-audio.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Nginx"
-            id: "heimdall-nginx"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "nginx.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Pi-hole"
-            id: "heimdall-pihole"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "pihole-ftl.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Home Assistant"
-            id: "heimdall-home-assistant"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "home-assistant.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Frigate"
-            id: "heimdall-frigate"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "frigate.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "go2rtc"
-            id: "heimdall-go2rtc"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "go2rtc.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Loki"
-            id: "heimdall-loki"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "loki.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Prometheus"
-            id: "heimdall-prometheus"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "prometheus.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Grafana"
-            id: "heimdall-grafana"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "grafana.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Uptime Kuma"
-            id: "heimdall-uptime-kuma"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "uptime-kuma.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "FreshRSS"
-            id: "heimdall-freshrss"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "phpfpm-freshrss.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "qBittorrent"
-            id: "heimdall-qbittorrent"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "qbittorrent.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Openbooks"
-            id: "heimdall-openbooks"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "openbooks.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Traccar"
-            id: "heimdall-traccar"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "traccar.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "ESPHome"
-            id: "heimdall-esphome"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "esphome.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Glances"
-            id: "heimdall-glances"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "glances.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Homepage"
-            id: "heimdall-homepage"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "homepage-dashboard.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "DDNS Updater"
-            id: "heimdall-ddns-updater"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "ddns-updater.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Blockurl"
-            id: "heimdall-blockurl"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "blockurl.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Radicale"
-            id: "heimdall-radicale"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "radicale.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Syncthing"
-            id: "heimdall-syncthing"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "syncthing.service"
-            ssh_config:
-              host: "heimdall.technet"
-          - name: "Trilium"
-            id: "heimdall-trilium"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "trilium-server.service"
-            ssh_config:
-              host: "heimdall.technet"
-      - name: "Odin"
-        id: "odin-services"
-        type: "group"
-        children:
-          - name: "NixOS Upgrade"
-            id: "odin-nixos-upgrade"
-            type: "systemd_service"
-            interval: 1h
-            service_name: "nixos-upgrade.service"
-            max_age: 1w
-            ssh_config:
-              host: "odin.technet"
-          - name: "Networking"
-            id: "odin-networking"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "NetworkManager.service"
-            ssh_config:
-              host: "odin.technet"
-          - name: "Bluetooth"
-            id: "local-bluetooth"
-            type: "systemd_service"
-            interval: 1m
-            service_name: "bluetooth.service"
-            ssh_config:
-              host: "odin.technet"
+      - name: "Nginx"
+        id: "server-nginx"
+        type: "systemd_service"
+        interval: 1m
+        service_name: "nginx.service"
+        ssh_config:
+          host: "server.example.com"
 
+  - name: "Backups"
+    type: "group"
+    children:
+      - name: "Nightly Backup"
+        id: "server-backup"
+        type: "borg"
+        interval: 1h
+        max_age: 1d
+        repo: "/path/to/borg/repo"
+        # passphrase_command: "cat /etc/vigil/borg.pass"   # for encrypted repos
+        ssh_config:
+          host: "server.example.com"
