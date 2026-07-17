@@ -98,3 +98,57 @@ plugins:
         # passphrase_command: "cat /etc/vigil/borg.pass"   # for encrypted repos
         ssh_config:
           host: "server.example.com"
+
+  - name: "Server I/O & Network"
+    type: "group"
+    grid_columns: 4
+    children:
+      - name: "Disk I/O"
+        id: "server-diskio"
+        type: "diskio"
+        interval: 1m
+        # device: "nvme0n1"   # optional; auto-detects the busiest physical disk
+        ssh_config:
+          host: "server.example.com"
+      - name: "Interrupts"
+        id: "server-interrupts"
+        type: "interrupts"
+        interval: 1m
+        irq_warning: 20000     # interrupts/sec
+        irq_threshold: 50000
+        ssh_config:
+          host: "server.example.com"
+      - name: "Connections"
+        id: "server-connections"
+        type: "connections"
+        interval: 1m
+        total_warning: 500     # total TCP connections
+        total_threshold: 1000
+        ssh_config:
+          host: "server.example.com"
+      - name: "WiFi"
+        id: "server-wifi"
+        type: "wifi"
+        interval: 1m
+        # interface: "wlan0"   # optional; auto-detects the strongest link
+        quality_warning: 40    # link quality floor (warn below)
+        quality_threshold: 20  # link quality floor (fail below)
+        ssh_config:
+          host: "server.example.com"
+
+  - name: "Reachability"
+    type: "group"
+    children:
+      - name: "Port & URL Checks"
+        id: "server-ports"
+        type: "ports"
+        interval: 1m
+        timeout: 5             # per-check timeout (seconds)
+        checks:
+          - name: "SSH"        # TCP check (bash /dev/tcp)
+            host: "server.example.com"
+            port: 22
+          - name: "API Health" # URL check (curl; 2xx/3xx = up)
+            url: "https://api.example.com/health"
+        ssh_config:
+          host: "server.example.com"
