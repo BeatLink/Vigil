@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from nicegui import app, ui
 from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory, Setting
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
-from .components import action_chip, card, section_title
+from .components import action_chip, card, section_title, safe_timer
 
 _ICON = Path(__file__).parent.parent.parent / 'static' / 'icon.svg'
 
@@ -124,7 +124,7 @@ def init_gui(engine: Any, port: int = 8080):
               tree.update()
 
           # Periodically refresh tree data (dots and nodes)
-          ui.timer(5.0, refresh_tree)
+          safe_timer(5.0, refresh_tree)
 
           # Restore previously saved expanded state
           def _load_expanded() -> list:
@@ -322,7 +322,7 @@ def init_gui(engine: Any, port: int = 8080):
               update_table()
 
           update_charts()
-          ui.timer(10.0, update_charts)
+          safe_timer(10.0, update_charts)
 
           with ui.row().classes('w-full gap-4'):
               with card('flex-1'):
@@ -339,7 +339,7 @@ def init_gui(engine: Any, port: int = 8080):
                   def update_m():
                       query = Metric.select().order_by(Metric.timestamp.desc()).limit(20)
                       m_table.rows[:] = [m.__data__ for m in query]
-                  ui.timer(5.0, update_m)
+                  safe_timer(5.0, update_m)
 
               with card('flex-1'):
                   ui.label('Recent Events').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
@@ -354,7 +354,7 @@ def init_gui(engine: Any, port: int = 8080):
                   def update_e():
                       query = Event.select().order_by(Event.timestamp.desc()).limit(20)
                       e_table.rows[:] = [e.__data__ for e in query]
-                  ui.timer(5.0, update_e)
+                  safe_timer(5.0, update_e)
 
       def render_plugin_detail(plugin: Any):
           info = plugin.present()
