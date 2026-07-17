@@ -96,7 +96,17 @@ class DatabaseManager:
     def _connect_and_init(self):
         """Connects to the database and creates tables if they don't exist."""
         try:
-            db.init(self.db_path)
+            # WAL + synchronous=NORMAL is the standard fix for SQLite-on-ZFS
+            # fsync stalls: writes go to a write-ahead log and are fsync'd far
+            # less often, so a busy polling loop doesn't block the process on
+            # ZFS ZIL commits every insert. busy_timeout lets readers (the web
+            # UI) wait briefly for a writer instead of erroring immediately.
+            db.init(self.db_path, pragmas={
+                'journal_mode': 'wal',
+                'synchronous': 1,        # NORMAL
+                'busy_timeout': 5000,    # ms
+                'foreign_keys': 1,
+            })
             db.connect()
             db.create_tables([Metric, Event, Setting, StatusHistory, LogLine])
             logging.info(f"Database initialized and connected at {self.db_path}")
