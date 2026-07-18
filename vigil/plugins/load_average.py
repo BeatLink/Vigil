@@ -101,7 +101,7 @@ class LoadAveragePlugin(BasePlugin):
         with layout.cell('load_15m_card'):
             load_15m_label = info_card('LOAD 15M', '-- %')
         with layout.cell('chart'):
-            history_chart('LOAD AVERAGE (%)', self.name, 'load_pct_1m')
+            history_chart('LOAD AVERAGE (%)', self.id, 'load_pct_1m')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

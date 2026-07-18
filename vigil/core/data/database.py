@@ -95,6 +95,11 @@ class Event(BaseModel):
     level = CharField()
     message = TextField()
     target = CharField(null=True)
+    # Unique id of the monitor that wrote this, for per-plugin views. The
+    # message also carries a "[Display Name] " prefix, but names repeat across
+    # groups so the prefix cannot identify the writer on its own. Nullable for
+    # rows written before this column existed, and for core (non-plugin) events.
+    source_id = CharField(null=True, index=True)
 
 class Setting(BaseModel):
     """Model for storing persistent key-value settings."""
@@ -205,21 +210,34 @@ def _job_to_dict(job: 'Job') -> Dict[str, Any]:
 
 
 class InternalDatabaseLogger:
-    """A helper class for plugins to write logs and metrics back to the database."""
-    def __init__(self, db_manager: 'DatabaseManager', target: str, plugin_name: str):
+    """
+    A helper class for plugins to write logs and metrics back to the database.
+
+    `plugin_name` is the display name, used to prefix event messages so the
+    global feed reads naturally. `plugin_id` is the monitor's unique id and is
+    what rows are keyed and queried by — display names repeat across groups
+    (several monitors are called "On Disk"), so anything keyed on the name
+    alone mixes their data together. It defaults to the name for callers that
+    have no separate id.
+    """
+    def __init__(self, db_manager: 'DatabaseManager', target: str, plugin_name: str,
+                 plugin_id: Optional[str] = None):
         self.db = db_manager
         self.target = target
         self.plugin_name = plugin_name
+        self.plugin_id = plugin_id or plugin_name
 
     def write(self, message: str, level: str = "INFO"):
         """Writes a formatted log entry into the Event table."""
-        # Prefix the message with the plugin name for global context
+        # Prefix the message with the plugin name for global context; the id
+        # is stored alongside so per-plugin views can filter unambiguously.
         formatted_message = f"[{self.plugin_name}] {message}"
-        self.db.insert_event(level, formatted_message, self.target)
+        self.db.insert_event(level, formatted_message, self.target,
+                             source_id=self.plugin_id)
 
     def metric(self, name: str, value: float, metadata: Optional[str] = None):
         """Writes a metric entry into the Metric table."""
-        self.db.insert_metric(self.target, self.plugin_name, name, value, metadata)
+        self.db.insert_metric(self.target, self.plugin_id, name, value, metadata)
 
     def log_line(self, message: str, level: str = "INFO", log_time: Optional[str] = None):
         """
@@ -270,12 +288,36 @@ class DatabaseManager:
             })
             db.connect()
             db.create_tables([Metric, Event, Setting, StatusHistory, LogLine, Job, JobOutput])
+            self._migrate()
             db.close()  # release the init connection; per-thread ones open on demand
             logging.info(f"Database initialized and connected at {self.db_path}")
         except OperationalError as e:
             logging.error(f"Failed to connect or initialize database at {self.db_path}: {e}")
             raise
         _writer.start()
+
+    @staticmethod
+    def _migrate():
+        """
+        Bring an existing database up to the current schema.
+
+        `create_tables` only creates tables that are missing — it never alters
+        one that already exists. A column added to a model therefore appears on
+        fresh installs but not on an upgraded database, where every insert then
+        fails with "table X has no column named Y". Because writes are queued to
+        the background writer, those failures surface only as log lines while
+        the data is silently dropped.
+
+        Each step is additive and idempotent, so this is safe to run on every
+        start and needs no version bookkeeping.
+        """
+        columns = {c.name for c in db.get_columns('event')}
+        if 'source_id' not in columns:
+            # Identifies the monitor that wrote an event; see Event.source_id.
+            db.execute_sql('ALTER TABLE event ADD COLUMN source_id VARCHAR(255)')
+            db.execute_sql('CREATE INDEX IF NOT EXISTS event_source_id '
+                           'ON event (source_id)')
+            logging.info("Migrated: added event.source_id")
 
     def insert_metric(self, target: str, collector: str, metric_name: str, value: float, metadata: Optional[str] = None):
         """Queue a metric record for the background writer (non-blocking)."""
@@ -342,9 +384,11 @@ class DatabaseManager:
                 for m in query
             ]
 
-    def insert_event(self, level: str, message: str, target: Optional[str] = None):
+    def insert_event(self, level: str, message: str, target: Optional[str] = None,
+                     source_id: Optional[str] = None):
         """Queue an event record for the background writer (non-blocking)."""
-        _writer.submit(lambda: Event.create(level=level, message=message, target=target))
+        _writer.submit(lambda: Event.create(level=level, message=message, target=target,
+                                            source_id=source_id))
 
     def recent_events(self, limit: int = 200, level: Optional[str] = None,
                       target: Optional[str] = None, search: Optional[str] = None):
@@ -561,6 +605,7 @@ class DatabaseManager:
         """Queue a runtime setting update for the background writer (non-blocking)."""
         _writer.submit(lambda: Setting.insert(key=key, value=value).on_conflict_replace().execute())
 
-    def get_logger(self, target: str, plugin_name: str) -> InternalDatabaseLogger:
+    def get_logger(self, target: str, plugin_name: str,
+                   plugin_id: Optional[str] = None) -> InternalDatabaseLogger:
         """Factory method to provide a scoped logger for a specific plugin instance."""
-        return InternalDatabaseLogger(self, target, plugin_name)
+        return InternalDatabaseLogger(self, target, plugin_name, plugin_id)

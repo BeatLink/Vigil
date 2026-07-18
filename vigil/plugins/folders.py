@@ -138,7 +138,7 @@ class FoldersPlugin(BasePlugin):
             for row in (
                 Metric.select()
                 .where(
-                    (Metric.collector == self.name) &
+                    (Metric.collector == self.id) &
                     (Metric.metric_name.startswith('folder_')) &
                     (Metric.metric_name.endswith('_gb')) &
                     (Metric.metric_name != 'worst_folder_gb')

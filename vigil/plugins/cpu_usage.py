@@ -106,7 +106,7 @@ class CpuUsagePlugin(BasePlugin):
         with layout.cell('cpu_card'):
             cpu_label = info_card('CPU', '-- %')
         with layout.cell('chart'):
-            history_chart('CPU USAGE (%)', self.name, 'cpu_pct')
+            history_chart('CPU USAGE (%)', self.id, 'cpu_pct')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

@@ -107,9 +107,9 @@ class InterruptsPlugin(BasePlugin):
         with layout.cell('ctxt_card'):
             ctxt_label = info_card('CTX SWITCH/S', '--')
         with layout.cell('irq_chart'):
-            history_chart('INTERRUPTS / SEC', self.name, 'irq_per_sec')
+            history_chart('INTERRUPTS / SEC', self.id, 'irq_per_sec')
         with layout.cell('ctxt_chart'):
-            history_chart('CONTEXT SWITCHES / SEC', self.name, 'ctxt_per_sec')
+            history_chart('CONTEXT SWITCHES / SEC', self.id, 'ctxt_per_sec')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

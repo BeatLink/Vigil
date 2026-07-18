@@ -112,9 +112,9 @@ class ConnectionsPlugin(BasePlugin):
         with layout.cell('timewait_card'):
             timewait_label = info_card('TIME_WAIT', '--')
         with layout.cell('total_chart'):
-            history_chart('TOTAL CONNECTIONS', self.name, 'total')
+            history_chart('TOTAL CONNECTIONS', self.id, 'total')
         with layout.cell('established_chart'):
-            history_chart('ESTABLISHED', self.name, 'established')
+            history_chart('ESTABLISHED', self.id, 'established')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

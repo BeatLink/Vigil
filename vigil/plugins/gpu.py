@@ -140,7 +140,7 @@ class GpuPlugin(BasePlugin):
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
         with layout.cell('chart'):
-            history_chart('GPU UTILIZATION (%)', self.name, 'gpu_util')
+            history_chart('GPU UTILIZATION (%)', self.id, 'gpu_util')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 
@@ -167,7 +167,7 @@ class GpuPlugin(BasePlugin):
             for row in (
                 Metric.select()
                 .where(
-                    (Metric.collector == self.name) &
+                    (Metric.collector == self.id) &
                     (Metric.metric_name.startswith('gpu')) &
                     (Metric.metric_name.endswith('_util')) &
                     (Metric.metric_name != 'gpu_util')

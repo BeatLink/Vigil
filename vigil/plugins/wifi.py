@@ -132,9 +132,9 @@ class WifiPlugin(BasePlugin):
         with layout.cell('signal_card'):
             signal_label = info_card('SIGNAL', '-- dBm')
         with layout.cell('quality_chart'):
-            history_chart('LINK QUALITY', self.name, 'link_quality')
+            history_chart('LINK QUALITY', self.id, 'link_quality')
         with layout.cell('signal_chart'):
-            history_chart('SIGNAL (dBm)', self.name, 'signal_dbm')
+            history_chart('SIGNAL (dBm)', self.id, 'signal_dbm')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

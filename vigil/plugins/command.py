@@ -141,7 +141,7 @@ class CommandPlugin(BasePlugin):
             with layout.cell('value_card'):
                 value_label = info_card(self.value_label, '--')
             with layout.cell('chart'):
-                history_chart(self.value_label, self.name, 'value')
+                history_chart(self.value_label, self.id, 'value')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

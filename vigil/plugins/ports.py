@@ -153,7 +153,7 @@ class PortsPlugin(BasePlugin):
             down_label = info_card('DOWN', '--')
         with layout.cell('charts'):
             for check in self.checks:
-                history_chart(f"{check['name']} LATENCY (ms)", self.name, f"{check['metric']}_latency_ms")
+                history_chart(f"{check['name']} LATENCY (ms)", self.id, f"{check['metric']}_latency_ms")
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

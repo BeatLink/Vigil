@@ -132,9 +132,9 @@ class NetworkUsagePlugin(BasePlugin):
         with layout.cell('tx_card'):
             tx_label = info_card('UPLOAD', '-- KB/s')
         with layout.cell('rx_chart'):
-            history_chart('DOWNLOAD HISTORY (KB/s)', self.name, 'rx_kbps')
+            history_chart('DOWNLOAD HISTORY (KB/s)', self.id, 'rx_kbps')
         with layout.cell('tx_chart'):
-            history_chart('UPLOAD HISTORY (KB/s)', self.name, 'tx_kbps')
+            history_chart('UPLOAD HISTORY (KB/s)', self.id, 'tx_kbps')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

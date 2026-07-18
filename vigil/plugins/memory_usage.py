@@ -91,7 +91,7 @@ class MemoryUsagePlugin(BasePlugin):
         with layout.cell('mem_used_card'):
             mem_used_label = info_card('MEM USED', '--')
         with layout.cell('chart'):
-            history_chart('MEMORY USAGE (%)', self.name, 'memory_pct')
+            history_chart('MEMORY USAGE (%)', self.id, 'memory_pct')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

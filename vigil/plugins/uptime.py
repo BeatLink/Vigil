@@ -85,13 +85,13 @@ class UptimePlugin(BasePlugin):
         with layout.cell('latency_card'):
             latency_label = info_card('LAST LATENCY', '-- ms')
         with layout.cell('chart'):
-            history_chart('RESPONSE TIME HISTORY (ms)', self.name, 'latency_ms')
+            history_chart('RESPONSE TIME HISTORY (ms)', self.id, 'latency_ms')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 
         def update_latency():
             last = Metric.select().where(
-                (Metric.collector == self.name) & (Metric.metric_name == 'latency_ms')
+                (Metric.collector == self.id) & (Metric.metric_name == 'latency_ms')
             ).order_by(Metric.timestamp.desc()).first()
             if last:
                 latency_label.text = f"{last.value:.1f} ms"

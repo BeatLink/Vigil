@@ -151,9 +151,9 @@ class DiskIoPlugin(BasePlugin):
         with layout.cell('write_card'):
             write_label = info_card('WRITE', '-- KB/s')
         with layout.cell('read_chart'):
-            history_chart('READ THROUGHPUT (KB/s)', self.name, 'read_kbps')
+            history_chart('READ THROUGHPUT (KB/s)', self.id, 'read_kbps')
         with layout.cell('write_chart'):
-            history_chart('WRITE THROUGHPUT (KB/s)', self.name, 'write_kbps')
+            history_chart('WRITE THROUGHPUT (KB/s)', self.id, 'write_kbps')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

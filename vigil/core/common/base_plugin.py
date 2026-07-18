@@ -50,18 +50,26 @@ class BasePlugin(ABC):
                 'job': JobController(self.ssh_conn, db, self.id, self.target),
             },
             'loggers': {
-                'db_logs': db.get_logger(self.target, self.name),
-                'db_metrics': db.get_logger(self.target, self.name)
+                # Both loggers carry the display name (for readable event
+                # prefixes) and the unique id (what rows are keyed by). Names
+                # are only unique within a group, so nesting monitors —
+                # "Odin > Borgmatic > On Disk" and "Heimdall > Borgmatic >
+                # On Disk" — makes several share a name, and anything keyed on
+                # the name alone silently mixes their data together.
+                'db_logs': db.get_logger(self.target, self.name, self.id),
+                'db_metrics': db.get_logger(self.target, self.name, self.id)
             },
             'ui': {
                 'host_card': partial(render_host_card, self.target),
-                'metrics_table': partial(metric_table, self.name),
+                # Metric-backed widgets take the unique id, matching how
+                # db_metrics writes them.
+                'metrics_table': partial(metric_table, self.id),
                 'logs_table': partial(log_table, self.target, filter_prefix=self.name),
                 # For plugins that write their own commentary rather than
                 # collecting logs off a target — those have no LogLine rows,
                 # so logs_table would render empty for them.
-                'events_table': partial(event_table, self.name, self.target),
-                'status_card': partial(render_status_card, self.name)
+                'events_table': partial(event_table, self.name, self.id, self.target),
+                'status_card': partial(render_status_card, self.id)
             }
         }
 
@@ -136,11 +144,18 @@ class BasePlugin(ABC):
             self._collecting = False
 
     def latest_metric(self, metric_name: str):
-        """Return the most recent Metric row for this plugin, or None."""
+        """
+        Return the most recent Metric row for this plugin, or None.
+
+        Scoped by `id` rather than `name`: display names repeat across groups
+        (several monitors are called "On Disk"), so filtering by name returns
+        whichever of them wrote last — one monitor's page showing another's
+        readings.
+        """
         from vigil.core.data.database import Metric
         return (
             Metric.select()
-            .where((Metric.collector == self.name) & (Metric.metric_name == metric_name))
+            .where((Metric.collector == self.id) & (Metric.metric_name == metric_name))
             .order_by(Metric.timestamp.desc())
             .first()
         )

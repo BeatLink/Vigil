@@ -67,13 +67,13 @@ class ZFSPoolPlugin(BasePlugin):
         with layout.cell('threshold_card'):
             info_card('THRESHOLD', f'{self.threshold}%')
         with layout.cell('chart'):
-            history_chart(f'CAPACITY HISTORY — {self.pool} (%)', self.name, 'usage_pct')
+            history_chart(f'CAPACITY HISTORY — {self.pool} (%)', self.id, 'usage_pct')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 
         def update_usage():
             last = Metric.select().where(
-                (Metric.collector == self.name) & (Metric.metric_name == 'usage_pct')
+                (Metric.collector == self.id) & (Metric.metric_name == 'usage_pct')
             ).order_by(Metric.timestamp.desc()).first()
             if last:
                 pct = last.value

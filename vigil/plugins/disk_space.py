@@ -89,7 +89,7 @@ class DiskSpacePlugin(BasePlugin):
         with layout.cell('total_card'):
             total_label = info_card('TOTAL SIZE', '--')
         with layout.cell('chart'):
-            history_chart(f'USAGE HISTORY — {self.path} (%)', self.name, 'used_pct')
+            history_chart(f'USAGE HISTORY — {self.path} (%)', self.id, 'used_pct')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 

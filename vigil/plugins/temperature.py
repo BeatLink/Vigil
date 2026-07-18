@@ -110,7 +110,7 @@ class TemperaturePlugin(BasePlugin):
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
         with layout.cell('chart'):
-            history_chart('TEMPERATURE (°C)', self.name, 'temp_c')
+            history_chart('TEMPERATURE (°C)', self.id, 'temp_c')
         with layout.cell('logs'):
             self.internal_modules['ui']['logs_table']()
 
@@ -120,7 +120,7 @@ class TemperaturePlugin(BasePlugin):
             for row in (
                 Metric.select()
                 .where(
-                    (Metric.collector == self.name) &
+                    (Metric.collector == self.id) &
                     (Metric.metric_name.startswith('temp_zone_'))
                 )
                 .order_by(Metric.timestamp.desc())
@@ -141,7 +141,7 @@ class TemperaturePlugin(BasePlugin):
             # Update max card
             latest_max = (
                 Metric.select()
-                .where((Metric.collector == self.name) & (Metric.metric_name == 'temp_c'))
+                .where((Metric.collector == self.id) & (Metric.metric_name == 'temp_c'))
                 .order_by(Metric.timestamp.desc())
                 .first()
             )

@@ -140,7 +140,7 @@ class FilesystemsPlugin(BasePlugin):
             for row in (
                 Metric.select()
                 .where(
-                    (Metric.collector == self.name) &
+                    (Metric.collector == self.id) &
                     (Metric.metric_name.startswith('fs_')) &
                     (Metric.metric_name.endswith('_used_pct'))
                 )

@@ -158,8 +158,9 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
         safe_timer(5.0, update_logs)
         return table
 
-def event_table(plugin_name: str, target: str = '', title: str = 'Recent Events',
-                limit: int = 100, full_height: bool = False):
+def event_table(plugin_name: str, plugin_id: str = '', target: str = '',
+                title: str = 'Recent Events', limit: int = 100,
+                full_height: bool = False):
     """
     A table of a plugin's own Event messages — everything it wrote via
     `db_logger.write`.
@@ -170,8 +171,10 @@ def event_table(plugin_name: str, target: str = '', title: str = 'Recent Events'
     target — borg, for instance — have no LogLine rows at all, so a log_table
     on their page renders permanently empty while their Events pile up unseen.
 
-    Events are prefixed "[Plugin Name] " by the logger, so that prefix is both
-    the filter and something to strip for display.
+    Rows are selected by `plugin_id`, the monitor's unique id, not by the
+    "[Display Name] " prefix the logger writes: names repeat across groups
+    (several monitors are called "On Disk"), so a prefix match pulls in other
+    monitors' events. The prefix is still stripped for display.
     """
     from vigil.core.data.database import Event
     prefix = f"[{plugin_name}] "
@@ -196,9 +199,15 @@ def event_table(plugin_name: str, target: str = '', title: str = 'Recent Events'
             table.props('virtual-scroll')
 
         def update():
-            condition = Event.message.startswith(prefix)
-            if target:
-                condition &= (Event.target == target)
+            if plugin_id:
+                condition = (Event.source_id == plugin_id)
+            else:
+                # No id given (or rows predating source_id): fall back to the
+                # message prefix, narrowed by target. Ambiguous where two
+                # monitors share a name on one host, but better than nothing.
+                condition = Event.message.startswith(prefix)
+                if target:
+                    condition &= (Event.target == target)
             query = (Event.select()
                      .where(condition)
                      .order_by(Event.timestamp.desc())
