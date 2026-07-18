@@ -6,6 +6,7 @@ from functools import partial
 from vigil.core.ui.components import render_host_card, render_status_card, metric_table, log_table
 from vigil.core.modules.collectors.ssh_collector import SSHCollector
 from vigil.core.modules.controllers.ssh_controller import SSHController
+from vigil.core.modules.controllers.job_controller import JobController
 
 class BasePlugin(ABC):
     """
@@ -28,7 +29,12 @@ class BasePlugin(ABC):
         # Build the internal modules registry for use by subclasses
         self.internal_modules = {
             'collectors': {'ssh': SSHCollector(self.ssh_conn)},
-            'controllers': {'ssh': SSHController(self.ssh_conn)},
+            'controllers': {
+                'ssh': SSHController(self.ssh_conn),
+                # Long-running, cancellable, DB-tracked commands. Distinct from
+                # 'ssh', which is capped at 30s and returns only a boolean.
+                'job': JobController(self.ssh_conn, db, self.id, self.target),
+            },
             'loggers': {
                 'db_logs': db.get_logger(self.target, self.name),
                 'db_metrics': db.get_logger(self.target, self.name)
@@ -44,6 +50,7 @@ class BasePlugin(ABC):
         # Convenience aliases — available in every plugin without repetitive __init__ boilerplate
         self.ssh_collector  = self.internal_modules['collectors'].get('ssh')
         self.ssh_controller = self.internal_modules['controllers'].get('ssh')
+        self.job_controller = self.internal_modules['controllers'].get('job')
         self.db_logger      = self.internal_modules['loggers'].get('db_logs')
         self.db_metrics     = self.internal_modules['loggers'].get('db_metrics')
 

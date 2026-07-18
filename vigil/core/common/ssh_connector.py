@@ -3,6 +3,7 @@ import os
 import shlex
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
 
@@ -113,6 +114,108 @@ class SSHConnection:
         except Exception as e:
             logging.error(f"SSH execution failed on {self.host}: {e}")
             return -1, "", str(e)
+
+    def execute_streaming(self, command: str, on_line=None, connect_timeout: int = 5,
+                          timeout: Optional[float] = None,
+                          should_cancel=None) -> Tuple[int, str]:
+        """
+        Execute a long-running command, delivering output line-by-line as it
+        arrives. Returns (exit_status, error_message).
+
+        ``execute`` cannot serve this case: subprocess.run buffers everything
+        until the process exits, so a backup running for an hour yields nothing
+        until it is over, and its 30s-style timeout would kill it outright.
+        Here output is read incrementally and handed to ``on_line(stream, text)``
+        as each line completes, so the caller can persist progress live.
+
+        stderr is merged into stdout rather than read on a second pipe. borg
+        writes progress to stderr and results to stdout; reading two pipes from
+        one thread risks deadlocking when one fills while we block on the other,
+        and interleaved order is what makes the output readable anyway. The
+        caller tags the stream.
+
+        ``should_cancel`` is polled between lines; when it returns True the
+        remote process is terminated and the status is 130 (SIGINT convention).
+        ``timeout`` is an optional overall wall-clock bound — None means run to
+        completion, which is the norm for jobs.
+        """
+        target = f"{self.username}@{self.host}" if self.username else self.host
+        # -tt forces a PTY so that killing the local ssh client also signals the
+        # remote process. Without it, terminating ssh leaves borg running on the
+        # far end, holding the repo lock with nothing able to stop it.
+        argv = self._ssh_base(connect_timeout) + ["-tt", target, command]
+
+        proc = None
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                bufsize=1,
+                universal_newlines=True,
+                errors="replace",
+            )
+        except Exception as e:
+            logging.error(f"SSH streaming start failed on {self.host}: {e}")
+            return -1, str(e)
+
+        start = time.monotonic()
+        cancelled = False
+        try:
+            for line in proc.stdout:
+                if on_line is not None:
+                    try:
+                        on_line("stdout", line.rstrip("\r\n"))
+                    except Exception as e:
+                        # A failing consumer must not abort the remote job.
+                        logging.error(f"Job output handler failed: {e}")
+                if should_cancel is not None and should_cancel():
+                    cancelled = True
+                    break
+                if timeout is not None and (time.monotonic() - start) > timeout:
+                    logging.error(f"SSH streaming timed out after {timeout}s on {self.host}")
+                    self._terminate(proc)
+                    return -1, f"Timed out after {timeout}s"
+
+            if cancelled:
+                self._terminate(proc)
+                return 130, "Cancelled"
+
+            return proc.wait(), ""
+        except Exception as e:
+            logging.error(f"SSH streaming failed on {self.host}: {e}")
+            self._terminate(proc)
+            return -1, str(e)
+        finally:
+            if proc is not None and proc.stdout is not None:
+                try:
+                    proc.stdout.close()
+                except Exception:
+                    pass
+
+    @staticmethod
+    def _terminate(proc: "subprocess.Popen") -> None:
+        """
+        Stop a streaming process, escalating to SIGKILL if it ignores SIGTERM.
+
+        borg traps SIGTERM to release its repository lock cleanly, so it is
+        given a grace period before being killed — a hard kill can leave a stale
+        lock that blocks the next backup.
+        """
+        if proc.poll() is not None:
+            return
+        try:
+            proc.terminate()
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
     def close(self):
         """Tear down the shared master connection for this host, if any."""

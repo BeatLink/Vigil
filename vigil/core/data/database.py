@@ -107,6 +107,57 @@ class StatusHistory(BaseModel):
     collector_id = CharField(index=True)
     state = CharField()  # 'online', 'warning', 'failed', 'offline'
 
+class Job(BaseModel):
+    """
+    A long-running command started on a target host on the user's behalf.
+
+    Distinct from a polling cycle, which is short and repeats: a job is a
+    one-shot operation (a borg backup, a repo check) that can run for hours and
+    must outlive the browser session that started it. State is persisted here
+    rather than held in memory so the UI can reattach after a reload, a restart,
+    or from a second browser — the DB row is the single source of truth for
+    "is this still running?".
+
+    `state` is one of:
+      running   — started, process alive
+      succeeded — exited 0
+      failed    — exited non-zero (see exit_code / error)
+      cancelled — killed on request
+    Terminal states all have `finished` set; `running` never does.
+    """
+    plugin_id = CharField(index=True)     # Which monitor owns this job
+    target = CharField(index=True)
+    kind = CharField(index=True)          # e.g. 'backup', 'check', 'prune'
+    state = CharField(index=True, default='running')
+    command = TextField()                 # Redacted — never store raw secrets
+    started = DateTimeField(default=datetime.now, index=True)
+    finished = DateTimeField(null=True)
+    exit_code = IntegerField(null=True)
+    # Latest human-readable progress line, replaced as the job advances, so the
+    # UI can show current state without scanning the whole output log.
+    progress = TextField(null=True)
+    error = TextField(null=True)
+
+
+class JobOutput(BaseModel):
+    """
+    A single line of stdout/stderr from a Job, in emission order.
+
+    Kept out of the Job row so output can stream in incrementally while the job
+    runs, and so the UI can page through it. `seq` orders lines within a job:
+    timestamps collide at sub-second resolution when borg emits a burst, and
+    the autoincrement id is global rather than per-job.
+    """
+    job = ForeignKeyField(Job, backref='output', on_delete='CASCADE', index=True)
+    seq = IntegerField()
+    timestamp = DateTimeField(default=datetime.now)
+    stream = CharField(default='stdout')  # 'stdout' | 'stderr'
+    message = TextField()
+
+    class Meta:
+        indexes = ((('job', 'seq'), True),)
+
+
 class LogLine(BaseModel):
     """
     Persistent storage for log lines collected from targets (e.g. journald).
@@ -126,6 +177,33 @@ class LogLine(BaseModel):
     dedup_hash = CharField(unique=True)
 
 # DATABASE HELPERS ##################################################################################################################################
+def _job_to_dict(job: 'Job') -> Dict[str, Any]:
+    """
+    Flatten a Job row into a plain dict for UI/API consumers.
+
+    Returning dicts (rather than model instances) keeps callers free of an open
+    DB connection and of peewee itself, matching recent_events()/latest_metrics().
+    `duration` is computed here because both the UI and the API want elapsed
+    time, and a running job has no `finished` to subtract from.
+    """
+    end = job.finished or datetime.now()
+    return {
+        'id': job.id,
+        'plugin_id': job.plugin_id,
+        'target': job.target,
+        'kind': job.kind,
+        'state': job.state,
+        'command': job.command,
+        'started': job.started.isoformat(sep=' ', timespec='seconds'),
+        'finished': job.finished.isoformat(sep=' ', timespec='seconds') if job.finished else None,
+        'duration': max(0, int((end - job.started).total_seconds())),
+        'exit_code': job.exit_code,
+        'progress': job.progress,
+        'error': job.error,
+        'running': job.state == 'running',
+    }
+
+
 class InternalDatabaseLogger:
     """A helper class for plugins to write logs and metrics back to the database."""
     def __init__(self, db_manager: 'DatabaseManager', target: str, plugin_name: str):
@@ -191,7 +269,7 @@ class DatabaseManager:
                 'foreign_keys': 1,
             })
             db.connect()
-            db.create_tables([Metric, Event, Setting, StatusHistory, LogLine])
+            db.create_tables([Metric, Event, Setting, StatusHistory, LogLine, Job, JobOutput])
             db.close()  # release the init connection; per-thread ones open on demand
             logging.info(f"Database initialized and connected at {self.db_path}")
         except OperationalError as e:
@@ -335,6 +413,141 @@ class DatabaseManager:
 
         _writer.submit(_do_prune)
         return 0  # pruning is asynchronous; count is logged by the writer
+
+    # JOBS ##########################################################################################################################################
+    # Unlike metrics/events, job writes are synchronous. create_job must return a
+    # real id to the caller, and a job's output lines must be durable the instant
+    # the UI polls for them — queueing either behind the async writer would mean
+    # handing back a job that isn't in the DB yet.
+
+    def create_job(self, plugin_id: str, target: str, kind: str, command: str) -> int:
+        """Record a newly started job and return its id."""
+        with db.connection_context():
+            return Job.create(plugin_id=plugin_id, target=target, kind=kind,
+                              command=command, state='running').id
+
+    def append_job_output(self, job_id: int, lines, stream: str = 'stdout') -> None:
+        """
+        Append output lines to a job in one batch.
+
+        Takes an iterable rather than a single line because a running command
+        produces output far faster than one-row-per-commit can absorb; the
+        reader hands over whatever it has drained since the last flush.
+        `seq` continues from the highest existing value so ordering survives
+        across batches.
+        """
+        lines = [ln for ln in lines if ln is not None]
+        if not lines:
+            return
+        with db.connection_context():
+            start = (JobOutput
+                     .select(fn.COALESCE(fn.MAX(JobOutput.seq), -1))
+                     .where(JobOutput.job == job_id)
+                     .scalar()) + 1
+            with db.atomic():
+                JobOutput.insert_many([
+                    {'job': job_id, 'seq': start + i, 'stream': stream, 'message': ln}
+                    for i, ln in enumerate(lines)
+                ]).execute()
+
+    def set_job_progress(self, job_id: int, progress: str) -> None:
+        """Replace a job's current progress line (cheap, called frequently)."""
+        with db.connection_context():
+            Job.update(progress=progress).where(Job.id == job_id).execute()
+
+    def finish_job(self, job_id: int, state: str, exit_code: Optional[int] = None,
+                   error: Optional[str] = None) -> None:
+        """Mark a job terminal. `state` is succeeded | failed | cancelled."""
+        with db.connection_context():
+            Job.update(state=state, exit_code=exit_code, error=error,
+                       finished=datetime.now()).where(Job.id == job_id).execute()
+
+    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+        """Return one job as a plain dict, or None if it does not exist."""
+        with db.connection_context():
+            job = Job.get_or_none(Job.id == job_id)
+            return _job_to_dict(job) if job else None
+
+    def recent_jobs(self, plugin_id: Optional[str] = None, limit: int = 20,
+                    kind: Optional[str] = None) -> list:
+        """Return recent jobs (newest first) as plain dicts."""
+        with db.connection_context():
+            query = Job.select().order_by(Job.started.desc())
+            if plugin_id:
+                query = query.where(Job.plugin_id == plugin_id)
+            if kind:
+                query = query.where(Job.kind == kind)
+            return [_job_to_dict(j) for j in query.limit(limit)]
+
+    def running_jobs(self, plugin_id: Optional[str] = None) -> list:
+        """
+        Return jobs still marked running.
+
+        Used on startup to reconcile: a job whose process died with Vigil is
+        still 'running' in the DB, and the UI must not present it as live.
+        """
+        with db.connection_context():
+            query = Job.select().where(Job.state == 'running')
+            if plugin_id:
+                query = query.where(Job.plugin_id == plugin_id)
+            return [_job_to_dict(j) for j in query.order_by(Job.started.desc())]
+
+    def job_output(self, job_id: int, after_seq: int = -1, limit: int = 500) -> list:
+        """
+        Return a job's output lines in order, after `after_seq`.
+
+        The UI polls with the last seq it has rendered, so each poll transfers
+        only new lines rather than re-reading the whole log of a long job.
+        """
+        with db.connection_context():
+            query = (JobOutput
+                     .select()
+                     .where((JobOutput.job == job_id) & (JobOutput.seq > after_seq))
+                     .order_by(JobOutput.seq)
+                     .limit(limit))
+            return [
+                {
+                    'seq': o.seq,
+                    'timestamp': o.timestamp.isoformat(sep=' ', timespec='seconds'),
+                    'stream': o.stream,
+                    'message': o.message,
+                }
+                for o in query
+            ]
+
+    def reconcile_orphaned_jobs(self) -> int:
+        """
+        Fail any job left 'running' by a previous Vigil process.
+
+        Jobs are child processes of Vigil; if it exits, they die with it, but
+        their rows still say running. Called once at startup so the UI never
+        shows a job as live when nothing is executing it. Returns rows updated.
+        """
+        with db.connection_context():
+            return (Job.update(state='failed', finished=datetime.now(),
+                               error='Vigil restarted while this job was running')
+                    .where(Job.state == 'running').execute())
+
+    def prune_jobs(self, retention_days: int) -> int:
+        """
+        Delete finished jobs older than `retention_days` (<=0 disables).
+
+        JobOutput rows cascade via the foreign key. Only terminal jobs are
+        considered, so a long-running job is never pruned out from under itself.
+        """
+        if retention_days is None or retention_days <= 0:
+            return 0
+        cutoff = datetime.now() - timedelta(days=retention_days)
+
+        def _do_prune():
+            deleted = (Job.delete()
+                       .where((Job.state != 'running') & (Job.started < cutoff))
+                       .execute())
+            if deleted:
+                logging.info(f"Pruned {deleted} job(s) older than {retention_days}d")
+
+        _writer.submit(_do_prune)
+        return 0  # asynchronous; count is logged by the writer
 
     def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
         """Retrieves a runtime setting from the database."""

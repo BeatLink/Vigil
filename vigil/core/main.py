@@ -24,6 +24,12 @@ class VigilEngine:
         try:
             self.db = VigilDatabase(self.db_path)
             self.db.insert_event("INFO", "Vigil Engine initialized.", "vigil_core")
+            # Jobs are child processes of this one, so any still marked running
+            # died with the previous Vigil. Clear them at startup or the UI will
+            # present a dead job as live forever.
+            orphaned = self.db.reconcile_orphaned_jobs()
+            if orphaned:
+                logging.warning(f"Marked {orphaned} orphaned job(s) as failed after restart")
         except OperationalError as e:
             logging.critical(f"Failed to initialize database: {e}. Exiting.")
             sys.exit(1)
@@ -153,5 +159,9 @@ class VigilEngine:
         self._last_prune = now
         try:
             self.db.prune_logs(self.log_retention_days)
+            # Job history shares the log retention window: both are operator-
+            # facing records of past activity, and a separate knob for it would
+            # be one more setting with no distinct reason to differ.
+            self.db.prune_jobs(self.log_retention_days)
         except Exception as e:
             logging.error(f"Log retention prune failed: {e}")

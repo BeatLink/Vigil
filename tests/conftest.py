@@ -78,6 +78,17 @@ def make_plugin(db_manager):
         plugin.ssh_controller = MagicMock(
             execute_action=AsyncMock(return_value=(0, "", ""))
         )
+        # The job controller is kept real (backed by the temp DB) so job
+        # lifecycle and persistence are genuinely exercised; only the SSH
+        # connection under it is mocked. Tests drive it by setting
+        # plugin.job_controller.ssh.execute_streaming.
+        from vigil.core.modules.controllers.job_controller import JobController
+        mock_ssh = MagicMock()
+        mock_ssh.execute_streaming = MagicMock(return_value=(0, ""))
+        plugin.job_controller = JobController(
+            mock_ssh, db_manager, cfg["id"], mock_conn.host
+        )
+        plugin.internal_modules['controllers']['job'] = plugin.job_controller
         return plugin
 
     return factory
