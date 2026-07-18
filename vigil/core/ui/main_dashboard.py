@@ -44,22 +44,12 @@ def init_gui(engine: Any, port: int = 8080):
     if engine_run_func:
         app.on_startup(engine_run_func)
 
-    # State management for navigation
-    state = {
-        'current_view': 'overview',
-        'selected_plugin': None
-    }
-
-    def switch_view(view_type: str, plugin: Optional[Any] = None):
-        state['current_view'] = view_type
-        state['selected_plugin'] = plugin
-        # render_main is defined inside the page function (below); it registers
-        # itself in `state` so navigation from this outer scope can reach it.
-        render = state.get('render_main')
-        if render:
-            render()
-
-    _navigation_state['switch_func'] = switch_view
+    # Navigation state is created per client inside index_page(): `init_gui`
+    # runs once at startup, but each browser connection builds its own element
+    # tree. Sharing one dict here meant a new tab overwrote the previous tab's
+    # render callback, so navigating in an older tab called .clear() on a
+    # disconnected client and raised "The client this element belongs to has
+    # been deleted." before the detail view (logs included) could render.
 
     # Build the dashboard as an explicit page route rather than relying on
     # NiceGUI's auto-index page. In NiceGUI 3.x the auto-index re-executes the
@@ -69,6 +59,23 @@ def init_gui(engine: Any, port: int = 8080):
     @ui.page('/')
     def index_page():
       ui.query('body').style(f'background-color: {BACKGROUND_MUTED}')
+
+      # Per-client navigation state — see the note above init_gui's page route.
+      state: Dict[str, Any] = {
+          'current_view': 'overview',
+          'selected_plugin': None,
+      }
+
+      def switch_view(view_type: str, plugin: Optional[Any] = None):
+          state['current_view'] = view_type
+          state['selected_plugin'] = plugin
+          render = state.get('render_main')
+          if render:
+              render()
+
+      # navigate_to() (used by plugins) drives the most recently connected
+      # client. Rebinding per client keeps it pointing at a live element tree.
+      _navigation_state['switch_func'] = switch_view
 
       with ui.header().classes('items-center p-4').style(f'background-color: {PRIMARY}; color: {BACKGROUND}'):
           ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
@@ -154,7 +161,12 @@ def init_gui(engine: Any, port: int = 8080):
       main_container = ui.column().classes('w-full p-6 bg-transparent')
 
       def render_main():
-          main_container.clear()
+          try:
+              main_container.clear()
+          except RuntimeError:
+              # Client disconnected (tab closed/reloaded) while a handler still
+              # referenced this tree. Nothing to draw into; drop the render.
+              return
           with main_container:
               if state['current_view'] == 'overview':
                   render_overview()
@@ -163,7 +175,7 @@ def init_gui(engine: Any, port: int = 8080):
               else:
                   render_plugin_detail(state['selected_plugin'])
 
-      # Expose render_main to switch_view (defined in the outer scope).
+      # Expose render_main to switch_view (defined above in this page scope).
       state['render_main'] = render_main
 
       def render_events():
