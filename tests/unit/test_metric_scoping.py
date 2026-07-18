@@ -62,6 +62,31 @@ class TestMetricScoping:
         assert a.latest_metric("archive_count") is None
 
 
+class TestLogLineScoping:
+    def test_log_lines_are_written_under_the_id(self, colliding, db_manager):
+        from vigil.core.data.database import LogLine
+        a, _ = colliding
+        a.db_logger.log_line("boot ok", log_time="2026-01-01T00:00:00")
+        db_manager.flush()
+        with db.connection_context():
+            row = LogLine.select().first()
+        assert row.source == "odin-borgmatic-on-disk"
+
+    def test_identical_lines_from_siblings_both_survive(self, colliding, db_manager):
+        # `source` is part of the dedup hash. Keyed by name, two same-named
+        # monitors emitting the same line at the same timestamp collapse into
+        # one row and one of them loses the line entirely.
+        from vigil.core.data.database import LogLine
+        a, b = colliding
+        for p in (a, b):
+            p.db_logger.log_line("Started nixos-upgrade.service",
+                                 log_time="2026-01-01T00:00:00")
+        db_manager.flush()
+        with db.connection_context():
+            sources = {r.source for r in LogLine.select()}
+        assert sources == {"odin-borgmatic-on-disk", "heimdall-borgmatic-on-disk"}
+
+
 class TestMigration:
     def test_adds_source_id_to_a_pre_existing_event_table(self, tmp_path):
         # create_tables never alters an existing table, so a column added to

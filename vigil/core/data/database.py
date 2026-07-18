@@ -175,7 +175,9 @@ class LogLine(BaseModel):
     """
     timestamp = DateTimeField(default=datetime.now, index=True)
     target = CharField(index=True)
-    source = CharField(index=True)   # Logical source, e.g. plugin name or unit
+    # Unique id of the monitor that collected this line (not its display name,
+    # which repeats across groups). Also part of the dedup identity below.
+    source = CharField(index=True)
     level = CharField()
     message = TextField()
     # sha1 of (target, source, log_time, message) — stable identity of a line.
@@ -248,7 +250,12 @@ class InternalDatabaseLogger:
         cycles so the same line is stored exactly once. The write is queued to
         the background writer, so this returns immediately.
         """
-        self.db.insert_log_line(self.target, self.plugin_name, level, message, log_time)
+        # Keyed by id, like metrics and events: display names repeat across
+        # groups, and here the collision is twofold — a name-filtered panel
+        # would show another monitor's lines, and `source` feeds the dedup
+        # hash, so two same-named monitors emitting an identical line would
+        # collapse it to a single row and one of them would lose it entirely.
+        self.db.insert_log_line(self.target, self.plugin_id, level, message, log_time)
 
 # DATABASE MANAGER ##################################################################################################################################
 class DatabaseManager:

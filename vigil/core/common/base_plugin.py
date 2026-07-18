@@ -64,7 +64,7 @@ class BasePlugin(ABC):
                 # Metric-backed widgets take the unique id, matching how
                 # db_metrics writes them.
                 'metrics_table': partial(metric_table, self.id),
-                'logs_table': partial(log_table, self.target, filter_prefix=self.name),
+                'logs_table': partial(log_table, self.target, filter_prefix=self.id),
                 # For plugins that write their own commentary rather than
                 # collecting logs off a target — those have no LogLine rows,
                 # so logs_table would render empty for them.

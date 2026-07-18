@@ -59,7 +59,9 @@ def register_api(app: Any, engine: Any) -> None:
         target = next((p for p in _flatten(engine.plugins) if p.id == monitor_id), None)
         if target is None:
             return JSONResponse({'error': 'not found'}, status_code=404)
-        metrics = [m for m in db.latest_metrics() if m['collector'] == target.name]
+        # Match on id: metrics are keyed by it, and display names repeat across
+        # groups, so filtering by name returns other monitors' readings too.
+        metrics = [m for m in db.latest_metrics() if m['collector'] == target.id]
         return JSONResponse({
             'id': target.id,
             'name': target.name,
