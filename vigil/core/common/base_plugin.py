@@ -1,3 +1,5 @@
+import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 from vigil.core.common.ssh_connector import SSHConnection
@@ -20,6 +22,11 @@ class BasePlugin(ABC):
         self.interval = parse_duration(config.get('interval', 60))
         self.children: List['BasePlugin'] = []
         self.db = db
+        # True while on_collect is in flight; guards against overlapping polls
+        # of the same monitor (see run_cycle).
+        self._collecting = False
+        # Monotonic time of the last collection, for the interval check.
+        self._last_collected = 0.0
 
         # Initialize SSH infrastructure via the common library
         # The settings are passed down to allow the library to handle its own setup
@@ -81,8 +88,36 @@ class BasePlugin(ABC):
         }
 
     async def run_cycle(self):
-        """Main execution entry point for the plugin's polling interval."""
-        await self.on_collect()
+        """
+        Main execution entry point for the plugin's polling interval.
+
+        Skips this tick when the previous collection for this monitor has not
+        finished. A poll against a busy target can outlast its own interval; if
+        the engine kept starting new ones regardless, each would hold an SSH
+        session and a remote process, and they would accumulate until the
+        target was saturated — the monitor DoSing the thing it monitors. One
+        in-flight collection per monitor is always enough: the next tick picks
+        up whatever the last one missed.
+        """
+        if self._collecting:
+            logging.debug(
+                f"{self.name}: previous collection still running, skipping this tick"
+            )
+            return
+
+        # The engine ticks every 60s and calls every monitor; honouring the
+        # configured interval is this method's job. Without it, `interval: 1h`
+        # polled hourly targets once a minute.
+        now = time.monotonic()
+        if self._last_collected and (now - self._last_collected) < self.interval:
+            return
+
+        self._collecting = True
+        try:
+            await self.on_collect()
+        finally:
+            self._last_collected = time.monotonic()
+            self._collecting = False
 
     def latest_metric(self, metric_name: str):
         """Return the most recent Metric row for this plugin, or None."""

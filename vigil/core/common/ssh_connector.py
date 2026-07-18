@@ -1,6 +1,7 @@
 import logging
 import os
 import shlex
+import signal
 import subprocess
 import tempfile
 import time
@@ -96,24 +97,66 @@ class SSHConnection:
         """
         target = f"{self.username}@{self.host}" if self.username else self.host
         argv = self._ssh_base(connect_timeout) + [target, command]
+        proc = None
         try:
-            proc = subprocess.run(
+            # start_new_session puts ssh in its own process group so a timeout
+            # can signal the whole tree at once. subprocess.run's own timeout
+            # kills only the direct child: the remote command keeps running, and
+            # locally the `ssh` process can survive wedged in uninterruptible
+            # I/O. That leaked one process per poll against a busy repo until
+            # the host was saturated — the failure this guards against.
+            proc = subprocess.Popen(
                 argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                timeout=timeout,
+                start_new_session=True,
             )
+            stdout, stderr = proc.communicate(timeout=timeout)
             return (
                 proc.returncode,
-                proc.stdout.decode(errors="replace").strip(),
-                proc.stderr.decode(errors="replace").strip(),
+                stdout.decode(errors="replace").strip(),
+                stderr.decode(errors="replace").strip(),
             )
         except subprocess.TimeoutExpired:
             logging.error(f"SSH command timed out after {timeout}s on {self.host}: {command!r}")
+            self._kill_group(proc)
             return -1, "", f"Timed out after {timeout}s"
         except Exception as e:
             logging.error(f"SSH execution failed on {self.host}: {e}")
+            self._kill_group(proc)
             return -1, "", str(e)
+
+    @staticmethod
+    def _kill_group(proc: Optional["subprocess.Popen"]) -> None:
+        """
+        Terminate a timed-out ssh invocation and everything it spawned.
+
+        Signals the process group (negative pid) rather than the single child,
+        because `ssh` may have forked helpers and, more importantly, so a
+        wedged process cannot outlive the call that owns it. SIGTERM first so
+        ssh can close its channel cleanly, then SIGKILL for anything stuck in
+        uninterruptible I/O, which SIGTERM alone cannot clear.
+
+        Killing the local ssh also tears down the remote command: sshd sees the
+        channel close and signals the process it started.
+        """
+        if proc is None or proc.poll() is not None:
+            return
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(os.getpgid(proc.pid), sig)
+            except (ProcessLookupError, PermissionError):
+                return
+            try:
+                proc.wait(timeout=5)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+        # Reap whatever is left so it does not linger as a zombie.
+        try:
+            proc.poll()
+        except Exception:
+            pass
 
     def execute_streaming(self, command: str, on_line=None, connect_timeout: int = 5,
                           timeout: Optional[float] = None,
@@ -155,6 +198,9 @@ class SSHConnection:
                 bufsize=1,
                 universal_newlines=True,
                 errors="replace",
+                # Own process group, so _terminate can signal the whole tree
+                # rather than just ssh — see _kill_group.
+                start_new_session=True,
             )
         except Exception as e:
             logging.error(f"SSH streaming start failed on {self.host}: {e}")
@@ -202,15 +248,22 @@ class SSHConnection:
         borg traps SIGTERM to release its repository lock cleanly, so it is
         given a grace period before being killed — a hard kill can leave a stale
         lock that blocks the next backup.
+
+        Signals the process group, not just ssh, so no part of the tree is left
+        behind holding a connection.
         """
         if proc.poll() is not None:
             return
         try:
-            proc.terminate()
+            pgid = os.getpgid(proc.pid)
+        except (ProcessLookupError, PermissionError):
+            return
+        try:
+            os.killpg(pgid, signal.SIGTERM)
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             try:
-                proc.kill()
+                os.killpg(pgid, signal.SIGKILL)
                 proc.wait(timeout=5)
             except Exception:
                 pass

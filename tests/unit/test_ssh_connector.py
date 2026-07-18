@@ -5,10 +5,14 @@ from vigil.core.common.ssh_connector import SSHConnection
 
 
 def _completed(returncode=0, stdout=b"", stderr=b""):
+    """
+    Fake Popen for `execute`, which uses Popen + communicate() (not
+    subprocess.run) so a timeout can kill the whole process group.
+    """
     m = MagicMock()
     m.returncode = returncode
-    m.stdout = stdout
-    m.stderr = stderr
+    m.communicate.return_value = (stdout, stderr)
+    m.poll.return_value = returncode
     return m
 
 
@@ -47,7 +51,7 @@ class TestFromConfig:
 class TestExecute:
     def test_returns_exit_code_stdout_stderr(self):
         conn = SSHConnection("myhost", username="user")
-        with patch("subprocess.run", return_value=_completed(0, b"hello\n", b"")) as run:
+        with patch("subprocess.Popen", return_value=_completed(0, b"hello\n", b"")) as run:
             rc, out, err = conn.execute("echo hello")
         assert (rc, out, err) == (0, "hello", "")
         # Target is user@host and the command is the last argv element.
@@ -57,42 +61,65 @@ class TestExecute:
 
     def test_nonzero_exit_code_returned(self):
         conn = SSHConnection("myhost")
-        with patch("subprocess.run", return_value=_completed(1, b"", b"not found")):
+        with patch("subprocess.Popen", return_value=_completed(1, b"", b"not found")):
             rc, out, err = conn.execute("bad_cmd")
         assert rc == 1
         assert err == "not found"
 
     def test_target_without_username_is_bare_host(self):
         conn = SSHConnection("myhost")  # no username
-        with patch("subprocess.run", return_value=_completed(0)) as run:
+        with patch("subprocess.Popen", return_value=_completed(0)) as run:
             conn.execute("ls")
         assert run.call_args[0][0][-2] == "myhost"
 
     def test_timeout_returns_sentinel(self):
         conn = SSHConnection("slowhost")
-        with patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=30)):
+        with patch("subprocess.Popen", side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=30)):
             rc, out, err = conn.execute("sleep 999", timeout=30)
         assert rc == -1
         assert "Timed out" in err
 
     def test_generic_error_returns_sentinel(self):
         conn = SSHConnection("h")
-        with patch("subprocess.run", side_effect=OSError("ssh not found")):
+        with patch("subprocess.Popen", side_effect=OSError("ssh not found")):
             rc, out, err = conn.execute("cmd")
         assert rc == -1
         assert "ssh not found" in err
 
     def test_passes_timeout_to_subprocess(self):
+        # The deadline applies to communicate(), not to Popen() — the process
+        # is spawned first so a timeout can signal its whole group.
         conn = SSHConnection("h")
-        with patch("subprocess.run", return_value=_completed(0)) as run:
+        proc = _completed(0)
+        with patch("subprocess.Popen", return_value=proc):
             conn.execute("cmd", timeout=12.5)
-        assert run.call_args.kwargs["timeout"] == 12.5
+        assert proc.communicate.call_args.kwargs["timeout"] == 12.5
+
+    def test_spawns_in_its_own_process_group(self):
+        # Required so a timeout can kill ssh *and* everything it spawned;
+        # without it the remote command outlives the timeout.
+        conn = SSHConnection("h")
+        with patch("subprocess.Popen", return_value=_completed(0)) as popen:
+            conn.execute("cmd")
+        assert popen.call_args.kwargs["start_new_session"] is True
+
+    def test_timeout_kills_the_process_group(self):
+        conn = SSHConnection("h")
+        proc = _completed(0)
+        proc.communicate.side_effect = subprocess.TimeoutExpired("ssh", 30)
+        proc.poll.return_value = None      # still running when the timeout fires
+        with patch("subprocess.Popen", return_value=proc), \
+             patch("os.killpg") as killpg, patch("os.getpgid", return_value=4242):
+            rc, out, err = conn.execute("cmd", timeout=1)
+        assert rc == -1 and "Timed out" in err
+        assert killpg.called, "a timed-out command must not be left running"
+        assert killpg.call_args_list[0][0][0] == 4242
 
 
 class TestMultiplexingOptions:
     def _argv(self, **kwargs):
         conn = SSHConnection("h", username="u", **kwargs)
-        with patch("subprocess.run", return_value=_completed(0)) as run:
+        with patch("subprocess.Popen", return_value=_completed(0)) as run:
             conn.execute("cmd")
         return run.call_args[0][0]
 
@@ -119,7 +146,7 @@ class TestMultiplexingOptions:
 
     def test_port_flag_present(self):
         conn = SSHConnection("h", username="u", port=2222)
-        with patch("subprocess.run", return_value=_completed(0)) as run:
+        with patch("subprocess.Popen", return_value=_completed(0)) as run:
             conn.execute("cmd")
         argv = run.call_args[0][0]
         assert "-p" in argv and "2222" in argv
@@ -144,14 +171,14 @@ class TestControlPath:
 class TestClose:
     def test_close_sends_control_exit(self):
         conn = SSHConnection("h", username="u")
-        with patch("subprocess.run", return_value=_completed(0)) as run:
+        with patch("subprocess.Popen", return_value=_completed(0)) as run:
             conn.close()
         argv = run.call_args[0][0]
         assert "-O" in argv and "exit" in argv
 
     def test_close_swallows_errors(self):
         conn = SSHConnection("h")
-        with patch("subprocess.run", side_effect=OSError("boom")):
+        with patch("subprocess.Popen", side_effect=OSError("boom")):
             conn.close()  # must not raise
 
 

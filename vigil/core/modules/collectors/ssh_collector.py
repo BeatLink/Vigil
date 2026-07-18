@@ -4,7 +4,18 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Tuple
 from vigil.core.common.ssh_connector import SSHConnection
 
-TIMEOUT = 30.0
+# Wall-clock ceiling on a single collection command.
+#
+# 30s was too tight for `borg list` against a repository busy with its own
+# maintenance (a compact can saturate the repo server's disk for an hour), so
+# those polls timed out every cycle and never produced a reading. 300s gives a
+# loaded target room to answer while staying well inside a typical polling
+# interval, so a slow target still cannot overlap itself.
+#
+# The deadline is only half the protection: SSHConnection.execute kills the
+# whole process group when it fires, so a timed-out command leaves nothing
+# running on either end.
+TIMEOUT = 300.0
 
 # Maximum SSH operations allowed to run concurrently across ALL monitors.
 #

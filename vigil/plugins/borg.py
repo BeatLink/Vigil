@@ -226,7 +226,10 @@ class BorgPlugin(BasePlugin):
         self.passphrase_file = config.get('passphrase_file')
         self.passphrase_command = config.get('passphrase_command')
         self.borg_bin = config.get('borg_bin', 'borg')
-        self.lock_wait = config.get('lock_wait', 5)
+        # 30s rather than a few seconds: the read uses --bypass-lock, so this
+        # only applies where borg still needs the lock briefly, and a repo busy
+        # with its own maintenance can take longer than 5s to answer.
+        self.lock_wait = config.get('lock_wait', 30)
         self.require_sudo = bool(config.get('require_sudo', False))
         # Clamp to >=1: --last 0 makes borg return every archive in the repo,
         # which on a long-retained repo is a needlessly huge poll.
