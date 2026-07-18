@@ -789,6 +789,26 @@ class TestRepoStats:
 # Archive caching for the UI
 # ---------------------------------------------------------------------------
 
+class TestEventLogging:
+    async def test_messages_land_where_the_ui_reads_them(self, plugin, db_manager):
+        # The logs panel renders Event rows. The plugin writes via
+        # db_logger.write (Event) and never db_logger.log_line (LogLine), so a
+        # LogLine-backed panel showed nothing while these piled up unseen.
+        from vigil.core.data.database import Event, LogLine
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, _list_json(int(time.time()) - 60), "")
+        )
+        await plugin.on_collect()
+        db_manager.flush()
+
+        with db.connection_context():
+            events = Event.select().where(Event.message.startswith("[test-borg] ")).count()
+            loglines = LogLine.select().where(LogLine.source == "test-borg").count()
+
+        assert events > 0, "plugin wrote no events for the panel to show"
+        assert loglines == 0, "plugin does not collect target logs; panel must read Events"
+
+
 class TestArchiveCache:
     async def test_archives_cached_for_ui(self, make_plugin):
         p = make_plugin(BorgPlugin, {**BASE_CFG, "collect_stats": False})

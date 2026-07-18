@@ -865,7 +865,12 @@ class BorgPlugin(BasePlugin):
         with layout.cell('jobs'):
             update_jobs = self._render_jobs_panel()
         with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table'](title='LOGS', limit=100, full_height=True)
+            # events_table, not logs_table: this plugin writes its own messages
+            # via db_logger.write (the Event table) rather than collecting log
+            # lines off the target, so a LogLine-backed table would always be
+            # empty here.
+            self.internal_modules['ui']['events_table'](title='LOGS', limit=100,
+                                                        full_height=True)
 
         def update():
             m = self.latest_metric('last_backup_epoch')

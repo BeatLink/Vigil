@@ -120,6 +120,69 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
         safe_timer(5.0, update_logs)
         return table
 
+def event_table(plugin_name: str, target: str = '', title: str = 'Recent Events',
+                limit: int = 100, full_height: bool = False):
+    """
+    A table of a plugin's own Event messages — everything it wrote via
+    `db_logger.write`.
+
+    Distinct from `log_table`, which reads LogLine: that table holds raw log
+    output pulled off a target (journald and friends), deduplicated so a
+    re-fetched line is stored once. Plugins that don't collect logs from a
+    target — borg, for instance — have no LogLine rows at all, so a log_table
+    on their page renders permanently empty while their Events pile up unseen.
+
+    Events are prefixed "[Plugin Name] " by the logger, so that prefix is both
+    the filter and something to strip for display.
+    """
+    from vigil.core.data.database import Event
+    prefix = f"[{plugin_name}] "
+    card_classes = 'w-full overflow-hidden flex-grow' if full_height else ''
+
+    with card(card_classes, padding=not full_height):
+        if full_height:
+            ui.label(title).classes('font-bold p-4 w-full border-b').style(
+                f'background-color: {BACKGROUND_MUTED}; color: {PRIMARY}')
+        else:
+            ui.label(title).classes('font-bold mb-2').style(f'color: {PRIMARY}')
+
+        columns = [
+            {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left', 'sortable': True},
+            {'name': 'lvl', 'label': 'Level', 'field': 'level', 'align': 'left'},
+            {'name': 'msg', 'label': 'Message', 'field': 'message', 'align': 'left',
+             'classes': 'text-wrap font-mono text-xs' if full_height else ''},
+        ]
+        table_classes = 'w-full border-none' + (' h-[600px]' if full_height else '')
+        table = ui.table(columns=columns, rows=[]).classes(table_classes)
+        if full_height:
+            table.props('virtual-scroll')
+
+        def update():
+            condition = Event.message.startswith(prefix)
+            if target:
+                condition &= (Event.target == target)
+            query = (Event.select()
+                     .where(condition)
+                     .order_by(Event.timestamp.desc())
+                     .limit(limit))
+            table.rows = [
+                {
+                    'timestamp': e.timestamp.isoformat(sep=' ', timespec='seconds'),
+                    'level': e.level,
+                    # The prefix is how rows are found; repeating it on every
+                    # line of a single plugin's own table is just noise.
+                    'message': e.message[len(prefix):] if e.message.startswith(prefix)
+                               else e.message,
+                }
+                for e in query
+            ]
+            table.update()
+
+        update()
+        safe_timer(5.0, update)
+        return table
+
+
 def history_chart(title: str, collector: str, metric_name: str, limit: int = 30):
     """A standardized EChart for displaying metric history over time."""
     from vigil.core.data.database import Metric

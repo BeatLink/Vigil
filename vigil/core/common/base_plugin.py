@@ -5,7 +5,8 @@ from typing import Any, Dict, List
 from vigil.core.common.ssh_connector import SSHConnection
 from vigil.core.common.time_utils import parse_duration
 from functools import partial
-from vigil.core.ui.components import render_host_card, render_status_card, metric_table, log_table
+from vigil.core.ui.components import (render_host_card, render_status_card, metric_table,
+                                      log_table, event_table)
 from vigil.core.modules.collectors.ssh_collector import SSHCollector, TIMEOUT as SSH_TIMEOUT
 from vigil.core.modules.controllers.ssh_controller import SSHController
 from vigil.core.modules.controllers.job_controller import JobController
@@ -56,6 +57,10 @@ class BasePlugin(ABC):
                 'host_card': partial(render_host_card, self.target),
                 'metrics_table': partial(metric_table, self.name),
                 'logs_table': partial(log_table, self.target, filter_prefix=self.name),
+                # For plugins that write their own commentary rather than
+                # collecting logs off a target — those have no LogLine rows,
+                # so logs_table would render empty for them.
+                'events_table': partial(event_table, self.name, self.target),
                 'status_card': partial(render_status_card, self.name)
             }
         }
