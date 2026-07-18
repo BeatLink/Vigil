@@ -102,6 +102,7 @@ class VigilEngine:
             self.plugins = current_level_plugins
             logging.info(f"Plugin registry built with {len(self.plugins)} root-level monitors.")
             self._warn_on_duplicate_ids()
+            self._wire_self_monitor()
 
         return current_level_plugins
 
@@ -139,6 +140,27 @@ class VigilEngine:
                 f"{', '.join(sorted(set(names)))}",
                 "vigil_core",
             )
+
+    def _wire_self_monitor(self):
+        """
+        Give the self-monitoring plugin a reference to this engine.
+
+        It is the only plugin that inspects the monitor tree rather than a
+        remote host — it reports how many monitors are collecting on schedule —
+        and plugins are constructed with (name, config, db) alone. Setting the
+        class attribute here keeps that constructor signature unchanged instead
+        of threading an engine parameter through all twenty-eight plugin types
+        for the sake of one.
+
+        Imported lazily so the plugin module is only loaded when it is
+        configured; a config without a `vigil_self` monitor pays nothing.
+        """
+        try:
+            from vigil.plugins.vigil_self import VigilSelfPlugin
+        except ImportError as e:
+            logging.debug(f"Self-monitoring plugin unavailable: {e}")
+            return
+        VigilSelfPlugin.engine = self
 
     def _start_exporters(self):
         """Launch configured push exporters (e.g. InfluxDB) as background tasks.
