@@ -377,7 +377,8 @@ def init_gui(engine: Any, port: int = 8080):
                       'status': st.upper(),
                       'status_color': STATUS_COLORS.get(st, STATUS_COLORS['offline']),
                   })
-              monitor_table.rows[:] = rows
+              monitor_table.rows = rows
+              monitor_table.update()
 
           def update_charts():
               status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'offline': 0}
@@ -419,7 +420,8 @@ def init_gui(engine: Any, port: int = 8080):
 
                   def update_m():
                       query = Metric.select().order_by(Metric.timestamp.desc()).limit(20)
-                      m_table.rows[:] = [m.__data__ for m in query]
+                      m_table.rows = [m.__data__ for m in query]
+                      m_table.update()
                   safe_timer(5.0, update_m)
 
               with card('flex-1'):
@@ -434,7 +436,8 @@ def init_gui(engine: Any, port: int = 8080):
 
                   def update_e():
                       query = Event.select().order_by(Event.timestamp.desc()).limit(20)
-                      e_table.rows[:] = [e.__data__ for e in query]
+                      e_table.rows = [e.__data__ for e in query]
+                      e_table.update()
                   safe_timer(5.0, update_e)
 
       def render_plugin_detail(plugin: Any):

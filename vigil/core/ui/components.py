@@ -67,7 +67,11 @@ def metric_table(collector: str, title: str = 'Monitor Metrics', limit: int = 15
 
         def update():
             query = Metric.select().where(Metric.collector == collector).order_by(Metric.timestamp.desc()).limit(limit)
-            table.rows[:] = [m.__data__ for m in query]
+            # Assign (not slice-mutate) and call update(): NiceGUI only pushes
+            # _props to the client on an explicit update(), so an in-place edit
+            # of table.rows would never reach the browser.
+            table.rows = [m.__data__ for m in query]
+            table.update()
 
         safe_timer(5.0, update)
         return table
@@ -110,7 +114,8 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
             if filter_prefix:
                 condition &= (LogLine.source == filter_prefix)
             query = LogLine.select().where(condition).order_by(LogLine.timestamp.desc()).limit(limit)
-            table.rows[:] = [e.__data__ for e in query]
+            table.rows = [e.__data__ for e in query]
+            table.update()
 
         safe_timer(5.0, update_logs)
         return table
