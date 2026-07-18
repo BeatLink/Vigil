@@ -87,6 +87,46 @@ class TestLogLineScoping:
         assert sources == {"odin-borgmatic-on-disk", "heimdall-borgmatic-on-disk"}
 
 
+class TestDuplicateIdDetection:
+    def _engine(self, tmp_path, plugins):
+        from unittest.mock import patch
+        from vigil.core.main import VigilEngine
+        cfg = tmp_path / "c.yaml"
+        cfg.write_text("plugins: []\n")
+        with patch("vigil.core.main.VigilEngine._connect", create=True):
+            engine = VigilEngine(str(cfg), db_path_override=str(tmp_path / "e.db"))
+        engine.plugins = plugins
+        return engine
+
+    def test_reports_monitors_sharing_an_id(self, tmp_path, colliding, caplog):
+        # `id` falls back to the display name when config omits it, so two
+        # groups named "Borgmatic" silently write to the same status rows.
+        a, b = colliding
+        b.id = a.id                      # simulate the fallback collision
+        engine = self._engine(tmp_path, [a, b])
+        with caplog.at_level('ERROR'):
+            engine._warn_on_duplicate_ids()
+        assert any("Duplicate monitor id" in r.message for r in caplog.records)
+
+    def test_silent_when_ids_are_unique(self, tmp_path, colliding, caplog):
+        a, b = colliding                 # same name, different ids
+        engine = self._engine(tmp_path, [a, b])
+        with caplog.at_level('ERROR'):
+            engine._warn_on_duplicate_ids()
+        assert not any("Duplicate monitor id" in r.message for r in caplog.records)
+
+    def test_checks_nested_children(self, tmp_path, colliding, caplog):
+        # Collisions are most likely between groups at different depths.
+        a, b = colliding
+        b.id = a.id
+        parent = a
+        parent.children = [b]
+        engine = self._engine(tmp_path, [parent])
+        with caplog.at_level('ERROR'):
+            engine._warn_on_duplicate_ids()
+        assert any("Duplicate monitor id" in r.message for r in caplog.records)
+
+
 class TestMigration:
     def test_adds_source_id_to_a_pre_existing_event_table(self, tmp_path):
         # create_tables never alters an existing table, so a column added to

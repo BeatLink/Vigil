@@ -101,8 +101,44 @@ class VigilEngine:
         if plugins_cfg is None:
             self.plugins = current_level_plugins
             logging.info(f"Plugin registry built with {len(self.plugins)} root-level monitors.")
+            self._warn_on_duplicate_ids()
 
         return current_level_plugins
+
+    def _warn_on_duplicate_ids(self):
+        """
+        Report monitors that share an effective id.
+
+        Every per-monitor record — status, metrics, events, log lines, jobs —
+        is keyed by `id`, and `id` falls back to the display name when the
+        config omits it. Two monitors resolving to the same id therefore write
+        to the same rows: their statuses overwrite each other every cycle and
+        each one's page shows a mixture of both. Nothing else detects this, so
+        it is checked once at startup where it is cheap and loud.
+        """
+        seen = {}
+        duplicates = {}
+        stack = list(self.plugins)
+        while stack:
+            p = stack.pop()
+            stack.extend(p.children)
+            if p.id in seen:
+                duplicates.setdefault(p.id, [seen[p.id]]).append(p.name)
+            else:
+                seen[p.id] = p.name
+
+        for dup_id, names in duplicates.items():
+            logging.error(
+                f"Duplicate monitor id {dup_id!r} used by {len(names)} monitors "
+                f"({', '.join(sorted(set(names)))}). Their status, metrics and logs "
+                f"will overwrite each other — give each an explicit unique `id`."
+            )
+            self.db.insert_event(
+                "ERROR",
+                f"[vigil_core] Duplicate monitor id {dup_id!r} used by: "
+                f"{', '.join(sorted(set(names)))}",
+                "vigil_core",
+            )
 
     def _start_exporters(self):
         """Launch configured push exporters (e.g. InfluxDB) as background tasks.
