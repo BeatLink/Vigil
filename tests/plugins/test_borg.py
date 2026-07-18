@@ -153,6 +153,20 @@ class TestLogging:
         assert "exit 1" in messages
         assert "not on PATH" in messages
 
+    async def test_publickey_failure_hints_at_ssh_key(self, plugin):
+        # An ssh:// repo rejecting borg's own hop says "Permission denied
+        # (publickey)". The generic permission-denied hint would advise
+        # `require_sudo`, which is useless when sudo is already on — the real
+        # fault is the identity borg offered to the repo server.
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(
+            2, "", "Remote: borg@heimdall.technet: Permission denied (publickey)."
+        ))
+        log = _captured(plugin)
+        await plugin.on_collect()
+        messages = " | ".join(m for _, m in log)
+        assert "ssh_key" in messages
+        assert "require_sudo" not in messages
+
     async def test_permission_denied_hint(self, plugin):
         plugin.ssh_collector.fetch_output = AsyncMock(
             return_value=(2, "", "Permission denied: '/srv/repo/config'")
@@ -309,6 +323,36 @@ class TestCommand:
         # --last 0 makes borg dump every archive in the repo.
         p = make_plugin(BorgPlugin, {**BASE_CFG, "list_archives": 0})
         assert "--last 1" in p._list_command()
+
+    def test_ssh_key_sets_borg_rsh(self, make_plugin):
+        # borg opens its own connection to an ssh:// repo; without an explicit
+        # identity it offers the invoking user's default keys (root's, under
+        # sudo), which the borg server usually does not authorize.
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "ssh_key": "/run/secrets/vigil_ssh_key"})
+        cmd = p._list_command()
+        assert "BORG_RSH=" in cmd
+        assert "/run/secrets/vigil_ssh_key" in cmd
+        # The key must be used as given, and never prompt.
+        assert "IdentitiesOnly=yes" in cmd
+        assert "BatchMode=yes" in cmd
+
+    def test_ssh_key_applies_to_backup_too(self, make_plugin):
+        p = make_plugin(BorgPlugin, {
+            **BASE_CFG, "source_paths": ["/home"], "ssh_key": "/run/secrets/k",
+        })
+        assert "BORG_RSH=" in p._backup_command()
+
+    def test_rsh_overrides_ssh_key(self, make_plugin):
+        p = make_plugin(BorgPlugin, {
+            **BASE_CFG, "ssh_key": "/run/secrets/k", "rsh": "ssh -J jump.host",
+        })
+        cmd = p._list_command()
+        assert "ssh -J jump.host" in cmd
+        assert "/run/secrets/k" not in cmd
+
+    def test_no_borg_rsh_without_key(self, make_plugin):
+        # A local-path repo needs no onward SSH at all.
+        assert "BORG_RSH=" not in make_plugin(BorgPlugin, BASE_CFG)._list_command()
 
     def test_no_sudo_by_default(self, make_plugin):
         assert "sudo" not in make_plugin(BorgPlugin, BASE_CFG)._list_command()
@@ -748,3 +792,48 @@ class TestArchiveCache:
 
     async def test_cached_archives_empty_before_first_poll(self, plugin):
         assert plugin.cached_archives() == ([], {})
+
+    async def test_archive_sizes_merged_from_info(self, plugin):
+        # `borg list --json` carries no size fields at all; the per-archive
+        # stats come from `borg info --json --last N` and must be folded into
+        # the cached list the table reads.
+        now = int(time.time())
+        info = json.dumps({
+            "cache": {"stats": {"total_size": 1000, "total_csize": 500,
+                                "unique_csize": 250}},
+            "archives": [
+                {"name": "archive-0", "stats": {
+                    "original_size": 400000, "compressed_size": 300000,
+                    "deduplicated_size": 1024, "nfiles": 42}},
+            ],
+        })
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            side_effect=[(0, _multi_json(now - 3600), ""), (0, info, "")]
+        )
+        await plugin.on_collect()
+
+        archives, _ = plugin.cached_archives()
+        first = next(a for a in archives if a["name"] == "archive-0")
+        assert first["original"] == pytest.approx(400000)
+        assert first["deduplicated"] == pytest.approx(1024)
+        assert first["nfiles"] == pytest.approx(42)
+
+    async def test_info_command_requests_per_archive_stats(self, make_plugin):
+        # Sizes only appear per archive when --last is passed to info.
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "list_archives": 5})
+        assert "--last 5" in p._info_command()
+
+    async def test_archives_without_stats_keep_names(self, plugin):
+        # An info call that returns no per-archive stats must leave the cached
+        # list intact, so the table still shows names and ages.
+        now = int(time.time())
+        info = json.dumps({"cache": {"stats": {"total_size": 10,
+                                               "unique_csize": 5}}})
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            side_effect=[(0, _multi_json(now - 3600), ""), (0, info, "")]
+        )
+        await plugin.on_collect()
+
+        archives, _ = plugin.cached_archives()
+        assert [a["name"] for a in archives] == ["archive-0"]
+        assert "original" not in archives[0]

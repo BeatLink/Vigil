@@ -71,6 +71,16 @@ def _failure_hint(stderr: str) -> Optional[str]:
     matches, so the raw error stands alone rather than being second-guessed.
     """
     text = (stderr or "").lower()
+    # Checked before the generic "permission denied" case below: an ssh:// repo
+    # failure says "Permission denied (publickey)", which that case would
+    # misread as a local file-permission problem and advise `require_sudo` —
+    # useless when sudo is already on and the real fault is the identity borg
+    # offered on its own hop to the repo server.
+    if "permission denied (publickey)" in text or "publickey" in text:
+        return ("Hint: borg could not authenticate to the repo server — set "
+                "`ssh_key` to a private key on that host which the borg server "
+                "authorizes (borg makes its own SSH connection, so Vigil's own "
+                "login key does not apply).")
     if "command not found" in text:
         return ("Hint: the borg binary is not on PATH for that user — under sudo "
                 "it must be on root's PATH too (set `borg_bin` to an absolute path).")
@@ -166,6 +176,18 @@ class BorgPlugin(BasePlugin):
       collect_stats      Also run `borg info --json` each poll to record repo
                          size and deduplication metrics (default: true). Costs a
                          second round trip; set false to keep the poll minimal.
+      ssh_key            Path (on the host borg runs on) to the SSH private key
+                         borg should use to reach an ssh:// repo. Needed whenever
+                         `repo` is an ssh:// URL: borg opens its own connection
+                         from that host to the borg server, and without an
+                         explicit identity it offers the invoking user's default
+                         keys — under `require_sudo` that is root's, which the
+                         borg server usually does not authorize. Ignored for a
+                         local-path repo.
+      rsh                Full replacement for the command borg uses to reach the
+                         repo server (exported as BORG_RSH), for cases `ssh_key`
+                         cannot express, e.g. a jump host. Takes precedence over
+                         `ssh_key`.
       ssh_config.host    Host to run borg on (via BasePlugin's SSH config).
 
     Backup config (used by the "Run Backup" action; monitoring works without it):
@@ -210,6 +232,8 @@ class BorgPlugin(BasePlugin):
         # which on a long-retained repo is a needlessly huge poll.
         self.list_archives = max(1, int(config.get('list_archives', 10)))
         self.collect_stats = bool(config.get('collect_stats', True))
+        self.ssh_key = config.get('ssh_key')
+        self.rsh = config.get('rsh')
 
         # -- Backup configuration -------------------------------------------
         # A single string is accepted for the list-valued options because a
@@ -282,6 +306,25 @@ class BorgPlugin(BasePlugin):
         # Never prompt interactively — fail fast instead of hanging the poll.
         env.append("BORG_RELOCATED_REPO_ACCESS_IS_OK=no")
 
+        if self.rsh or self.ssh_key:
+            # For an ssh:// repo, borg opens its OWN connection from the host it
+            # runs on to the borg server — separate from the SSH Vigil used to
+            # get here, and with its own identity. Without this it falls back to
+            # the invoking user's default keys, which for a `sudo` borg means
+            # root's — usually not the key the borg server authorizes, giving
+            # "Permission denied (publickey)". BORG_RSH is borg's equivalent of
+            # borgmatic's `ssh_command`.
+            rsh = self.rsh or (
+                "ssh -i " + shlex.quote(self.ssh_key) +
+                # The identity must be used exactly as given: without
+                # IdentitiesOnly an agent or default key can be offered first
+                # and the server may reject the connection before this key is
+                # tried. BatchMode keeps a missing key a fast error, never a
+                # prompt that would hang the poll.
+                " -o IdentitiesOnly=yes -o BatchMode=yes"
+            )
+            env.append("BORG_RSH=" + shlex.quote(rsh))
+
         if persistent_cache and self.cache_dir:
             # A stable base dir lets borg reuse its chunk cache between backups,
             # which is what makes a repeat backup incremental rather than a full
@@ -339,16 +382,21 @@ class BorgPlugin(BasePlugin):
 
     def _info_command(self) -> str:
         """
-        Build `borg info --json` for repository-level statistics.
+        Build `borg info --json --last N` for repository and per-archive stats.
 
         Separate from `list`: only `info` reports the repo's cache stats —
         original/compressed/deduplicated size — which is what makes the
-        deduplication ratio and storage trend visible. It is a second round
-        trip, so it is gated behind `collect_stats`.
+        deduplication ratio and storage trend visible. `--last N` additionally
+        returns a stats block per archive (original/compressed/deduplicated
+        size, file count), which `borg list --json` does not carry at all: its
+        archive entries hold only name/id/time. Asking for the same N as the
+        list keeps sizes available for every archive the UI shows, without a
+        third round trip.
         """
         return self._build([
             self.borg_bin, "info",
             "--json",
+            "--last", str(self.list_archives),
             "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             self.repo,
@@ -612,6 +660,10 @@ class BorgPlugin(BasePlugin):
             )
             return
 
+        # Per-archive sizes ride along in the same response; fold them into the
+        # cached list so the UI table can show a size per archive.
+        self._merge_archive_sizes(stdout)
+
         stats = self._parse_stats(stdout)
         if not stats:
             self.db_logger.write("Could not parse borg info output", level="WARNING")
@@ -666,6 +718,67 @@ class BorgPlugin(BasePlugin):
             if isinstance(value, (int, float)):
                 out[dest] = float(value)
         return out
+
+    def _parse_archive_sizes(self, stdout: str) -> Dict[str, Dict[str, float]]:
+        """
+        Parse per-archive stats out of `borg info --json --last N`.
+
+        Returns {archive_name: {'original', 'compressed', 'deduplicated',
+        'nfiles'}}. Only `info` carries these; `list --json` has no size fields
+        at all. Returns {} on unparseable output or when the stats block is
+        absent (older borg omits it before the cache is built).
+        """
+        try:
+            data = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+
+        out = {}
+        for archive in data.get('archives') or []:
+            if not isinstance(archive, dict):
+                continue
+            name = archive.get('name')
+            stats = archive.get('stats')
+            if not name or not isinstance(stats, dict):
+                continue
+            entry = {}
+            for src, dest in (
+                ('original_size', 'original'),
+                ('compressed_size', 'compressed'),
+                ('deduplicated_size', 'deduplicated'),
+                ('nfiles', 'nfiles'),
+            ):
+                value = stats.get(src)
+                if isinstance(value, (int, float)):
+                    entry[dest] = float(value)
+            if entry:
+                out[name] = entry
+        return out
+
+    def _merge_archive_sizes(self, stdout: str) -> None:
+        """
+        Attach per-archive sizes to the archive list cached for the UI.
+
+        The list is captured from `borg list` earlier in the same poll; this
+        re-reads that cached payload and rewrites it with sizes folded in, so
+        the UI keeps reading one metric rather than joining two. A no-op when
+        either side is missing — the table then shows names and ages only,
+        which is what it did before sizes existed.
+        """
+        sizes = self._parse_archive_sizes(stdout)
+        if not sizes:
+            return
+        archives, info = self.cached_archives()
+        if not archives:
+            return
+        for archive in archives:
+            entry = sizes.get(archive.get('name'))
+            if entry:
+                archive.update(entry)
+        payload = json.dumps({'archives': archives, 'repository': info})
+        self.db_metrics.metric('archive_list', float(len(archives)), metadata=payload)
 
     def _store_archives(self, stdout: str) -> None:
         """
@@ -802,6 +915,16 @@ class BorgPlugin(BasePlugin):
                     {'name': 'created', 'label': 'Created', 'field': 'created',
                      'align': 'left', 'sortable': True},
                     {'name': 'age', 'label': 'Age', 'field': 'age', 'align': 'left'},
+                    # Size of the source data this archive captured.
+                    {'name': 'size', 'label': 'Size', 'field': 'size',
+                     'align': 'right', 'sortable': True},
+                    # What this archive actually added to the repo — near zero
+                    # for an incremental run, which is the number that explains
+                    # why the repo is not growing by `size` every backup.
+                    {'name': 'added', 'label': 'Added', 'field': 'added',
+                     'align': 'right', 'sortable': True},
+                    {'name': 'files', 'label': 'Files', 'field': 'files',
+                     'align': 'right', 'sortable': True},
                 ],
                 rows=[],
                 row_key='name',
@@ -819,6 +942,14 @@ class BorgPlugin(BasePlugin):
                     if a.get('epoch') else 'unknown'
                 ),
                 'age': format_age(now - a['epoch']) if a.get('epoch') else 'unknown',
+                # Sizes arrive from `borg info`, a separate call than the one
+                # that produced the names; '--' covers a poll where stats are
+                # disabled or the info call failed.
+                'size': _format_bytes(a['original']) if 'original' in a else '--',
+                'added': (
+                    _format_bytes(a['deduplicated']) if 'deduplicated' in a else '--'
+                ),
+                'files': f"{int(a['nfiles']):,}" if 'nfiles' in a else '--',
             }
             for a in archives
         ]
