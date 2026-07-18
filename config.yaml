@@ -112,6 +112,27 @@ plugins:
         # passphrase_command: "cat /etc/vigil/borg.pass"   # for encrypted repos
         # require_sudo: true   # for a root-only repo; needs passwordless sudo
         #                      # for borg on the target host
+        # collect_stats: true  # also run `borg info` for size/dedup metrics
+
+        # --- Backup configuration -------------------------------------------
+        # Setting source_paths enables the "Run Backup" / "Dry Run" actions.
+        # Monitoring works without any of this; omit it for a read-only monitor.
+        # source_paths:
+        #   - "/home"
+        #   - "/etc"
+        # exclude:
+        #   - "/home/*/.cache"
+        #   - "*.tmp"
+        # exclude_from: "/etc/borg/excludes"   # pattern file on the target host
+        # exclude_if_present: [".nobackup"]    # skip dirs containing this marker
+        # exclude_caches: true                 # skip CACHEDIR.TAG dirs (default)
+        # one_file_system: true                # don't cross mounts (default)
+        # compression: "zstd"                  # or "lz4", "zstd,10", "none"
+        # archive_prefix: "nightly"            # archives: "<prefix>-<UTC stamp>"
+        # cache_dir: "/var/cache/vigil-borg"   # persistent BORG_BASE_DIR; must be
+        #                                      # writable, else every backup is a
+        #                                      # full re-read instead of incremental
+        # backup_lock_wait: 600                # seconds to wait for the repo lock
         ssh_config:
           host: "server.example.com"
 

@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from datetime import datetime
 import pytest
@@ -343,8 +344,407 @@ class TestCommand:
 # ---------------------------------------------------------------------------
 
 class TestActions:
-    async def test_no_actions_exposed(self, plugin):
+    async def test_no_actions_without_source_paths(self, plugin):
+        # Without something to back up, the button could only ever fail.
         assert plugin.get_actions() == []
 
+    async def test_backup_actions_exposed_with_source_paths(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "source_paths": ["/home"]})
+        ids = {a['action_id'] for a in p.get_actions()}
+        assert ids == {"run_backup", "dry_run_backup"}
+
     async def test_unknown_action_returns_false(self, plugin):
+        assert await plugin.on_action("nonsense") is False
+
+    async def test_backup_without_source_paths_fails(self, plugin):
+        log = _captured(plugin)
         assert await plugin.on_action("run_backup") is False
+        assert any("source_paths" in m for _, m in log)
+
+
+# ---------------------------------------------------------------------------
+# Backup command construction
+# ---------------------------------------------------------------------------
+
+BACKUP_CFG = {**BASE_CFG, "source_paths": ["/home", "/etc"]}
+
+
+class TestBackupCommand:
+    def test_includes_sources_and_repo_archive(self, make_plugin):
+        cmd = make_plugin(BorgPlugin, BACKUP_CFG)._backup_command()
+        assert "borg create" in cmd
+        assert "/home" in cmd and "/etc" in cmd
+        # Archive target is repo::name
+        assert "ssh://borg@host/srv/repo::" in cmd
+
+    def test_archive_name_uses_prefix_and_is_sortable(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "archive_prefix": "nightly"})
+        name = p.default_archive_name()
+        assert name.startswith("nightly-")
+        # UTC ISO-ish stamp so names sort chronologically across DST changes.
+        assert re.match(r"nightly-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$", name)
+
+    def test_archive_prefix_defaults_to_monitor_name(self, make_plugin):
+        p = make_plugin(BorgPlugin, BACKUP_CFG)
+        assert p.default_archive_name().startswith("test-borg-")
+
+    def test_excludes_are_passed(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "exclude": ["/home/*/.cache", "*.tmp"]})
+        cmd = p._backup_command()
+        assert cmd.count("--exclude ") >= 2
+        assert "/home/*/.cache" in cmd
+        assert "*.tmp" in cmd
+
+    def test_exclude_accepts_bare_string(self, make_plugin):
+        # YAML makes `exclude: "/tmp"` natural; it must not be iterated
+        # character by character into four bogus patterns.
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "exclude": "/tmp"})
+        assert p.exclude == ["/tmp"]
+        assert "/tmp" in p._backup_command()
+
+    def test_source_paths_accepts_bare_string(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "source_paths": "/home"})
+        assert p.source_paths == ["/home"]
+
+    def test_exclude_from_file_passed(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "exclude_from": "/etc/borg.excludes"})
+        assert "--exclude-from /etc/borg.excludes" in p._backup_command()
+
+    def test_exclude_if_present_markers(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "exclude_if_present": [".nobackup"]})
+        assert "--exclude-if-present .nobackup" in p._backup_command()
+
+    def test_one_file_system_on_by_default(self, make_plugin):
+        # Without it, a source of "/" silently pulls in every mount.
+        assert "--one-file-system" in make_plugin(BorgPlugin, BACKUP_CFG)._backup_command()
+
+    def test_one_file_system_can_be_disabled(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "one_file_system": False})
+        assert "--one-file-system" not in p._backup_command()
+
+    def test_exclude_caches_on_by_default(self, make_plugin):
+        assert "--exclude-caches" in make_plugin(BorgPlugin, BACKUP_CFG)._backup_command()
+
+    def test_compression_configurable(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "compression": "zstd,10"})
+        assert "--compression zstd,10" in p._backup_command()
+
+    def test_default_compression_is_zstd(self, make_plugin):
+        assert "--compression zstd" in make_plugin(BorgPlugin, BACKUP_CFG)._backup_command()
+
+    def test_backup_uses_persistent_cache_dir(self, make_plugin):
+        # A throwaway BORG_BASE_DIR would force a full chunk-cache rebuild,
+        # turning every incremental backup into a full re-read.
+        cmd = make_plugin(BorgPlugin, BACKUP_CFG)._backup_command()
+        assert "BORG_BASE_DIR=/var/cache/vigil-borg" in cmd
+        assert "mktemp" not in cmd
+
+    def test_cache_dir_configurable(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "cache_dir": "/srv/borgcache"})
+        assert "BORG_BASE_DIR=/srv/borgcache" in p._backup_command()
+
+    def test_poll_still_uses_throwaway_base_dir(self, make_plugin):
+        # Read-only polls keep the temp dir: they need no cache and the account
+        # may have no writable home.
+        assert "$(mktemp -d)" in make_plugin(BorgPlugin, BACKUP_CFG)._list_command()
+
+    def test_backup_uses_long_lock_wait(self, make_plugin):
+        # A backup should queue behind a concurrent operation, not give up
+        # after the short poll timeout.
+        assert "--lock-wait 600" in make_plugin(BorgPlugin, BACKUP_CFG)._backup_command()
+
+    def test_backup_lock_wait_configurable(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "backup_lock_wait": 30})
+        assert "--lock-wait 30" in p._backup_command()
+
+    def test_backup_emits_structured_progress(self, make_plugin):
+        cmd = make_plugin(BorgPlugin, BACKUP_CFG)._backup_command()
+        assert "--log-json" in cmd
+        assert "--progress" in cmd
+
+    def test_dry_run_omits_stats_and_adds_flag(self, make_plugin):
+        # --stats is rejected by borg alongside --dry-run.
+        cmd = make_plugin(BorgPlugin, BACKUP_CFG)._backup_command(dry_run=True)
+        assert "--dry-run" in cmd
+        assert "--stats" not in cmd
+
+    def test_real_backup_includes_stats(self, make_plugin):
+        cmd = make_plugin(BorgPlugin, BACKUP_CFG)._backup_command(dry_run=False)
+        assert "--stats" in cmd
+        assert "--dry-run" not in cmd
+
+    def test_passphrase_inlined_for_backup(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "passphrase": "s3cret"})
+        assert "BORG_PASSPHRASE=s3cret" in p._backup_command()
+
+    def test_backup_honours_require_sudo(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BACKUP_CFG, "require_sudo": True})
+        assert p._backup_command().startswith("sudo -n ")
+
+
+# ---------------------------------------------------------------------------
+# Backup execution
+# ---------------------------------------------------------------------------
+
+def _streaming(lines, status=0, error=""):
+    """Fake execute_streaming emitting `lines` then exiting with `status`."""
+    def run(command, on_line=None, timeout=None, should_cancel=None):
+        for line in lines:
+            if on_line:
+                on_line("stdout", line)
+        return status, error
+    return run
+
+
+@pytest.fixture
+def backup_plugin(make_plugin):
+    return make_plugin(BorgPlugin, BACKUP_CFG)
+
+
+class TestBackupExecution:
+    async def test_successful_backup_records_job(self, backup_plugin, db_manager):
+        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["done"])
+        assert await backup_plugin.on_action("run_backup") is True
+
+        jobs = backup_plugin.job_controller.recent()
+        assert len(jobs) == 1
+        assert jobs[0]['kind'] == 'backup'
+        assert jobs[0]['state'] == 'succeeded'
+
+    async def test_dry_run_recorded_as_its_own_kind(self, backup_plugin):
+        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["ok"])
+        await backup_plugin.on_action("dry_run_backup")
+        assert backup_plugin.job_controller.recent()[0]['kind'] == 'dry-run'
+
+    async def test_borg_warning_exit_is_still_success(self, backup_plugin):
+        # borg exits 1 when e.g. a file vanished mid-backup; the archive is
+        # still valid, so this must not be reported as a failure.
+        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["warn"], status=1)
+        log = _captured(backup_plugin)
+        assert await backup_plugin.on_action("run_backup") is True
+        assert any("warning" in m.lower() for _, m in log)
+
+    async def test_borg_error_exit_is_failure(self, backup_plugin):
+        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["err"], status=2)
+        assert await backup_plugin.on_action("run_backup") is False
+
+    async def test_job_command_is_redacted(self, backup_plugin, db_manager):
+        p = backup_plugin
+        p.passphrase = "s3cret"
+        p.job_controller.ssh.execute_streaming = _streaming(["ok"])
+        await p.on_action("run_backup")
+
+        stored = p.job_controller.recent()[0]['command']
+        assert "s3cret" not in stored
+        assert "BORG_PASSPHRASE=*****" in stored
+
+    async def test_progress_is_parsed_from_log_json(self, backup_plugin, db_manager):
+        # Progress is observed while the job runs; once it completes the panel
+        # switches to a final summary (see test_completion_sets_a_final_summary).
+        progress = json.dumps({
+            "type": "archive_progress",
+            "path": "/home/user/file.txt",
+            "original_size": 1048576,
+            "deduplicated_size": 524288,
+            "nfiles": 42,
+        })
+        seen = []
+
+        def streaming(command, on_line=None, timeout=None, should_cancel=None):
+            on_line("stdout", progress)
+            job_id = backup_plugin.job_controller.current_job_id()
+            seen.append(db_manager.get_job(job_id)['progress'])
+            return 0, ""
+
+        backup_plugin.job_controller.ssh.execute_streaming = streaming
+        await backup_plugin.on_action("run_backup")
+
+        assert "42 files" in seen[0]
+        assert "/home/user/file.txt" in seen[0]
+
+    def test_zero_counter_progress_is_ignored(self, backup_plugin, db_manager):
+        # borg brackets a run with counter-less progress records: an opening one
+        # before anything is read, and a bare {"finished": true} at the end.
+        # Persisting either leaves a finished backup reading "0 files, 0 B read".
+        job_id = db_manager.create_job("test-borg", "h", "backup", "cmd")
+        real = json.dumps({
+            "original_size": 1048576, "deduplicated_size": 524288,
+            "nfiles": 42, "path": "src/big.bin",
+            "type": "archive_progress", "finished": False,
+        })
+        opening = json.dumps({
+            "original_size": 0, "deduplicated_size": 0, "nfiles": 0,
+            "path": "src", "type": "archive_progress", "finished": False,
+        })
+        closing = json.dumps({"type": "archive_progress", "finished": True})
+
+        backup_plugin._handle_backup_line(job_id, "stdout", real)
+        backup_plugin._handle_backup_line(job_id, "stdout", closing)
+        assert "42 files" in db_manager.get_job(job_id)['progress']
+
+        # An opening record must not overwrite real totals either.
+        backup_plugin._handle_backup_line(job_id, "stdout", opening)
+        assert "42 files" in db_manager.get_job(job_id)['progress']
+
+    async def test_completion_sets_a_final_summary(self, backup_plugin, db_manager):
+        # A backup can finish before any counter-bearing record arrives; the
+        # panel must still end on something meaningful rather than blank.
+        backup_plugin.job_controller.ssh.execute_streaming = _streaming(
+            [json.dumps({"type": "archive_progress", "finished": True})]
+        )
+        await backup_plugin.on_action("run_backup")
+
+        job_id = backup_plugin.job_controller.recent()[0]['id']
+        assert db_manager.get_job(job_id)['progress'] == "Backup completed"
+
+    async def test_failed_job_summary_reports_exit_code(self, backup_plugin, db_manager):
+        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["x"], status=2)
+        await backup_plugin.on_action("run_backup")
+
+        job_id = backup_plugin.job_controller.recent()[0]['id']
+        assert "exit 2" in db_manager.get_job(job_id)['progress']
+
+    async def test_borg_warnings_reach_the_event_log(self, backup_plugin):
+        message = json.dumps({
+            "type": "log_message",
+            "levelname": "WARNING",
+            "message": "file changed while we backed it up",
+        })
+        backup_plugin.job_controller.ssh.execute_streaming = _streaming([message])
+        log = _captured(backup_plugin)
+        await backup_plugin.on_action("run_backup")
+        assert any("file changed" in m for _, m in log)
+
+    async def test_non_json_output_does_not_crash(self, backup_plugin):
+        # ssh banners and tracebacks appear alongside --log-json records.
+        backup_plugin.job_controller.ssh.execute_streaming = _streaming(
+            ["Warning: Permanently added host", "{not json", "plain text"]
+        )
+        assert await backup_plugin.on_action("run_backup") is True
+
+    async def test_output_lines_are_stored(self, backup_plugin, db_manager):
+        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["line1", "line2"])
+        await backup_plugin.on_action("run_backup")
+
+        job_id = backup_plugin.job_controller.recent()[0]['id']
+        assert [o['message'] for o in db_manager.job_output(job_id)] == ["line1", "line2"]
+
+
+# ---------------------------------------------------------------------------
+# Repository statistics (borg info)
+# ---------------------------------------------------------------------------
+
+def _info_json(total=1000, csize=500, unique=250) -> str:
+    return json.dumps({
+        "cache": {"stats": {
+            "total_size": total,
+            "total_csize": csize,
+            "unique_csize": unique,
+            "total_chunks": 100,
+            "total_unique_chunks": 50,
+        }},
+        "repository": {"location": "/srv/repo"},
+    })
+
+
+class TestRepoStats:
+    async def test_info_command_requests_json(self, make_plugin):
+        cmd = make_plugin(BorgPlugin, BASE_CFG)._info_command()
+        assert "borg info" in cmd
+        assert "--json" in cmd
+
+    async def test_stats_recorded_as_metrics(self, plugin):
+        now = int(time.time())
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            side_effect=[(0, _list_json(now - 60), ""), (0, _info_json(), "")]
+        )
+        await plugin.on_collect()
+
+        assert _latest_metric("test-borg", "original_size") == pytest.approx(1000)
+        assert _latest_metric("test-borg", "deduplicated_size") == pytest.approx(250)
+
+    async def test_dedup_ratio_is_derived(self, plugin):
+        now = int(time.time())
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            side_effect=[(0, _list_json(now - 60), ""), (0, _info_json(total=1000, unique=250), "")]
+        )
+        await plugin.on_collect()
+        assert _latest_metric("test-borg", "dedup_ratio") == pytest.approx(4.0)
+
+    async def test_stats_disabled_skips_info_call(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "collect_stats": False})
+        now = int(time.time())
+        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _list_json(now - 60), ""))
+        await p.on_collect()
+        # Only the list call — no second round trip.
+        assert p.ssh_collector.fetch_output.call_count == 1
+
+    async def test_info_failure_does_not_fail_the_monitor(self, plugin):
+        # Freshness was already established by the list call; losing a size
+        # datapoint must not turn a healthy monitor red.
+        now = int(time.time())
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            side_effect=[(0, _list_json(now - 60), ""), (2, "", "info exploded")]
+        )
+        await plugin.on_collect()
+        assert _latest_status("test-borg") == "online"
+
+    async def test_unparseable_info_is_tolerated(self, plugin):
+        now = int(time.time())
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            side_effect=[(0, _list_json(now - 60), ""), (0, "not json", "")]
+        )
+        await plugin.on_collect()
+        assert _latest_status("test-borg") == "online"
+
+    async def test_empty_repo_skips_the_stats_call(self, plugin):
+        # An empty repo has no size stats worth a second round trip.
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _list_json(None), ""))
+        await plugin.on_collect()
+        assert plugin.ssh_collector.fetch_output.call_count == 1
+        assert _latest_status("test-borg") == "failed"
+
+    async def test_status_is_set_before_stats_are_fetched(self, plugin):
+        # The status decision is the monitor's purpose; it must not wait on the
+        # optional stats round trip, which may be slow or hang.
+        seen = {}
+
+        async def fetch(command):
+            if "borg info" in command:
+                seen['status_at_info_time'] = _latest_status("test-borg")
+                return (0, _info_json(), "")
+            return (0, _list_json(int(time.time()) - 60), "")
+
+        plugin.ssh_collector.fetch_output = AsyncMock(side_effect=fetch)
+        await plugin.on_collect()
+        assert seen['status_at_info_time'] == "online"
+
+    async def test_missing_cache_stats_yields_no_metrics(self, plugin):
+        # Older borg omits the stats block when the cache has not been built.
+        now = int(time.time())
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            side_effect=[(0, _list_json(now - 60), ""), (0, json.dumps({"repository": {}}), "")]
+        )
+        await plugin.on_collect()
+        assert _latest_metric("test-borg", "original_size") is None
+
+
+# ---------------------------------------------------------------------------
+# Archive caching for the UI
+# ---------------------------------------------------------------------------
+
+class TestArchiveCache:
+    async def test_archives_cached_for_ui(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "collect_stats": False})
+        now = int(time.time())
+        p.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, _multi_json(now - 3600, now - 7200), "")
+        )
+        await p.on_collect()
+
+        archives, info = p.cached_archives()
+        assert [a['name'] for a in archives] == ["archive-0", "archive-1"]
+        assert info['location'] == "/srv/repo"
+
+    async def test_cached_archives_empty_before_first_poll(self, plugin):
+        assert plugin.cached_archives() == ([], {})
