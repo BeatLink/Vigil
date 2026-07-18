@@ -110,6 +110,8 @@ plugins:
         max_age: 1d
         repo: "/path/to/borg/repo"
         # passphrase_command: "cat /etc/vigil/borg.pass"   # for encrypted repos
+        # require_sudo: true   # for a root-only repo; needs passwordless sudo
+        #                      # for borg on the target host
         ssh_config:
           host: "server.example.com"
 

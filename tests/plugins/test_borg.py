@@ -201,6 +201,24 @@ class TestCommand:
         assert "BORG_PASSPHRASE=" not in cmd
         assert "BORG_PASSCOMMAND=" not in cmd
 
+    def test_no_sudo_by_default(self, make_plugin):
+        assert "sudo" not in make_plugin(BorgPlugin, BASE_CFG)._list_command()
+
+    def test_require_sudo_prefixes_command(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "require_sudo": True})
+        cmd = p._list_command()
+        # -n so a missing NOPASSWD rule errors out instead of hanging the poll
+        # on a password prompt.
+        assert cmd.startswith("sudo -n ")
+
+    def test_require_sudo_keeps_env_after_sudo(self, make_plugin):
+        # sudo scrubs the environment it inherits, so a leading
+        # `BORG_PASSPHRASE=... sudo borg` would drop the passphrase. The
+        # assignments must be sudo's own VAR=value arguments.
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "require_sudo": True, "passphrase": "s3cret"})
+        cmd = p._list_command()
+        assert cmd.index("sudo") < cmd.index("BORG_PASSPHRASE=") < cmd.index("borg list")
+
     def test_local_path_repo_supported(self, make_plugin):
         p = make_plugin(BorgPlugin, {**BASE_CFG, "repo": "/mnt/backups/repo"})
         assert "/mnt/backups/repo" in p._list_command()

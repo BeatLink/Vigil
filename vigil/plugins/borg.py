@@ -77,6 +77,10 @@ class BorgPlugin(BasePlugin):
       borg_bin           Path to the borg executable. Defaults to "borg".
       lock_wait          Seconds borg waits for a repo lock before giving up, so a
                          concurrent backup does not hang the poll. Defaults to 5.
+      require_sudo       Run borg via sudo on the remote host (default: false).
+                         Needed when the repo is only readable by root. Requires
+                         passwordless sudo for the borg binary, e.g.
+                         "vigil ALL=(ALL) NOPASSWD: /run/current-system/sw/bin/borg".
       ssh_config.host    Host to run borg on (via BasePlugin's SSH config).
 
     Passphrase precedence when more than one is set: `passphrase` >
@@ -91,6 +95,7 @@ class BorgPlugin(BasePlugin):
         self.passphrase_command = config.get('passphrase_command')
         self.borg_bin = config.get('borg_bin', 'borg')
         self.lock_wait = config.get('lock_wait', 5)
+        self.require_sudo = bool(config.get('require_sudo', False))
 
     # -------------------------------------------------------------------------
     # Collection
@@ -127,6 +132,14 @@ class BorgPlugin(BasePlugin):
         Vigil runs on, and the monitored host needs no local copy. It still
         crosses to the remote host, but inside the encrypted SSH channel and as
         an env prefix (not argv), so it stays out of the remote `ps` listing.
+
+        With `require_sudo`, the whole thing runs as `sudo VAR=... borg ...`.
+        The env assignments must come *after* `sudo`, not before it: sudo scrubs
+        the environment it inherits, so a leading `BORG_PASSPHRASE=... sudo borg`
+        would silently drop the passphrase. Passing them as sudo's own
+        VAR=value arguments sets them in the privileged process instead, and
+        they still stay out of the remote `ps` listing (sudo hides them from
+        the argv it shows).
 
         All arguments are shlex-quoted so repo paths/URLs with spaces are safe.
         """
@@ -165,7 +178,8 @@ class BorgPlugin(BasePlugin):
             "--lock-wait", str(self.lock_wait),
             self.repo,
         ]
-        return " ".join(env + [shlex.quote(a) for a in args])
+        prefix = ["sudo", "-n"] if self.require_sudo else []
+        return " ".join(prefix + env + [shlex.quote(a) for a in args])
 
     async def on_collect(self):
         if not self.repo:
