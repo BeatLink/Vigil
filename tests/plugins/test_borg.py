@@ -73,6 +73,103 @@ class TestFreshness:
 
 
 # ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+def _captured(plugin) -> list:
+    """Record every db_logger.write message for assertions."""
+    written = []
+    plugin.db_logger.write = lambda msg, level="INFO": written.append((level, msg))
+    return written
+
+
+def _multi_json(*epochs) -> str:
+    return json.dumps({
+        "repository": {
+            "location": "/srv/repo",
+            "last_modified": _iso(epochs[0]) if epochs else "",
+        },
+        "encryption": {"mode": "repokey-blake2"},
+        "archives": [
+            {"name": f"archive-{i}", "start": _iso(e)} for i, e in enumerate(epochs)
+        ],
+    })
+
+
+class TestLogging:
+    async def test_logs_each_archive(self, plugin):
+        now = int(time.time())
+        out = _multi_json(now - 3600, now - 90000, now - 180000)
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, out, ""))
+        log = _captured(plugin)
+        await plugin.on_collect()
+        messages = " | ".join(m for _, m in log)
+        for name in ("archive-0", "archive-1", "archive-2"):
+            assert name in messages
+
+    async def test_logs_repository_metadata(self, plugin):
+        now = int(time.time())
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, _multi_json(now - 3600), "")
+        )
+        log = _captured(plugin)
+        await plugin.on_collect()
+        messages = " | ".join(m for _, m in log)
+        assert "/srv/repo" in messages
+        assert "repokey-blake2" in messages
+
+    async def test_archives_logged_newest_first(self, plugin):
+        now = int(time.time())
+        # Deliberately out of order — the log must still read newest first.
+        out = _multi_json(now - 180000, now - 3600, now - 90000)
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, out, ""))
+        log = _captured(plugin)
+        await plugin.on_collect()
+        names = [m.strip().split(" ")[0] for _, m in log if m.startswith("  archive-")]
+        assert names == ["archive-1", "archive-2", "archive-0"]
+
+    async def test_logs_command_with_passphrase_redacted(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "passphrase": "s3cret"})
+        now = int(time.time())
+        p.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, _multi_json(now - 3600), "")
+        )
+        log = _captured(p)
+        await p.on_collect()
+        messages = " | ".join(m for _, m in log)
+        # The command is logged, but never the secret.
+        assert "borg list" in messages
+        assert "BORG_PASSPHRASE=*****" in messages
+        assert "s3cret" not in messages
+
+    async def test_failure_logs_exit_code_and_hint(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(1, "", "sudo: borg: command not found")
+        )
+        log = _captured(plugin)
+        await plugin.on_collect()
+        messages = " | ".join(m for _, m in log)
+        assert "exit 1" in messages
+        assert "not on PATH" in messages
+
+    async def test_permission_denied_hint(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(2, "", "Permission denied: '/srv/repo/config'")
+        )
+        log = _captured(plugin)
+        await plugin.on_collect()
+        assert any("require_sudo" in m for _, m in log)
+
+    async def test_unparseable_output_logs_raw_snippet(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(
+            return_value=(0, "Warning: something odd", "")
+        )
+        log = _captured(plugin)
+        await plugin.on_collect()
+        assert any("Warning: something odd" in m for _, m in log)
+
+
+# ---------------------------------------------------------------------------
 # Failure handling
 # ---------------------------------------------------------------------------
 
@@ -132,7 +229,9 @@ class TestCommand:
         p = make_plugin(BorgPlugin, BASE_CFG)
         cmd = p._list_command()
         assert "borg list" in cmd
-        assert "--last 1" in cmd
+        # Defaults to the 10 most recent so the log can show repo contents;
+        # only the newest drives status.
+        assert "--last 10" in cmd
         assert "--json" in cmd
         assert "ssh://borg@host/srv/repo" in cmd
 
@@ -200,6 +299,15 @@ class TestCommand:
         cmd = p._list_command()
         assert "BORG_PASSPHRASE=" not in cmd
         assert "BORG_PASSCOMMAND=" not in cmd
+
+    def test_list_archives_configurable(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "list_archives": 3})
+        assert "--last 3" in p._list_command()
+
+    def test_list_archives_clamped_to_at_least_one(self, make_plugin):
+        # --last 0 makes borg dump every archive in the repo.
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "list_archives": 0})
+        assert "--last 1" in p._list_command()
 
     def test_no_sudo_by_default(self, make_plugin):
         assert "sudo" not in make_plugin(BorgPlugin, BASE_CFG)._list_command()

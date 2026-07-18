@@ -1,4 +1,5 @@
 import json
+import re
 import shlex
 import time
 from datetime import datetime
@@ -14,6 +15,55 @@ _DEFAULT_LAYOUT = [
     ['history'],
     ['logs'],
 ]
+
+
+def _redact(command: str) -> str:
+    """
+    Mask secrets in a borg command so it can be written to the event log.
+
+    `_list_command` inlines the repo passphrase as BORG_PASSPHRASE=<secret>, so
+    the raw string must never reach the database. Replaces the value (quoted or
+    bare) with `*****`, leaving the rest of the command readable for debugging.
+    BORG_PASSCOMMAND is masked too — it is a shell command, not the secret
+    itself, but it routinely names a key path worth keeping out of the log.
+    """
+    return re.sub(
+        r"(BORG_PASS(?:PHRASE|COMMAND)=)('(?:[^']|'\\'')*'|\"[^\"]*\"|\S+)",
+        r"\1*****",
+        command,
+    )
+
+
+def _failure_hint(stderr: str) -> Optional[str]:
+    """
+    Map a borg/sudo failure to a one-line hint at the likely cause.
+
+    borg's own errors say what happened but not what to change, and these few
+    account for most first-time setup failures. Returns None when nothing
+    matches, so the raw error stands alone rather than being second-guessed.
+    """
+    text = (stderr or "").lower()
+    if "command not found" in text:
+        return ("Hint: the borg binary is not on PATH for that user — under sudo "
+                "it must be on root's PATH too (set `borg_bin` to an absolute path).")
+    if "a password is required" in text or "sudo: a terminal is required" in text:
+        return ("Hint: sudo needs a password — grant the SSH user passwordless "
+                "sudo for borg (NOPASSWD).")
+    if "not allowed to set the following environment variables" in text:
+        return ("Hint: sudoers forbids setting BORG_PASSPHRASE — the rule needs "
+                "the SETENV tag to pass the passphrase through sudo.")
+    if "passphrase" in text or "not a valid repository" in text:
+        return ("Hint: the repo is encrypted and the passphrase was missing or "
+                "wrong — check `passphrase_file` / `passphrase_command`.")
+    if "permission denied" in text:
+        return ("Hint: the SSH user cannot read the repo — add it to the repo's "
+                "group or set `require_sudo: true`.")
+    if "does not exist" in text or "no such file" in text:
+        return "Hint: the `repo` path does not exist on that host."
+    if "failed to create/acquire the lock" in text:
+        return ("Hint: the repo is locked by another borg process — a backup may "
+                "be running.")
+    return None
 
 
 def _parse_archive_time(value: str) -> int:
@@ -77,6 +127,10 @@ class BorgPlugin(BasePlugin):
       borg_bin           Path to the borg executable. Defaults to "borg".
       lock_wait          Seconds borg waits for a repo lock before giving up, so a
                          concurrent backup does not hang the poll. Defaults to 5.
+      list_archives      How many recent archives to fetch and log each poll
+                         (default: 10). The newest is what drives status; the
+                         rest are logged for visibility into the repo's
+                         contents. Set to 1 to keep the poll minimal.
       require_sudo       Run borg via sudo on the remote host (default: false).
                          Needed when the repo is only readable by root. Requires
                          passwordless sudo for the borg binary, e.g.
@@ -96,6 +150,9 @@ class BorgPlugin(BasePlugin):
         self.borg_bin = config.get('borg_bin', 'borg')
         self.lock_wait = config.get('lock_wait', 5)
         self.require_sudo = bool(config.get('require_sudo', False))
+        # Clamp to >=1: --last 0 makes borg return every archive in the repo,
+        # which on a long-retained repo is a needlessly huge poll.
+        self.list_archives = max(1, int(config.get('list_archives', 10)))
 
     # -------------------------------------------------------------------------
     # Collection
@@ -166,7 +223,7 @@ class BorgPlugin(BasePlugin):
 
         args = [
             self.borg_bin, "list",
-            "--last", "1",
+            "--last", str(self.list_archives),
             "--json",
             # Read-only health check: skip lock acquisition entirely. Vigil
             # typically reads a repo it can traverse but not write (e.g. the
@@ -187,12 +244,20 @@ class BorgPlugin(BasePlugin):
             self.set_status('failed')
             return
 
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(self._list_command())
+        command = self._list_command()
+        # Redacted so the inlined passphrase never reaches the database.
+        self.db_logger.write(f"Running: {_redact(command)}", level="INFO")
+
+        ret, stdout, stderr = await self.ssh_collector.fetch_output(command)
 
         if ret != 0:
+            detail = (stderr or stdout).strip()
             self.db_logger.write(
-                f"borg list failed: {(stderr or stdout).strip()}", level="ERROR"
+                f"borg list failed (exit {ret}): {detail}", level="ERROR"
             )
+            hint = _failure_hint(detail)
+            if hint:
+                self.db_logger.write(hint, level="ERROR")
             self.set_status('failed')
             return
 
@@ -203,8 +268,16 @@ class BorgPlugin(BasePlugin):
                 "Could not parse borg output — no archive timestamps found",
                 level="ERROR"
             )
+            # The raw output is the only way to tell a borg warning banner from
+            # genuinely malformed JSON; truncated so a runaway dump can't flood
+            # the log.
+            snippet = (stdout or stderr or "").strip()[:500]
+            if snippet:
+                self.db_logger.write(f"Raw output was: {snippet}", level="ERROR")
             self.set_status('failed')
             return
+
+        self._log_repo_details(stdout)
 
         self.db_metrics.metric('archive_count', float(archive_count))
         self.db_metrics.metric('last_backup_epoch', float(latest_epoch))
@@ -257,6 +330,93 @@ class BorgPlugin(BasePlugin):
                 newest = epoch
 
         return newest, len(archives)
+
+    def _archive_details(self, stdout: str) -> (List[Dict[str, Any]], Dict[str, Any]):
+        """
+        Parse the same output into (archives, repo_info) for logging.
+
+        Kept separate from `_newest_archive` so the status decision stays driven
+        by the one timestamp it needs, while this pulls the descriptive fields —
+        archive names and their times, plus the repo's location, encryption mode
+        and last-modified stamp. Returns ([], {}) on unparseable output; the
+        caller has already failed the poll on that.
+
+        Each returned archive is {'name': str, 'epoch': int}, newest first.
+        """
+        try:
+            data = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            return [], {}
+
+        if not isinstance(data, dict):
+            return [], {}
+
+        raw = data.get('archives') or []
+        if not isinstance(raw, list):
+            return [], {}
+
+        archives = []
+        for archive in raw:
+            if not isinstance(archive, dict):
+                continue
+            archives.append({
+                # Borg repeats the name as "archive"/"barchive"/"name"; any will do.
+                'name': archive.get('name') or archive.get('archive') or '?',
+                'epoch': _parse_archive_time(
+                    archive.get('start') or archive.get('time', '')
+                ),
+            })
+        archives.sort(key=lambda a: a['epoch'], reverse=True)
+
+        repo = data.get('repository')
+        info = {}
+        if isinstance(repo, dict):
+            info['location'] = repo.get('location') or ''
+            info['last_modified'] = repo.get('last_modified') or ''
+        enc = data.get('encryption')
+        if isinstance(enc, dict):
+            info['encryption'] = enc.get('mode') or ''
+
+        return archives, info
+
+    def _log_repo_details(self, stdout: str) -> None:
+        """
+        Write the descriptive repo/archive lines to the event log.
+
+        One line summarising the repository, then one per archive returned
+        (bounded by `list_archives`). Runs on every successful poll, so the log
+        shows what the repo actually held at each check rather than only the
+        derived status.
+        """
+        archives, info = self._archive_details(stdout)
+
+        if info:
+            parts = []
+            if info.get('location'):
+                parts.append(f"location={info['location']}")
+            if info.get('encryption'):
+                parts.append(f"encryption={info['encryption']}")
+            if info.get('last_modified'):
+                parts.append(f"last_modified={info['last_modified']}")
+            if parts:
+                self.db_logger.write("Repository: " + ", ".join(parts), level="INFO")
+
+        if not archives:
+            return
+
+        self.db_logger.write(
+            f"{len(archives)} most recent archive(s):", level="INFO"
+        )
+        for archive in archives:
+            # epoch 0 means the timestamp was unparseable — say so rather than
+            # printing a bogus 1970 age.
+            age = (
+                format_age(int(time.time()) - archive['epoch'])
+                if archive['epoch'] else "unknown age"
+            )
+            self.db_logger.write(
+                f"  {archive['name']} ({age})", level="INFO"
+            )
 
     # -------------------------------------------------------------------------
     # UI
