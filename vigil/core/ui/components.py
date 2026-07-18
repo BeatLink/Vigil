@@ -2,16 +2,54 @@ from nicegui import ui
 from .theme import TEXT, TEXT_MUTED, PRIMARY, ACCENT, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
 
 
+class _SafeTimer(ui.timer):
+    """
+    A ui.timer that stops itself once the page it belongs to is gone.
+
+    NiceGUI resolves the timer's context *outside* the callback — both in
+    `_run_in_loop` (once, around the whole loop) and again in
+    `_invoke_callback`. Both do `with self._get_context()`, which raises
+    "The parent slot of the element has been deleted." as soon as the client
+    disconnects or the page re-renders. Because that raise happens in NiceGUI's
+    own task, a try/except around the callback never sees it; the error reaches
+    `app.handle_exception` and floods the log every tick instead.
+
+    Overriding `_should_stop` — the hook NiceGUI checks each iteration — makes
+    detachment an ordinary stop condition, so the timer exits its loop cleanly
+    rather than raising. `_can_start` gets the same treatment for a timer whose
+    page dies before its first tick.
+    """
+
+    def _detached(self) -> bool:
+        """
+        True once this timer's element has been removed from its client.
+
+        `parent_slot` is deliberately not used as the signal: after a delete it
+        still returns the (now orphaned) Slot object, and only raises later
+        once the slot's own parent is gone — the very raise this class exists
+        to avoid. NiceGUI marks the element `is_deleted` and drops it from
+        `client.elements` at delete time, so those are checked instead.
+        """
+        if getattr(self, "is_deleted", False):
+            return True
+        try:
+            return self.id not in self.client.elements
+        except Exception:
+            # No client at all (page fully torn down) — nothing left to update.
+            return True
+
+    def _should_stop(self) -> bool:
+        return self._detached() or super()._should_stop()
+
+
 def safe_timer(interval: float, callback):
     """
-    Create a periodic ui.timer whose callback is guarded against firing after
-    its page/element has been torn down.
+    Create a periodic timer that goes quiet once its page is torn down.
 
-    When a client disconnects or the page re-renders, the element a timer
-    updates can be deleted while the timer is still scheduled. NiceGUI then
-    raises "The parent slot of the element has been deleted." on every tick,
-    which floods the log and needlessly churns the event loop. We swallow that
-    specific error and cancel the timer so a dead page's timers go quiet.
+    Plain `ui.timer` keeps firing against deleted elements after a client
+    disconnects, raising on every tick. This variant cancels itself instead —
+    see _SafeTimer. The callback is additionally guarded so a teardown race
+    mid-callback is swallowed rather than logged.
     """
     timer = None
 
@@ -25,7 +63,7 @@ def safe_timer(interval: float, callback):
                 return
             raise
 
-    timer = ui.timer(interval, _wrapped)
+    timer = _SafeTimer(interval, _wrapped)
     return timer
 
 
