@@ -354,6 +354,18 @@ class TestCommand:
         # A local-path repo needs no onward SSH at all.
         assert "BORG_RSH=" not in make_plugin(BorgPlugin, BASE_CFG)._list_command()
 
+    def test_borg_defaults_to_a_longer_timeout(self, make_plugin):
+        # An ssh:// repo adds a second SSH hop and a busy repo answers slowly;
+        # the framework default (tuned for quick reads) times these out.
+        from vigil.core.modules.collectors.ssh_collector import TIMEOUT
+        p = make_plugin(BorgPlugin, BASE_CFG)
+        assert p.timeout == BorgPlugin.DEFAULT_TIMEOUT
+        assert p.timeout > TIMEOUT
+
+    def test_borg_timeout_is_overridable(self, make_plugin):
+        p = make_plugin(BorgPlugin, {**BASE_CFG, "timeout": "10m"})
+        assert p.timeout == 600
+
     def test_no_sudo_by_default(self, make_plugin):
         assert "sudo" not in make_plugin(BorgPlugin, BASE_CFG)._list_command()
 

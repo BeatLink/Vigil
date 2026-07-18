@@ -176,6 +176,13 @@ class BorgPlugin(BasePlugin):
       collect_stats      Also run `borg info --json` each poll to record repo
                          size and deduplication metrics (default: true). Costs a
                          second round trip; set false to keep the poll minimal.
+      timeout            Deadline for each borg command (default: "3m"). Higher
+                         than the framework default because borg regularly needs
+                         longer: an ssh:// repo adds a second SSH hop, and a
+                         repository busy with its own maintenance can take
+                         minutes to answer a read. Raise it further for a large
+                         or remote repo; the poll interval should stay
+                         comfortably above it.
       ssh_key            Path (on the host borg runs on) to the SSH private key
                          borg should use to reach an ssh:// repo. Needed whenever
                          `repo` is an ssh:// URL: borg opens its own connection
@@ -218,7 +225,13 @@ class BorgPlugin(BasePlugin):
     Passphrase precedence when more than one is set: `passphrase` >
     `passphrase_file` > `passphrase_command`.
     """
+    # Borg commands are slower than a typical collector's: an ssh:// repo adds
+    # a second SSH hop, and a repo busy with its own maintenance can take
+    # minutes to answer. Overridable per monitor via the `timeout` config key.
+    DEFAULT_TIMEOUT = 180.0
+
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
+        config = {'timeout': self.DEFAULT_TIMEOUT, **config}
         super().__init__(name, config, db)
         self.repo = config.get('repo')
         self.max_age = parse_duration(config.get('max_age', '1d'))

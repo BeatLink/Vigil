@@ -10,6 +10,17 @@ from vigil.core.data.config_file import ConfigFileManager as VigilConfig
 from vigil.core.data.database import DatabaseManager as VigilDatabase
 from peewee import OperationalError
 
+# How often the engine wakes to check which monitors are due.
+#
+# This is the scheduler's resolution, not a polling interval: each monitor
+# collects only once its own `interval` has elapsed (BasePlugin.run_cycle).
+# It must therefore be no larger than the shortest interval in use, or that
+# interval is silently rounded up to the tick — a 60s tick made every
+# `interval: 30s` monitor poll at 60s instead. 10s keeps the common 30s
+# setting honest while leaving the loop nearly idle when nothing is due.
+TICK_SECONDS = 10
+
+
 class VigilEngine:
     def __init__(self, config_path: str, db_path_override: Optional[str] = None):
         self.config_loader = VigilConfig(config_path)
@@ -135,16 +146,18 @@ class VigilEngine:
                 for res in results:
                     if isinstance(res, Exception):
                         logging.error(f"Plugin execution error: {res}")
-                total += len(results)
+                # run_cycle returns True only when it actually collected; the
+                # rest were skipped because their interval had not elapsed.
+                total += sum(1 for r in results if r is True)
 
             if total:
-                logging.info(f"Engine Cycle: Processed {total} monitors.")
+                logging.info(f"Engine Cycle: Collected {total} monitors.")
             else:
-                logging.debug("No plugins configured.")
+                logging.debug("Engine Cycle: nothing due.")
 
             self._maybe_prune_logs()
 
-            await asyncio.sleep(60)
+            await asyncio.sleep(TICK_SECONDS)
 
     def _maybe_prune_logs(self, interval: float = 3600.0):
         """

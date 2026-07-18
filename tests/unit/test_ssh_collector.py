@@ -46,6 +46,19 @@ class TestFetchOutput:
         assert "connection reset" in err
 
     async def test_passes_command_to_ssh_execute(self, mock_conn):
+        from vigil.core.modules.collectors.ssh_collector import TIMEOUT
         collector = SSHCollector(mock_conn)
         await collector.fetch_output("df -h")
-        mock_conn.execute.assert_called_once_with("df -h")
+        # The deadline goes down to execute(), which is what actually kills the
+        # process group; wait_for alone would leave it running.
+        mock_conn.execute.assert_called_once_with("df -h", timeout=TIMEOUT)
+
+    async def test_collector_timeout_is_configurable(self, mock_conn):
+        collector = SSHCollector(mock_conn, timeout=120.0)
+        await collector.fetch_output("slow-command")
+        mock_conn.execute.assert_called_once_with("slow-command", timeout=120.0)
+
+    async def test_per_call_timeout_overrides_default(self, mock_conn):
+        collector = SSHCollector(mock_conn, timeout=30.0)
+        await collector.fetch_output("slow-command", timeout=90.0)
+        mock_conn.execute.assert_called_once_with("slow-command", timeout=90.0)

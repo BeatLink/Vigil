@@ -64,6 +64,31 @@ class TestInterval:
         assert p.collections == 2
 
 
+class TestReturnValue:
+    async def test_returns_true_when_it_collected(self, probe):
+        assert await probe.run_cycle() is True
+
+    async def test_returns_false_when_not_due(self, probe):
+        await probe.run_cycle()
+        assert await probe.run_cycle() is False
+
+
+class TestTimeoutConfig:
+    def test_defaults_to_framework_timeout(self, make_plugin):
+        from vigil.core.modules.collectors.ssh_collector import TIMEOUT
+        p = make_plugin(_Probe, {})
+        assert p.timeout == TIMEOUT
+
+    def test_timeout_is_configurable(self, make_plugin):
+        # Monitors whose commands are legitimately slow raise this rather than
+        # everyone inheriting a long default that would hide a dead host.
+        p = make_plugin(_Probe, {"timeout": "3m"})
+        assert p.timeout == 180
+
+    def test_numeric_timeout_accepted(self, make_plugin):
+        assert make_plugin(_Probe, {"timeout": 45}).timeout == 45
+
+
 class TestOverlapGuard:
     async def test_overlapping_poll_is_skipped(self, probe):
         # A poll against a busy target can outlast its interval. Starting a

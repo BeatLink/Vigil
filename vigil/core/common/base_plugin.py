@@ -6,7 +6,7 @@ from vigil.core.common.ssh_connector import SSHConnection
 from vigil.core.common.time_utils import parse_duration
 from functools import partial
 from vigil.core.ui.components import render_host_card, render_status_card, metric_table, log_table
-from vigil.core.modules.collectors.ssh_collector import SSHCollector
+from vigil.core.modules.collectors.ssh_collector import SSHCollector, TIMEOUT as SSH_TIMEOUT
 from vigil.core.modules.controllers.ssh_controller import SSHController
 from vigil.core.modules.controllers.job_controller import JobController
 
@@ -34,8 +34,14 @@ class BasePlugin(ABC):
         self.target = getattr(self.ssh_conn, 'host', config.get('target_host', 'localhost'))
 
         # Build the internal modules registry for use by subclasses
+        # Per-monitor command deadline. Defaults to the collector's own, which
+        # suits quick reads; monitors whose commands are legitimately slow
+        # (e.g. borg against a busy repository) raise it in config rather than
+        # everyone inheriting a long timeout that would hide a dead host.
+        self.timeout = parse_duration(config.get('timeout', SSH_TIMEOUT))
+
         self.internal_modules = {
-            'collectors': {'ssh': SSHCollector(self.ssh_conn)},
+            'collectors': {'ssh': SSHCollector(self.ssh_conn, timeout=self.timeout)},
             'controllers': {
                 'ssh': SSHController(self.ssh_conn),
                 # Long-running, cancellable, DB-tracked commands. Distinct from
@@ -87,9 +93,13 @@ class BasePlugin(ABC):
             "actions": self.get_actions()
         }
 
-    async def run_cycle(self):
+    async def run_cycle(self) -> bool:
         """
         Main execution entry point for the plugin's polling interval.
+
+        Returns True if this call actually collected, False if it was skipped —
+        the engine ticks far more often than most monitors poll, so the return
+        value is what distinguishes "collected" from "not due yet".
 
         Skips this tick when the previous collection for this monitor has not
         finished. A poll against a busy target can outlast its own interval; if
@@ -103,18 +113,19 @@ class BasePlugin(ABC):
             logging.debug(
                 f"{self.name}: previous collection still running, skipping this tick"
             )
-            return
+            return False
 
-        # The engine ticks every 60s and calls every monitor; honouring the
+        # The engine tick is only the scheduler's resolution; honouring the
         # configured interval is this method's job. Without it, `interval: 1h`
-        # polled hourly targets once a minute.
+        # polled hourly targets once per tick.
         now = time.monotonic()
         if self._last_collected and (now - self._last_collected) < self.interval:
-            return
+            return False
 
         self._collecting = True
         try:
             await self.on_collect()
+            return True
         finally:
             self._last_collected = time.monotonic()
             self._collecting = False
