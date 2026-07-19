@@ -2,7 +2,9 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.filesystems import FilesystemsPlugin, _sanitize
+from vigil.plugins.filesystems import (
+    FilesystemsPlugin, _sanitize, _parse_inodes, _parse_readonly, _SNAP,
+)
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -30,11 +32,41 @@ def _latest_metric(metric, name="test-fs"):
 _HEADER = "Mounted on           1B-blocks        Used Use%"
 
 
+_IHEADER = "Mounted on            Inodes IUsed IFree IUse%"
+
+
 def _df(*rows):
     lines = [_HEADER]
     for mount, size, used, pct in rows:
         lines.append(f"{mount} {size} {used} {pct}%")
     return "\n".join(lines) + "\n"
+
+
+def _df_inodes(*rows):
+    """Build a `df -i --output=target,ipcent` section. pct may be '-'."""
+    lines = [_IHEADER]
+    for mount, pct in rows:
+        lines.append(f"{mount} {pct}" if pct == '-' else f"{mount} {pct}%")
+    return "\n".join(lines) + "\n"
+
+
+def _mounts(*rows):
+    """Build a /proc/mounts section from (mountpoint, 'ro'|'rw') pairs."""
+    lines = []
+    for mount, mode in rows:
+        escaped = mount.replace('\\', '\\134').replace(' ', '\\040')
+        lines.append(f"/dev/sda1 {escaped} ext4 {mode},relatime 0 0")
+    return "\n".join(lines) + "\n"
+
+
+def _combined(space, inodes=None, mounts=None):
+    """Join the three sections the way the real command emits them."""
+    parts = [space]
+    if inodes is not None:
+        parts.append(inodes)
+    if mounts is not None:
+        parts.append(mounts)
+    return f"\n{_SNAP}\n".join(parts)
 
 
 @pytest.fixture
@@ -95,6 +127,146 @@ class TestFilesystemsCollection:
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "df: error"))
         await plugin.on_collect()
         assert _latest_status() == "failed"
+
+
+class TestParseInodes:
+    def test_basic(self):
+        assert _parse_inodes(_df_inodes(("/", 12), ("/home", 90))) == {
+            "/": 12.0, "/home": 90.0,
+        }
+
+    def test_omits_inodeless_filesystems(self):
+        # btrfs/ZFS report '-'; omitted rather than recorded as a healthy 0%.
+        assert _parse_inodes(_df_inodes(("/tank", "-"), ("/", 5))) == {"/": 5.0}
+
+    def test_mount_with_space(self):
+        assert _parse_inodes(_df_inodes(("/mnt/my drive", 30))) == {"/mnt/my drive": 30.0}
+
+
+class TestParseReadonly:
+    def test_ro_and_rw(self):
+        assert _parse_readonly(_mounts(("/", "rw"), ("/data", "ro"))) == {
+            "/": False, "/data": True,
+        }
+
+    def test_decodes_escaped_space(self):
+        assert _parse_readonly(_mounts(("/mnt/my drive", "ro"))) == {"/mnt/my drive": True}
+
+    def test_ignores_malformed_lines(self):
+        assert _parse_readonly("garbage\n/dev/sda1 /mnt ext4 rw 0 0\n") == {"/mnt": False}
+
+
+class TestInodeExhaustion:
+    async def test_healthy_inodes_stay_online(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+            _df(("/", 100, 10, 10)),
+            _df_inodes(("/", 12)),
+            _mounts(("/", "rw")),
+        ), ""))
+        await plugin.on_collect()
+        assert _latest_status() == "online"
+        assert _latest_metric("fs_root_inodes_pct") == pytest.approx(12.0)
+
+    async def test_inode_exhaustion_fails_despite_free_space(self, plugin):
+        # The whole point: 10% space used, but inodes are gone.
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+            _df(("/", 100, 10, 10)),
+            _df_inodes(("/", 97)),
+            _mounts(("/", "rw")),
+        ), ""))
+        await plugin.on_collect()
+        assert _latest_status() == "failed"
+        assert _latest_metric("worst_used_pct") == pytest.approx(10.0)
+        assert _latest_metric("worst_inodes_pct") == pytest.approx(97.0)
+
+    async def test_inode_warning(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+            _df(("/", 100, 10, 10)),
+            _df_inodes(("/", 88)),
+            _mounts(("/", "rw")),
+        ), ""))
+        await plugin.on_collect()
+        assert _latest_status() == "warning"
+
+    async def test_inodeless_filesystem_records_no_metric(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+            _df(("/tank", 100, 10, 10)),
+            _df_inodes(("/tank", "-")),
+            _mounts(("/tank", "rw")),
+        ), ""))
+        await plugin.on_collect()
+        assert _latest_status() == "online"
+        assert _latest_metric("fs_tank_inodes_pct") is None
+
+
+class TestReadOnlyDetection:
+    async def test_readonly_mount_fails(self, plugin):
+        # Usage looks healthy; the filesystem is silently read-only.
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+            _df(("/", 100, 10, 10), ("/data", 100, 20, 20)),
+            _df_inodes(("/", 5), ("/data", 5)),
+            _mounts(("/", "rw"), ("/data", "ro")),
+        ), ""))
+        await plugin.on_collect()
+        assert _latest_status() == "failed"
+        assert _latest_metric("readonly_count") == pytest.approx(1.0)
+
+    async def test_readonly_as_warning_when_configured(self, make_plugin):
+        cfg = dict(BASE_CFG, readonly_is_failure=False)
+        p = make_plugin(FilesystemsPlugin, cfg)
+        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+            _df(("/data", 100, 20, 20)),
+            _df_inodes(("/data", 5)),
+            _mounts(("/data", "ro")),
+        ), ""))
+        await p.on_collect()
+        assert _latest_status() == "warning"
+
+    async def test_ignores_ro_mounts_df_does_not_report(self, plugin):
+        # /nix/store is permanently read-only on NixOS but never appears in
+        # `df --output` (it's a bind mount deduplicated against /). Only
+        # mountpoints df actually reports are considered, so this must not
+        # pin every NixOS host to failed.
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+            _df(("/", 100, 10, 10)),
+            _df_inodes(("/", 5)),
+            _mounts(("/", "rw"), ("/nix/store", "ro"),
+                    ("/run/credentials/systemd-journald.service", "ro")),
+        ), ""))
+        await plugin.on_collect()
+        assert _latest_status() == "online"
+        assert _latest_metric("readonly_count") == pytest.approx(0.0)
+
+    async def test_all_rw_stays_online(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+            _df(("/", 100, 10, 10)),
+            _df_inodes(("/", 5)),
+            _mounts(("/", "rw")),
+        ), ""))
+        await plugin.on_collect()
+        assert _latest_status() == "online"
+        assert _latest_metric("readonly_count") == pytest.approx(0.0)
+
+
+class TestDegradedOutput:
+    async def test_space_only_output_still_works(self, plugin):
+        # No sentinels at all (e.g. a target where the extra commands failed):
+        # space checks must still function rather than erroring out.
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _df(
+            ("/", 100, 95, 95),
+        ), ""))
+        await plugin.on_collect()
+        assert _latest_status() == "failed"
+        assert _latest_metric("worst_used_pct") == pytest.approx(95.0)
+
+    async def test_space_and_inodes_without_mounts(self, plugin):
+        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+            _df(("/", 100, 10, 10)),
+            _df_inodes(("/", 97)),
+        ), ""))
+        await plugin.on_collect()
+        assert _latest_status() == "failed"
+        assert _latest_metric("worst_inodes_pct") == pytest.approx(97.0)
 
 
 class TestFilesystemsActions:
