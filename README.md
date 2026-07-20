@@ -99,7 +99,8 @@ theme:
 | Type | Monitors | Collection | Key metrics | Actions |
 |------|----------|------------|-------------|---------|
 | [`uptime`](#uptime)                     | Host reachability                     | ICMP ping                                        | `up`, `latency_ms`                              | — |
-| [`systemd_service`](#systemd_service)   | systemd unit state / last run         | SSH (`systemctl`)                                | `active` *or* `last_run_epoch`, `last_run_success` | Restart, Stop |
+| [`systemd_service`](#systemd_service)   | systemd unit state / last run         | SSH (`systemctl`)                                | `active` *or* `last_run_epoch`, `last_run_success` | Restart, Stop, Enable, Disable |
+| [`service_list`](#service_list)         | Systemd unit browser and control      | SSH (`systemctl`)                                | `services_total`, `services_active`, `services_failed` | Start, Stop, Restart, Enable, Disable, View Status |
 | [`smart_disk`](#smart_disk)             | Physical disk SMART health            | SSH (`smartctl`)                                 | `disks_total`, `disks_ok`, `disks_failed`       | — |
 | [`zfs_health`](#zfs_health)             | ZFS pool health state                 | SSH (`zpool list`)                               | `pools_total`, `pools_ok`, `pools_degraded`     | — |
 | [`zfs_pool`](#zfs_pool)                 | ZFS pool capacity                     | SSH (`zpool list`)                               | `usage_pct`                                     | — |
@@ -132,7 +133,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `systemd_service`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `interrupts`, `connections`, `wifi`, `ports`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `borg`, `gpu`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `systemd_service`, `service_list`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `interrupts`, `connections`, `wifi`, `ports`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `borg`, `gpu`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -171,12 +172,22 @@ Monitors systemd units over SSH. Operates in two modes depending on whether `max
 | `interval`     | Polling frequency in seconds (default: `60`)                                    |
 | `max_age`      | *(Oneshot mode)* Max seconds since last successful run before reporting `failed` |
 | `ssh_config`   | SSH connection details — see [SSH Config](#ssh-config) below                    |
+| `allow_unit_file_edit` | Enable UI editing of the target service unit file. Defaults to `false`. |
+| `allowed_write_paths` | Optional list of absolute paths where unit file writes are permitted. Defaults to standard systemd unit paths. |
 
 **Continuous metrics**: `active` (1/0)
 
 **Oneshot metrics**: `last_run_epoch` (Unix timestamp), `last_run_success` (1/0)
 
-**Actions**: Restart Service, Stop Service
+**Actions**: Restart Service, Stop Service, Enable on Boot, Disable on Boot
+
+The service detail UI also includes:
+
+* `View Unit File` for the configured service
+* `Reload Daemon` to run `systemctl daemon-reload`
+* `Edit Unit File` when `allow_unit_file_edit: true` is enabled
+
+> Note: Remote editing requires passwordless sudo access for the service commands and the configured write helper (currently `python3` on the target). Restrict `allowed_write_paths` carefully.
 
 ```yaml
 # Continuous — long-running daemon
@@ -197,6 +208,58 @@ Monitors systemd units over SSH. Operates in two modes depending on whether `max
   max_age: 604800  # 1 week
   ssh_config:
     host: "myhost.example.com"
+```
+
+### `service_list`
+Lists all systemd services on a host and provides a sortable service browser with control actions.
+
+| Option                | Description                                                                                       |
+|----------------------|---------------------------------------------------------------------------------------------------|
+| `lines`              | Number of recent log lines to preserve for this plugin's internal event log (default: `10`)        |
+| `interval`           | Polling frequency in seconds (default: `60`)                                                      |
+| `ssh_config`         | SSH connection details — see [SSH Config](#ssh-config) below                                      |
+| `allow_unit_file_edit` | Allow editing of unit files from the UI (disabled by default).                                    |
+| `allowed_write_paths` | Optional list of absolute paths where unit file writes are permitted. Defaults to standard systemd unit paths. |
+
+**Metrics**: `services_total`, `services_active`, `services_failed`
+
+**Actions**: Reload Daemon
+
+The service browser renders a sortable table of all units, and offers per-unit actions for:
+
+* Start Service
+* Stop Service
+* Restart Service
+* Enable on Boot
+* Disable on Boot
+* View Status
+* View Unit File
+* Edit Unit File (when enabled)
+
+```yaml
+- name: "Systemd Service Browser"
+  id: "systemd-service-browser"
+  type: "service_list"
+  interval: 60
+  ssh_config:
+    host: "web-01.example.com"
+  allow_unit_file_edit: true
+  allowed_write_paths:
+    - /etc/systemd/system
+```
+
+```yaml
+# Continuous with unit file editing enabled
+- name: "Nginx"
+  id: "nginx-service"
+  type: "systemd_service"
+  service_name: "nginx.service"
+  interval: 60
+  ssh_config:
+    host: "web-01.example.com"
+  allow_unit_file_edit: true
+  allowed_write_paths:
+    - /etc/systemd/system
 ```
 
 ---

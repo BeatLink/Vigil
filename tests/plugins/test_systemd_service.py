@@ -303,14 +303,23 @@ class TestActions:
             "sudo systemctl stop nginx.service"
         )
 
-    async def test_stop_failure(self, plugin):
+    async def test_disable_success(self, plugin):
+        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
+        assert await plugin.on_action("disable_service") is True
+        plugin.ssh_controller.execute_action.assert_called_once_with(
+            "sudo systemctl disable nginx.service"
+        )
+
+    async def test_disable_failure(self, plugin):
         plugin.ssh_controller.execute_action = AsyncMock(return_value=(1, "", "error"))
-        assert await plugin.on_action("stop_service") is False
+        assert await plugin.on_action("disable_service") is False
 
     async def test_unknown_action_returns_false(self, plugin):
         assert await plugin.on_action("nuke") is False
 
-    def test_get_actions_includes_restart_and_stop(self, plugin):
+    def test_get_actions_includes_restart_stop_enable_disable(self, plugin):
         ids = {a["action_id"] for a in plugin.get_actions()}
         assert "restart_service" in ids
         assert "stop_service" in ids
+        assert "enable_service" in ids
+        assert "disable_service" in ids
