@@ -17,7 +17,7 @@ _BENIGN_STATES = {'shut off', 'shutoff'}
 _DEFAULT_LAYOUT = [
     ['host_card', 'total_card', 'running_card', 'stopped_card'],
     ['vms'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -155,8 +155,8 @@ class VmsPlugin(BasePlugin):
             stopped_label = info_card('STOPPED', '--')
         with layout.cell('vms'):
             ui.element('div')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             def _ival(name):

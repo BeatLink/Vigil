@@ -255,7 +255,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'connection_card', 'speed_card'],
     ['torrents_card', 'stalled_card', 'errored_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -507,8 +507,8 @@ class QbittorrentPlugin(BasePlugin):
             errored_label = info_card('ERRORED', '--')
         with layout.cell('chart'):
             history_chart('DOWNLOAD SPEED (B/s)', self.id, 'dl_speed_bytes')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             connected   = self.latest_metric('connected')

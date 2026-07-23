@@ -131,7 +131,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'resolution_card', 'servfail_card'],
     ['queries_card', 'cache_card', 'uptime_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -254,8 +254,8 @@ class UnboundPlugin(BasePlugin):
             uptime_label = info_card('UPTIME', '--')
         with layout.cell('chart'):
             history_chart('SERVFAIL RATE (%)', self.id, 'servfail_rate_pct')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             resolved  = self.latest_metric('resolved_ok')

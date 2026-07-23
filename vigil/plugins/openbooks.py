@@ -84,7 +84,7 @@ def _parse_response(stdout: str) -> Tuple[int, int]:
 _DEFAULT_LAYOUT = [
     ['host_card', 'bridge_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -149,8 +149,8 @@ class OpenbooksPlugin(BasePlugin):
             bridge_label = info_card('IRC BRIDGE', '--')
         with layout.cell('chart'):
             history_chart('IRC BRIDGE CONNECTED', self.id, 'bridge_connected')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             connected = self.latest_metric('bridge_connected')

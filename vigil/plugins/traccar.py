@@ -103,7 +103,7 @@ def _age_hours(last_update: Optional[str]) -> Optional[float]:
 _DEFAULT_LAYOUT = [
     ['host_card', 'stale_card', 'devices_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -227,8 +227,8 @@ class TraccarPlugin(BasePlugin):
             devices_label = info_card('DEVICES', '--')
         with layout.cell('chart'):
             history_chart('OLDEST UPDATE (HOURS)', self.id, 'oldest_update_hours')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             stale = self.latest_metric('devices_stale')

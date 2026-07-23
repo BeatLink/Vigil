@@ -66,7 +66,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'quality_card', 'fps_card'],
     ['detector_card', 'stalls_card', 'reconnects_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -196,8 +196,8 @@ class FrigatePlugin(BasePlugin):
             reconnects_label = info_card('RECONNECTS/H', '--')
         with layout.cell('chart'):
             history_chart('CAMERA FPS', self.id, 'camera_fps_total')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         _rank_to_label = {0: 'UNUSABLE', 1: 'POOR', 2: 'FAIR', 3: 'EXCELLENT'}
 

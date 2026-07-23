@@ -14,7 +14,7 @@ _BENIGN_STATES = {'created', 'paused'}
 _DEFAULT_LAYOUT = [
     ['host_card', 'total_card', 'running_card', 'stopped_card'],
     ['containers'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -157,8 +157,8 @@ class ContainersPlugin(BasePlugin):
             stopped_label = info_card('STOPPED', '--')
         with layout.cell('containers'):
             ui.element('div')  # reserved for future per-container detail
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             def _ival(name):

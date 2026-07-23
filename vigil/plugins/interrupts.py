@@ -26,7 +26,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'irq_card', 'ctxt_card'],
     ['irq_chart'],
     ['ctxt_chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -110,8 +110,8 @@ class InterruptsPlugin(BasePlugin):
             history_chart('INTERRUPTS / SEC', self.id, 'irq_per_sec')
         with layout.cell('ctxt_chart'):
             history_chart('CONTEXT SWITCHES / SEC', self.id, 'ctxt_per_sec')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             irq = self.latest_metric('irq_per_sec')

@@ -79,7 +79,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'folders_card', 'devices_card'],
     ['errors_card', 'need_card', 'stalled_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -283,8 +283,8 @@ class SyncthingPlugin(BasePlugin):
             stalled_label = info_card('STALLED', '--')
         with layout.cell('chart'):
             history_chart('BYTES NEEDED', self.id, 'need_bytes')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             total_f = self.latest_metric('folders_total')

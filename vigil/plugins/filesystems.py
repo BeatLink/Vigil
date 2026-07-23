@@ -82,7 +82,7 @@ def _parse_readonly(block: str) -> Dict[str, bool]:
 _DEFAULT_LAYOUT = [
     ['host_card', 'count_card', 'worst_card'],
     ['filesystems'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -256,8 +256,8 @@ class FilesystemsPlugin(BasePlugin):
             fs_container = ui.element('div').style(
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update():
             # Latest space and inode percentages per filesystem, deduplicated in

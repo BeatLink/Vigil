@@ -8,12 +8,12 @@ from vigil.core.ui.theme import STATUS_COLORS
 _DEFAULT_LAYOUT_METRIC = [
     ['host_card', 'exit_card', 'value_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 _DEFAULT_LAYOUT_PLAIN = [
     ['host_card', 'exit_card'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -142,8 +142,8 @@ class CommandPlugin(BasePlugin):
                 value_label = info_card(self.value_label, '--')
             with layout.cell('chart'):
                 history_chart(self.value_label, self.id, 'value')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update():
             exit_m = self.latest_metric('exit_code')

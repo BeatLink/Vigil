@@ -12,7 +12,7 @@ from vigil.core.common.plugin_utils import level_for as _level_for, format_bytes
 _DEFAULT_LAYOUT = [
     ['host_card', 'mem_pct_card', 'mem_used_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -92,8 +92,8 @@ class MemoryUsagePlugin(BasePlugin):
             mem_used_label = info_card('MEM USED', '--')
         with layout.cell('chart'):
             history_chart('MEMORY USAGE (%)', self.id, 'memory_pct')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             mem_pct   = self.latest_metric('memory_pct')

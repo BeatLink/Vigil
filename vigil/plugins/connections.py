@@ -45,7 +45,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'total_card', 'established_card', 'listen_card', 'timewait_card'],
     ['total_chart'],
     ['established_chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -115,8 +115,8 @@ class ConnectionsPlugin(BasePlugin):
             history_chart('TOTAL CONNECTIONS', self.id, 'total')
         with layout.cell('established_chart'):
             history_chart('ESTABLISHED', self.id, 'established')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             total = self.latest_metric('total')

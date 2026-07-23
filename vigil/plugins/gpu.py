@@ -16,7 +16,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'util_card', 'mem_card', 'temp_card'],
     ['gpus'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -141,8 +141,8 @@ class GpuPlugin(BasePlugin):
             )
         with layout.cell('chart'):
             history_chart('GPU UTILIZATION (%)', self.id, 'gpu_util')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update():
             def _val(name):

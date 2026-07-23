@@ -41,7 +41,7 @@ _AZURE_CMD = (
 _DEFAULT_LAYOUT = [
     ['host_card', 'provider_card', 'type_card'],
     ['detail'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -130,8 +130,8 @@ class CloudPlugin(BasePlugin):
             detail_container = ui.element('div').style(
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update():
             raw = self.db.get_setting(f"cloud:{self.id}")

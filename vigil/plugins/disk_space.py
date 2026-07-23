@@ -11,7 +11,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'path_card', 'threshold_card'],
     ['usage_card', 'avail_card', 'total_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -90,8 +90,8 @@ class DiskSpacePlugin(BasePlugin):
             total_label = info_card('TOTAL SIZE', '--')
         with layout.cell('chart'):
             history_chart(f'USAGE HISTORY — {self.path} (%)', self.id, 'used_pct')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             pct   = self.latest_metric('used_pct')

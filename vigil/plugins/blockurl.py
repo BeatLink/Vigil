@@ -71,7 +71,7 @@ def _parse_response(stdout: str) -> list:
 _DEFAULT_LAYOUT = [
     ['host_card', 'domains_card', 'urls_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -141,8 +141,8 @@ class BlockurlPlugin(BasePlugin):
             urls_label = info_card('BLOCKED URLS', '--')
         with layout.cell('chart'):
             history_chart('BLOCKED URLS', self.id, 'urls_total')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             domains = self.latest_metric('domains_total')

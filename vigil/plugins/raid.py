@@ -14,7 +14,7 @@ _RECOVERY_RE = re.compile(r'(recovery|resync|reshape|check)\s*=\s*([\d.]+)%')
 _DEFAULT_LAYOUT = [
     ['host_card', 'total_card', 'ok_card', 'degraded_card'],
     ['arrays'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -113,8 +113,8 @@ class RaidPlugin(BasePlugin):
             degraded_label = info_card('DEGRADED', '--')
         with layout.cell('arrays'):
             ui.element('div')  # reserved for future per-array detail
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             def _ival(name):

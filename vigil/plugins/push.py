@@ -32,7 +32,7 @@ from vigil.core.ui.components import info_card, safe_timer
 
 _DEFAULT_LAYOUT = [
     ['status_card', 'lastbeat_card', 'maxage_card'],
-    ['logs'],
+    ['events'],
 ]
 
 _VALID_PUSH_STATUSES = {'up', 'down'}
@@ -136,8 +136,8 @@ class PushPlugin(BasePlugin):
             lastbeat_label = info_card('LAST HEARTBEAT', 'Never')
         with layout.cell('maxage_card'):
             info_card('MAX AGE', format_duration(self.max_age))
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update():
             last = self.latest_metric('last_push_epoch')

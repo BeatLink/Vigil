@@ -43,7 +43,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'iface_card', 'quality_card', 'signal_card'],
     ['quality_chart'],
     ['signal_chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -135,8 +135,8 @@ class WifiPlugin(BasePlugin):
             history_chart('LINK QUALITY', self.id, 'link_quality')
         with layout.cell('signal_chart'):
             history_chart('SIGNAL (dBm)', self.id, 'signal_dbm')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             if self._active_interface:

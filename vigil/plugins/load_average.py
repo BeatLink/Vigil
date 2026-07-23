@@ -13,7 +13,7 @@ from vigil.core.common.plugin_utils import level_for as _level_for
 _DEFAULT_LAYOUT = [
     ['host_card', 'load_1m_card', 'load_5m_card', 'load_15m_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -102,8 +102,8 @@ class LoadAveragePlugin(BasePlugin):
             load_15m_label = info_card('LOAD 15M', '-- %')
         with layout.cell('chart'):
             history_chart('LOAD AVERAGE (%)', self.id, 'load_pct_1m')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             load_1m  = self.latest_metric('load_pct_1m')

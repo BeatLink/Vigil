@@ -25,7 +25,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'max_card'],
     ['sensors'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -111,8 +111,8 @@ class TemperaturePlugin(BasePlugin):
             )
         with layout.cell('chart'):
             history_chart('TEMPERATURE (°C)', self.id, 'temp_c')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update():
             # Gather latest value per zone (one query, deduplicated in Python)

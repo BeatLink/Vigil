@@ -24,7 +24,7 @@ def _extract_counter(block: str, key: str) -> Optional[int]:
 _DEFAULT_LAYOUT = [
     ['host_card', 'total_card', 'recent_card'],
     ['oom_chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -142,8 +142,8 @@ class OomPlugin(BasePlugin):
             recent_label = info_card('SINCE LAST CHECK', '--')
         with layout.cell('oom_chart'):
             history_chart('OOM KILLS SINCE BOOT', self.id, 'oom_kills_total')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             total = self.latest_metric('oom_kills_total')

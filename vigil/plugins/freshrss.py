@@ -107,7 +107,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'refresh_card', 'feeds_card'],
     ['stale_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -228,8 +228,8 @@ class FreshrssPlugin(BasePlugin):
             stale_label = info_card('STALE FEEDS', '--')
         with layout.cell('chart'):
             history_chart('REFRESH AGE (HOURS)', self.id, 'refresh_age_hours')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             refresh_age = self.latest_metric('refresh_age_hours')

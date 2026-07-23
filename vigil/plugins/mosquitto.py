@@ -112,7 +112,7 @@ def _build_probe_script(host: str, port: int, topic: str, timeout: int,
 _DEFAULT_LAYOUT = [
     ['host_card', 'roundtrip_card', 'latency_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -181,8 +181,8 @@ class MosquittoPlugin(BasePlugin):
             latency_label = info_card('LATENCY', '--')
         with layout.cell('chart'):
             history_chart('ROUND TRIP LATENCY (ms)', self.id, 'roundtrip_ms')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             ok = self.latest_metric('roundtrip_ok')

@@ -19,7 +19,7 @@ def _shquote(s: str) -> str:
 _DEFAULT_LAYOUT = [
     ['host_card', 'count_card', 'worst_card'],
     ['folders'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -130,8 +130,8 @@ class FoldersPlugin(BasePlugin):
             folder_container = ui.element('div').style(
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update():
             folder_gb: Dict[str, float] = {}

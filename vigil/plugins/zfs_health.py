@@ -7,7 +7,7 @@ _UNHEALTHY = {'DEGRADED', 'FAULTED', 'OFFLINE', 'UNAVAIL', 'REMOVED'}
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'total_card', 'ok_card', 'degraded_card'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -74,8 +74,8 @@ class ZFSHealthPlugin(BasePlugin):
             ok_label = info_card('HEALTHY', '--')
         with layout.cell('degraded_card'):
             degraded_label = info_card('DEGRADED', '--')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             def _ival(name):

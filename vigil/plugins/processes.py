@@ -35,7 +35,7 @@ from vigil.core.common.plugin_utils import level_for as _level_for
 _DEFAULT_LAYOUT = [
     ['host_card', 'count_card', 'top_cpu_card'],
     ['table'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -171,8 +171,8 @@ class ProcessesPlugin(BasePlugin):
                 </q-td>
             ''')
 
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         async def _do_kill(e, signal):
             pid = (e.args or {}).get('pid')

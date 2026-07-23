@@ -38,7 +38,7 @@ from vigil.core.common.plugin_utils import level_for as _level_for
 _DEFAULT_LAYOUT = [
     ['host_card', 'cpu_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -107,8 +107,8 @@ class CpuUsagePlugin(BasePlugin):
             cpu_label = info_card('CPU', '-- %')
         with layout.cell('chart'):
             history_chart('CPU USAGE (%)', self.id, 'cpu_pct')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             cpu = self.latest_metric('cpu_pct')

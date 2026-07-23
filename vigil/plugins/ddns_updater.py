@@ -66,7 +66,7 @@ _IP_ECHO_SERVICES = (
 _DEFAULT_LAYOUT = [
     ['status_card', 'public_ip_card', 'dns_ip_card'],
     ['lastupdate_card'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -297,8 +297,8 @@ class DdnsUpdaterPlugin(BasePlugin):
             dns_ip_label = info_card('DNS RECORD', '--')
         with layout.cell('lastupdate_card'):
             lastupdate_label = info_card('LAST UPDATE PUSHED', 'Never')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update():
             public_ip = self.db.get_setting(f"ddns:{self.id}:public_ip")

@@ -23,7 +23,7 @@ _SMART_SCRIPT = (
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'total_card', 'ok_card', 'failed_card'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -87,8 +87,8 @@ class SmartDiskPlugin(BasePlugin):
             ok_label = info_card('HEALTHY', '--')
         with layout.cell('failed_card'):
             failed_label = info_card('FAILED', '--')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             def _ival(name):

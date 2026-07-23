@@ -96,7 +96,7 @@ def _format_age(hours: float) -> str:
 _DEFAULT_LAYOUT = [
     ['host_card', 'lastmod_card', 'notes_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -183,8 +183,8 @@ class TriliumPlugin(BasePlugin):
             notes_label = info_card('TOTAL NOTES', '--')
         with layout.cell('chart'):
             history_chart('HOURS SINCE LAST MODIFIED', self.id, 'last_modified_age_hours')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             age   = self.latest_metric('last_modified_age_hours')

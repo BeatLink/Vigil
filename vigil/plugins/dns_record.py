@@ -37,7 +37,7 @@ from vigil.core.ui.theme import STATUS_COLORS
 _DEFAULT_LAYOUT = [
     ['status_card', 'type_card', 'ttl_card'],
     ['answer'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -179,8 +179,8 @@ class DnsRecordPlugin(BasePlugin):
             answer_container = ui.element('div').style(
                 'display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%'
             )
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update():
             ttl = self.latest_metric('ttl')

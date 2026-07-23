@@ -69,7 +69,7 @@ def _try_float(value: str) -> Optional[float]:
 _DEFAULT_LAYOUT = [
     ['host_card', 'up_card', 'down_card'],
     ['charts'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -154,8 +154,8 @@ class PortsPlugin(BasePlugin):
         with layout.cell('charts'):
             for check in self.checks:
                 history_chart(f"{check['name']} LATENCY (ms)", self.id, f"{check['metric']}_latency_ms")
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             if not self._states:

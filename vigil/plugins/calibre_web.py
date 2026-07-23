@@ -81,7 +81,7 @@ def _looks_like_opds(body: str) -> bool:
 _DEFAULT_LAYOUT = [
     ['host_card', 'feed_card', 'latency_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -164,8 +164,8 @@ class CalibreWebPlugin(BasePlugin):
             latency_label = info_card('LATENCY', '--')
         with layout.cell('chart'):
             history_chart('OPDS LATENCY (ms)', self.id, 'feed_latency_ms')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             ok = self.latest_metric('feed_ok')

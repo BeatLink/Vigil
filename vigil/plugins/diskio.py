@@ -70,7 +70,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'device_card', 'read_card', 'write_card'],
     ['read_chart'],
     ['write_chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -154,8 +154,8 @@ class DiskIoPlugin(BasePlugin):
             history_chart('READ THROUGHPUT (KB/s)', self.id, 'read_kbps')
         with layout.cell('write_chart'):
             history_chart('WRITE THROUGHPUT (KB/s)', self.id, 'write_kbps')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             if self._active_device:

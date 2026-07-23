@@ -9,7 +9,7 @@ from vigil.core.ui.components import info_card, history_chart, safe_timer
 _DEFAULT_LAYOUT = [
     ['host_card', 'status_card', 'latency_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -86,8 +86,8 @@ class UptimePlugin(BasePlugin):
             latency_label = info_card('LAST LATENCY', '-- ms')
         with layout.cell('chart'):
             history_chart('RESPONSE TIME HISTORY (ms)', self.id, 'latency_ms')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_latency():
             last = Metric.select().where(

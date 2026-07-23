@@ -10,7 +10,7 @@ from vigil.core.ui.theme import STATUS_COLORS
 _DEFAULT_LAYOUT = [
     ['host_card', 'count_card', 'reload_card'],
     ['table'],
-    ['logs'],
+    ['events'],
 ]
 
 _DEFAULT_UNIT_FILE_WRITE_PATHS = (
@@ -308,8 +308,8 @@ class ServiceListPlugin(BasePlugin):
             search_in.on('update:modelValue', lambda e: update())
             safe_timer(5.0, update)
 
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table'](title='PLUGIN EVENTS')
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table'](title='PLUGIN EVENTS')
 
     async def _show_status(self, service_name: str):
         from nicegui import ui

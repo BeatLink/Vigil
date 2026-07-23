@@ -46,7 +46,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'iface_card', 'rx_card', 'tx_card'],
     ['rx_chart'],
     ['tx_chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -135,8 +135,8 @@ class NetworkUsagePlugin(BasePlugin):
             history_chart('DOWNLOAD HISTORY (KB/s)', self.id, 'rx_kbps')
         with layout.cell('tx_chart'):
             history_chart('UPLOAD HISTORY (KB/s)', self.id, 'tx_kbps')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             if self._active_interface:

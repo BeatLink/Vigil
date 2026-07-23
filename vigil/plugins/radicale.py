@@ -97,7 +97,7 @@ def _parse_response(stdout: str) -> tuple:
 _DEFAULT_LAYOUT = [
     ['host_card', 'propfind_card', 'latency_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -179,8 +179,8 @@ class RadicalePlugin(BasePlugin):
             latency_label = info_card('LATENCY', '--')
         with layout.cell('chart'):
             history_chart('PROPFIND LATENCY (ms)', self.id, 'propfind_latency_ms')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             ok = self.latest_metric('propfind_ok')

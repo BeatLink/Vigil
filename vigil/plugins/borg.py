@@ -16,7 +16,7 @@ _DEFAULT_LAYOUT = [
     ['size_card', 'dedup_card', 'count_card', 'age_card'],
     ['archives'],
     ['jobs'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -864,12 +864,12 @@ class BorgPlugin(BasePlugin):
             archives_table = self._render_archives_table()
         with layout.cell('jobs'):
             update_jobs = self._render_jobs_panel()
-        with layout.cell('logs'):
+        with layout.cell('events'):
             # events_table, not logs_table: this plugin writes its own messages
             # via db_logger.write (the Event table) rather than collecting log
             # lines off the target, so a LogLine-backed table would always be
             # empty here.
-            self.internal_modules['ui']['events_table'](title='LOGS', limit=100,
+            self.internal_modules['ui']['events_table'](title='EVENTS', limit=100,
                                                         full_height=True)
 
         def update():

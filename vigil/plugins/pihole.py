@@ -220,7 +220,7 @@ _DEFAULT_LAYOUT = [
     ['host_card', 'block_rate_card', 'queries_card'],
     ['gravity_card', 'clients_card', 'blocking_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -424,8 +424,8 @@ class PiholePlugin(BasePlugin):
             blocking_label = info_card('BLOCKING', '--')
         with layout.cell('chart'):
             history_chart('BLOCK RATE (%)', self.id, 'block_rate_pct')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_cards():
             block_rate = self.latest_metric('block_rate_pct')

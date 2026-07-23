@@ -43,7 +43,7 @@ _CLOCK_TICKS = os.sysconf('SC_CLK_TCK') if hasattr(os, 'sysconf') else 100
 _DEFAULT_LAYOUT = [
     ['uptime_card', 'memory_card', 'monitors_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -229,7 +229,7 @@ class VigilSelfPlugin(BasePlugin):
             monitors_label = info_card('MONITORS', '--')
         with layout.cell('chart'):
             history_chart('VIGIL MEMORY (MB)', self.id, 'memory_mb')
-        with layout.cell('logs'):
+        with layout.cell('events'):
             self.internal_modules['ui']['events_table']()
 
         def update_cards():

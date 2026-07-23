@@ -7,7 +7,7 @@ from vigil.core.ui.components import info_card, history_chart, safe_timer
 _DEFAULT_LAYOUT = [
     ['host_card', 'pool_card', 'usage_card', 'threshold_card'],
     ['chart'],
-    ['logs'],
+    ['events'],
 ]
 
 
@@ -68,8 +68,8 @@ class ZFSPoolPlugin(BasePlugin):
             info_card('THRESHOLD', f'{self.threshold}%')
         with layout.cell('chart'):
             history_chart(f'CAPACITY HISTORY — {self.pool} (%)', self.id, 'usage_pct')
-        with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table']()
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table']()
 
         def update_usage():
             last = Metric.select().where(
