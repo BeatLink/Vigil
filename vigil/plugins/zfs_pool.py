@@ -52,45 +52,45 @@ class ZFSPoolCollectorPlugin(CollectorPlugin):
 
 
 class ZFSPoolUIPlugin(UIPlugin):
-    """Dashboard rendering for the zfs_pool monitor."""
+    """Dashboard rendering for the zfs_pool monitor — declarative, see
+    UI_SPEC. usage_card's color rule is config-driven (threshold) and simple
+    binary (failed at/above threshold, online below — no separate warning
+    tier, unlike disk_space.py's threshold_color which has 3 tiers), so it
+    gets its own per-instance rule rather than reusing threshold_color.
+    pool_card/threshold_card are static config-derived cards (value_attr),
+    same pattern as disk_space.py's path_card/threshold_card.
+    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pool = self.config.get('pool')
         self.threshold = int(self.config.get('threshold', 90))
 
+        from vigil.web.ui.spec import register_color_rule
+        self._color_rule_name = f'zfs_pool_threshold_{self.id}'
+
+        @register_color_rule(self._color_rule_name)
+        def _usage_color(v, _threshold=self.threshold):
+            if v is None:
+                return None
+            return 'failed' if v >= _threshold else 'online'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'pool_card': {'title': 'POOL', 'value_attr': 'pool'},
+                'threshold_card': {'title': 'THRESHOLD', 'value_attr': 'threshold', 'value_format': '{}%'},
+                'usage_card': {
+                    'metric': 'usage_pct', 'title': 'USAGE',
+                    'format': 'percent1', 'color': self._color_rule_name,
+                },
+            },
+            'chart': {'metric': 'usage_pct', 'title': f'CAPACITY HISTORY — {self.pool} (%)'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.web.ui.theme import STATUS_COLORS
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['usage_pct'])
-
-        def _pct_or_dash(v):
-            return '-- %' if v is None else f'{v:.1f}%'
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('pool_card'):
-            info_card('POOL', self.pool)
-        with layout.cell('usage_card'):
-            usage_label = info_card('USAGE', '-- %').bind_text_from(
-                page.model, ('metrics', 'usage_pct'), backward=_pct_or_dash)
-        with layout.cell('threshold_card'):
-            info_card('THRESHOLD', f'{self.threshold}%')
-        with layout.cell('chart'):
-            history_chart(page, f'CAPACITY HISTORY — {self.pool} (%)', self.id, 'usage_pct')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
-
-        def update_usage_color():
-            pct = page.model.metrics.get('usage_pct')
-            if pct is not None:
-                color = STATUS_COLORS['failed'] if pct >= self.threshold else STATUS_COLORS['online']
-                usage_label.style(f'color: {color}')
-
-        page.on_refresh(update_usage_color)
-
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

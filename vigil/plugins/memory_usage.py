@@ -77,29 +77,41 @@ class MemoryUsageCollectorPlugin(CollectorPlugin):
 
 
 class MemoryUsageUIPlugin(UIPlugin):
-    """Dashboard rendering for the memory_usage monitor."""
+    """
+    Dashboard rendering for the memory_usage monitor — mixed: mem_pct_card is
+    UI_SPEC-driven (single metric, config-dependent threshold color), but
+    mem_used_card combines memory_used_gb AND memory_total_gb into one
+    "X / Y" string, which doesn't fit UI_SPEC's single-metric card model, so
+    it stays a manual bind alongside generic_render()'s output.
+    """
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.memory_warning   = int(config.get('memory_warning',   75))
+        self.memory_threshold = int(config.get('memory_threshold', 90))
+
+        from vigil.web.ui.spec import register_color_rule, threshold_color
+        self._color_rule_name = f'memory_usage_threshold_{self.id}'
+        register_color_rule(self._color_rule_name)(
+            threshold_color(warning=self.memory_warning, threshold=self.memory_threshold))
 
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
+        from vigil.web.ui.spec import FORMATTERS, COLOR_RULES
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
         page = self.page(metric_names=['memory_pct', 'memory_used_gb', 'memory_total_gb'])
 
-        memory_warning   = int(self.config.get('memory_warning',   75))
-        memory_threshold = int(self.config.get('memory_threshold', 90))
-
-        def _pct_or_dash(v):
-            return '--' if v is None else f'{v:.1f}%'
+        pct_formatter = FORMATTERS['percent1_plain_dash']
+        color_rule = COLOR_RULES[self._color_rule_name]
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('mem_pct_card'):
-            mem_pct_label = info_card('MEMORY', '-- %').bind_text_from(
-                page.model, ('metrics', 'memory_pct'), backward=_pct_or_dash)
+            mem_pct_label = info_card('MEMORY', pct_formatter(None)).bind_text_from(
+                page.model, ('metrics', 'memory_pct'), backward=pct_formatter)
         with layout.cell('mem_used_card'):
             mem_used_label = info_card('MEM USED', '--')
         with layout.cell('chart'):
@@ -107,18 +119,17 @@ class MemoryUsageUIPlugin(UIPlugin):
         with layout.cell('events'):
             self.internal_modules['ui']['events_table'](page)
 
-        def update_mem_pct_color():
+        def update():
             value = page.model.metrics.get('memory_pct')
             if value is not None:
-                mem_pct_label.style(f'color: {STATUS_COLORS[_level_for(value, memory_warning, memory_threshold)]}')
+                state = color_rule(value)
+                if state is not None:
+                    mem_pct_label.style(f'color: {STATUS_COLORS[state]}')
 
-        def update_mem_used():
             mem_used  = page.model.metrics.get('memory_used_gb')
             mem_total = page.model.metrics.get('memory_total_gb')
             if mem_used is not None and mem_total is not None:
                 mem_used_label.text = f'{_fmt_gb(mem_used)} / {_fmt_gb(mem_total)}'
 
-        page.on_refresh(update_mem_pct_color)
-        page.on_refresh(update_mem_used)
-
+        page.on_refresh(update)
         page.start()

@@ -126,8 +126,14 @@ class GpuUIPlugin(UIPlugin):
         from vigil.core.data.database import Metric
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
+        from vigil.web.ui.spec import FORMATTERS
         from vigil.web.ui.theme import STATUS_COLORS
 
+        # The 'gpus' cell holds a dynamically-sized per-GPU container (one
+        # card per GPU discovered at collection time), which doesn't fit
+        # UI_SPEC's fixed card model, so this stays a manual layout+page
+        # build — reusing the shared 'percent0'/'temp_c0' formatters for the
+        # three summary cards rather than redefining them.
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
@@ -141,11 +147,8 @@ class GpuUIPlugin(UIPlugin):
         temp_warning   = int(self.config.get('temp_warning',   80))
         temp_threshold = int(self.config.get('temp_threshold', 90))
 
-        def _pct_or_dash(v):
-            return '-- %' if v is None else f'{v:.0f}%'
-
-        def _temp_or_dash(v):
-            return '--' if v is None else f'{v:.0f}°C'
+        _pct_or_dash = FORMATTERS['percent0']
+        _temp_or_dash = FORMATTERS['temp_c0']
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()

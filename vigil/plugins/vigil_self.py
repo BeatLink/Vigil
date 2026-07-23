@@ -221,6 +221,10 @@ class VigilSelfUIPlugin(UIPlugin):
         from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
+        # monitors_card combines monitors_total/monitors_late/
+        # monitors_stalled into one summary string, which doesn't fit
+        # UI_SPEC's single-metric card model, so this whole page stays a
+        # manual layout+page build.
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),

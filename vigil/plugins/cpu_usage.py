@@ -94,38 +94,38 @@ class CpuUsageCollectorPlugin(CollectorPlugin):
 
 
 class CpuUsageUIPlugin(UIPlugin):
-    """Dashboard rendering for the cpu_usage monitor."""
+    """Dashboard rendering for the cpu_usage monitor — declarative, see UI_SPEC.
+
+    cpu_card's color is config-driven (cpu_warning/cpu_threshold), so the
+    threshold rule is registered per-instance in __init__ (same pattern as
+    disk_space.py) and UI_SPEC is a property so it can reference the
+    instance-specific rule name.
+    """
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.cpu_warning   = int(config.get('cpu_warning',   70))
+        self.cpu_threshold = int(config.get('cpu_threshold', 85))
+
+        from vigil.web.ui.spec import register_color_rule, threshold_color
+        self._color_rule_name = f'cpu_usage_threshold_{self.id}'
+        register_color_rule(self._color_rule_name)(
+            threshold_color(warning=self.cpu_warning, threshold=self.cpu_threshold))
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'cpu_card': {
+                    'metric': 'cpu_pct', 'title': 'CPU',
+                    'format': 'percent1', 'color': self._color_rule_name,
+                },
+            },
+            'chart': {'metric': 'cpu_pct', 'title': 'CPU USAGE (%)'},
+            'events': True,
+        }
 
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        cpu_warning   = int(self.config.get('cpu_warning',   70))
-        cpu_threshold = int(self.config.get('cpu_threshold', 85))
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['cpu_pct'])
-
-        def _pct_or_dash(v):
-            return '-- %' if v is None else f'{v:.1f}%'
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('cpu_card'):
-            cpu_label = info_card('CPU', '-- %').bind_text_from(
-                page.model, ('metrics', 'cpu_pct'), backward=_pct_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'CPU USAGE (%)', self.id, 'cpu_pct')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
-
-        def update_color():
-            cpu = page.model.metrics.get('cpu_pct')
-            if cpu is not None:
-                cpu_label.style(f'color: {STATUS_COLORS[_level_for(cpu, cpu_warning, cpu_threshold)]}')
-
-        page.on_refresh(update_color)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

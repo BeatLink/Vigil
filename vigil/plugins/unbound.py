@@ -233,83 +233,76 @@ class UnboundCollectorPlugin(CollectorPlugin):
 
 
 class UnboundUIPlugin(UIPlugin):
-    """Dashboard rendering for the unbound monitor."""
+    """Dashboard rendering for the unbound monitor — declarative, see
+    UI_SPEC. servfail_card's color is config-driven (servfail_warning/
+    servfail_threshold, standard 3-tier), so it uses the shared
+    threshold_color factory registered per-instance (like disk_space.py).
+    resolution_card and uptime_card need locally registered
+    formatters/color-rule not covered by FORMATTERS (a custom 'd h' uptime
+    format, and OK/FAILED text distinct from the other *_ok_text variants
+    only in label semantics — kept separate per plugin as instructed).
+    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.servfail_warning = float(self.config.get('servfail_warning', 5))
         self.servfail_threshold = float(self.config.get('servfail_threshold', 20))
 
+        from vigil.web.ui.spec import register_color_rule, threshold_color
+        self._color_rule_name = f'unbound_servfail_{self.id}'
+        register_color_rule(self._color_rule_name)(
+            threshold_color(warning=self.servfail_warning, threshold=self.servfail_threshold))
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'resolution_card': {
+                    'metric': 'resolved_ok', 'title': 'RESOLUTION',
+                    'format': 'unbound_resolution_text', 'color': 'unbound_resolution_color',
+                },
+                'servfail_card': {
+                    'metric': 'servfail_rate_pct', 'title': 'SERVFAIL RATE',
+                    'format': 'percent1_plain_dash', 'color': self._color_rule_name,
+                },
+                'queries_card': {'metric': 'queries_total', 'title': 'QUERIES', 'format': 'count_comma'},
+                'cache_card': {
+                    'metric': 'cache_hit_rate_pct', 'title': 'CACHE HIT RATE',
+                    'format': 'percent1_plain_dash',
+                },
+                'uptime_card': {'metric': 'uptime_seconds', 'title': 'UPTIME', 'format': 'unbound_uptime'},
+            },
+            'chart': {'metric': 'servfail_rate_pct', 'title': 'SERVFAIL RATE (%)'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-        page = self.page(metric_names=[
-            'resolved_ok', 'servfail_rate_pct', 'queries_total',
-            'cache_hit_rate_pct', 'uptime_seconds',
-        ])
 
-        def _resolution_text(v):
-            if v is None:
-                return '--'
-            return 'OK' if v >= 1.0 else 'FAILED'
+from vigil.web.ui.spec import register_formatter, register_color_rule
 
-        def _pct_or_dash(v):
-            return '--' if v is None else f'{v:.1f}%'
 
-        def _count_or_dash(v):
-            return '--' if v is None else f'{int(v):,}'
+@register_formatter('unbound_resolution_text')
+def _resolution_text(v):
+    if v is None:
+        return '--'
+    return 'OK' if v >= 1.0 else 'FAILED'
 
-        def _uptime_or_dash(v):
-            if v is None:
-                return '--'
-            days = int(v // 86400)
-            hours = int((v % 86400) // 3600)
-            return f'{days}d {hours}h' if days else f'{hours}h'
 
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('resolution_card'):
-            resolution_label = info_card('RESOLUTION', '--').bind_text_from(
-                page.model, ('metrics', 'resolved_ok'), backward=_resolution_text)
-        with layout.cell('servfail_card'):
-            servfail_label = info_card('SERVFAIL RATE', '--').bind_text_from(
-                page.model, ('metrics', 'servfail_rate_pct'), backward=_pct_or_dash)
-        with layout.cell('queries_card'):
-            info_card('QUERIES', '--').bind_text_from(
-                page.model, ('metrics', 'queries_total'), backward=_count_or_dash)
-        with layout.cell('cache_card'):
-            info_card('CACHE HIT RATE', '--').bind_text_from(
-                page.model, ('metrics', 'cache_hit_rate_pct'), backward=_pct_or_dash)
-        with layout.cell('uptime_card'):
-            info_card('UPTIME', '--').bind_text_from(
-                page.model, ('metrics', 'uptime_seconds'), backward=_uptime_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'SERVFAIL RATE (%)', self.id, 'servfail_rate_pct')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+@register_color_rule('unbound_resolution_color')
+def _resolution_color(v):
+    if v is None:
+        return None
+    return 'online' if v >= 1.0 else 'failed'
 
-        def update_colors():
-            resolved = page.model.metrics.get('resolved_ok')
-            if resolved is not None:
-                ok = resolved >= 1.0
-                resolution_label.style(f'color: {STATUS_COLORS["online" if ok else "failed"]}')
 
-            servfail = page.model.metrics.get('servfail_rate_pct')
-            if servfail is not None:
-                if servfail >= self.servfail_threshold:
-                    colour = STATUS_COLORS['failed']
-                elif servfail >= self.servfail_warning:
-                    colour = STATUS_COLORS['warning']
-                else:
-                    colour = STATUS_COLORS['online']
-                servfail_label.style(f'color: {colour}')
-
-        page.on_refresh(update_colors)
-
-        page.start()
+@register_formatter('unbound_uptime')
+def _uptime_text(v):
+    if v is None:
+        return '--'
+    days = int(v // 86400)
+    hours = int((v % 86400) // 3600)
+    return f'{days}d {hours}h' if days else f'{hours}h'

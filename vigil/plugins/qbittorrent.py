@@ -491,8 +491,15 @@ class QbittorrentUIPlugin(UIPlugin):
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
+        from vigil.web.ui.spec import FORMATTERS
         from vigil.web.ui.theme import STATUS_COLORS
 
+        # speed_card combines dl_speed_bytes+up_speed_bytes and torrents_card
+        # combines torrents_total+torrents_downloading into single strings,
+        # neither of which fits UI_SPEC's single-metric card model, so this
+        # whole page stays a manual layout+page build — reusing the shared
+        # 'int' formatter for stalled_card/errored_card rather than
+        # redefining it.
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
@@ -511,8 +518,7 @@ class QbittorrentUIPlugin(UIPlugin):
                 return '--'
             return 'CONNECTED' if v >= 1.0 else 'DISCONNECTED'
 
-        def _int_or_dash(v):
-            return '--' if v is None else str(int(v))
+        _int_or_dash = FORMATTERS['int']
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()

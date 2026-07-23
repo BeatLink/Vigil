@@ -143,46 +143,42 @@ class ContainersCollectorPlugin(CollectorPlugin):
 
 
 class ContainersUIPlugin(UIPlugin):
-    """Dashboard rendering for the containers monitor. get_actions()/on_action()
-    are inherited from UIPlugin, which proxies to the collector's live instance."""
+    """Dashboard rendering for the containers monitor — declarative, see
+    UI_SPEC. get_actions()/on_action() are inherited from UIPlugin, which
+    proxies to the collector's live instance. running_card keeps its fixed
+    'online' color (unconditional) via a local rule; stopped_card colors
+    'warning' (not 'failed') once nonzero — this is exactly the shared
+    'nonzero_warning' rule's semantics, verified against the original
+    (STATUS_COLORS['warning'] if stopped else STATUS_COLORS['online']).
+    """
+
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'total_card': {'metric': 'containers_total', 'title': 'CONTAINERS', 'format': 'int'},
+            'running_card': {
+                'metric': 'containers_running', 'title': 'RUNNING', 'format': 'int',
+                'color': 'containers_always_online',
+            },
+            'stopped_card': {
+                'metric': 'containers_stopped', 'title': 'STOPPED', 'format': 'int',
+                'color': 'nonzero_warning',
+            },
+        },
+        'events': True,
+    }
 
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
-        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['containers_total', 'containers_running', 'containers_stopped'])
 
-        def _int_or_dash(v):
-            return '--' if v is None else str(int(v))
+from vigil.web.ui.spec import register_color_rule
 
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('total_card'):
-            info_card('CONTAINERS', '--').bind_text_from(
-                page.model, ('metrics', 'containers_total'), backward=_int_or_dash)
-        with layout.cell('running_card'):
-            info_card('RUNNING', '--').bind_text_from(
-                page.model, ('metrics', 'containers_running'), backward=_int_or_dash
-            ).style(f"color: {STATUS_COLORS['online']}")
-        with layout.cell('stopped_card'):
-            stopped_label = info_card('STOPPED', '--').bind_text_from(
-                page.model, ('metrics', 'containers_stopped'), backward=_int_or_dash)
-        with layout.cell('containers'):
-            ui.element('div')  # reserved for future per-container detail
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
 
-        def update_color():
-            stopped = page.model.metrics.get('containers_stopped')
-            if stopped is not None:
-                color = STATUS_COLORS['warning'] if stopped else STATUS_COLORS['online']
-                stopped_label.style(f"color: {color}")
-
-        page.on_refresh(update_color)
-        page.start()
+@register_color_rule('containers_always_online')
+def _running_color(v):
+    return None if v is None else 'online'
 
 
 def _shquote(s: str) -> str:

@@ -94,30 +94,44 @@ class InterruptsCollectorPlugin(CollectorPlugin):
 
 
 class InterruptsUIPlugin(UIPlugin):
-    """Dashboard rendering for the interrupts monitor."""
+    """
+    Dashboard rendering for the interrupts monitor — mixed: irq_card fits
+    UI_SPEC (single metric, config-dependent threshold color) but the page
+    has TWO charts (irq_chart/ctxt_chart), which UI_SPEC's single 'chart' key
+    doesn't support, so this stays a manual layout+page build reusing the
+    shared 'count_comma_rounded' formatter and a per-instance threshold rule.
+    """
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.irq_warning   = int(config.get('irq_warning',   20000))
+        self.irq_threshold = int(config.get('irq_threshold', 50000))
+
+        from vigil.web.ui.spec import register_color_rule, threshold_color
+        self._color_rule_name = f'interrupts_threshold_{self.id}'
+        register_color_rule(self._color_rule_name)(
+            threshold_color(warning=self.irq_warning, threshold=self.irq_threshold))
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
+        from vigil.web.ui.spec import FORMATTERS, COLOR_RULES
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
         page = self.page(metric_names=['irq_per_sec', 'ctxt_per_sec'])
 
-        irq_warning   = int(self.config.get('irq_warning',   20000))
-        irq_threshold = int(self.config.get('irq_threshold', 50000))
-
-        def _rate_or_dash(v):
-            return '--' if v is None else f'{v:,.0f}'
+        rate_formatter = FORMATTERS['count_comma_rounded']
+        color_rule = COLOR_RULES[self._color_rule_name]
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('irq_card'):
-            irq_label = info_card('INTERRUPTS/S', '--').bind_text_from(
-                page.model, ('metrics', 'irq_per_sec'), backward=_rate_or_dash)
+            irq_label = info_card('INTERRUPTS/S', rate_formatter(None)).bind_text_from(
+                page.model, ('metrics', 'irq_per_sec'), backward=rate_formatter)
         with layout.cell('ctxt_card'):
-            info_card('CTX SWITCH/S', '--').bind_text_from(
-                page.model, ('metrics', 'ctxt_per_sec'), backward=_rate_or_dash)
+            info_card('CTX SWITCH/S', rate_formatter(None)).bind_text_from(
+                page.model, ('metrics', 'ctxt_per_sec'), backward=rate_formatter)
         with layout.cell('irq_chart'):
             history_chart(page, 'INTERRUPTS / SEC', self.id, 'irq_per_sec')
         with layout.cell('ctxt_chart'):
@@ -128,7 +142,9 @@ class InterruptsUIPlugin(UIPlugin):
         def update_color():
             irq = page.model.metrics.get('irq_per_sec')
             if irq is not None:
-                irq_label.style(f'color: {STATUS_COLORS[_level_for(irq, irq_warning, irq_threshold)]}')
+                state = color_rule(irq)
+                if state is not None:
+                    irq_label.style(f'color: {STATUS_COLORS[state]}')
 
         page.on_refresh(update_color)
         page.start()

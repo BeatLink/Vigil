@@ -212,41 +212,37 @@ class TraccarCollectorPlugin(CollectorPlugin):
 
 
 class TraccarUIPlugin(UIPlugin):
-    """Dashboard rendering for the traccar monitor."""
+    """Dashboard rendering for the traccar monitor — declarative, see UI_SPEC.
+
+    Note: the chart tracks 'oldest_update_hours', a metric this page never
+    otherwise binds a card to — UI_SPEC's chart entry adds it to the tracked
+    metric_names automatically (see generic_render), matching the original's
+    behavior of history_chart() implicitly pulling that metric's history.
+    """
+
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'stale_card': {
+                'metric': 'devices_stale', 'title': 'STALE DEVICES',
+                'format': 'int', 'color': 'traccar_nonzero_failed',
+            },
+            'devices_card': {'metric': 'devices_total', 'title': 'DEVICES', 'format': 'int'},
+        },
+        'chart': {'metric': 'oldest_update_hours', 'title': 'OLDEST UPDATE (HOURS)'},
+        'events': True,
+    }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-        page = self.page(metric_names=['devices_stale', 'devices_total'])
 
-        def _int_or_dash(v):
-            return '--' if v is None else str(int(v))
+from vigil.web.ui.spec import register_color_rule
 
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('stale_card'):
-            stale_label = info_card('STALE DEVICES', '--').bind_text_from(
-                page.model, ('metrics', 'devices_stale'), backward=_int_or_dash)
-        with layout.cell('devices_card'):
-            info_card('DEVICES', '--').bind_text_from(
-                page.model, ('metrics', 'devices_total'), backward=_int_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'OLDEST UPDATE (HOURS)', self.id, 'oldest_update_hours')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
 
-        def update_stale_color():
-            stale = page.model.metrics.get('devices_stale')
-            if stale is not None:
-                stale_label.style(
-                    f'color: {STATUS_COLORS["failed" if stale else "online"]}')
-
-        page.on_refresh(update_stale_color)
-
-        page.start()
+@register_color_rule('traccar_nonzero_failed')
+def _stale_color(v):
+    if v is None:
+        return None
+    return 'failed' if v else 'online'

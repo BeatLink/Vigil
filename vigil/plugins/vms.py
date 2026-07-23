@@ -159,38 +159,41 @@ class VmsCollectorPlugin(CollectorPlugin):
 
 
 class VmsUIPlugin(UIPlugin):
-    """Dashboard rendering for the vms monitor. See VmsCollectorPlugin for
-    collection/action logic — get_actions()/on_action() are inherited from
-    UIPlugin, which proxies to the collector's live instance, so this class
-    needs no knowledge of expect_running itself."""
+    """Dashboard rendering for the vms monitor — declarative, see UI_SPEC. See
+    VmsCollectorPlugin for collection/action logic — get_actions()/on_action()
+    are inherited from UIPlugin, which proxies to the collector's live
+    instance, so this class needs no knowledge of expect_running itself.
+
+    running_card keeps its fixed 'online' color from the pre-UI_SPEC version
+    (not a threshold — it was unconditionally green whenever a value was
+    present) via a trivial local color rule, since "stopped" vs "running"
+    reads more clearly at a glance with that distinction than without.
+    """
+
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'total_card': {'metric': 'vms_total', 'title': 'VMS', 'format': 'int'},
+            'running_card': {
+                'metric': 'vms_running', 'title': 'RUNNING', 'format': 'int',
+                'color': 'vms_always_online',
+            },
+            'stopped_card': {'metric': 'vms_stopped', 'title': 'STOPPED', 'format': 'int'},
+        },
+        'events': True,
+    }
 
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
-        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['vms_total', 'vms_running', 'vms_stopped'])
 
-        def _int_or_dash(v):
-            return '--' if v is None else str(int(v))
+from vigil.web.ui.spec import register_color_rule
 
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('total_card'):
-            info_card('VMS', '--').bind_text_from(
-                page.model, ('metrics', 'vms_total'), backward=_int_or_dash)
-        with layout.cell('running_card'):
-            info_card('RUNNING', '--').bind_text_from(
-                page.model, ('metrics', 'vms_running'), backward=_int_or_dash
-            ).style(f"color: {STATUS_COLORS['online']}")
-        with layout.cell('stopped_card'):
-            info_card('STOPPED', '--').bind_text_from(
-                page.model, ('metrics', 'vms_stopped'), backward=_int_or_dash)
-        with layout.cell('vms'):
-            ui.element('div')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
 
-        page.start()
+@register_color_rule('vms_always_online')
+def _vms_running_color(v):
+    """Always the 'online' color once a value is present — running_card was
+    unconditionally green pre-UI_SPEC (no separate threshold on this page for
+    "how many should be running"), just dash-colored while unknown."""
+    return None if v is None else 'online'

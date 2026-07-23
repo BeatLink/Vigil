@@ -268,8 +268,14 @@ class SyncthingUIPlugin(UIPlugin):
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
+        from vigil.web.ui.spec import FORMATTERS
         from vigil.web.ui.theme import STATUS_COLORS
 
+        # devices_card's text combines devices_expected AND
+        # devices_disconnected into one "connected/expected" string, which
+        # doesn't fit UI_SPEC's single-metric card model, so this whole page
+        # stays a manual layout+page build — reusing the shared 'int'
+        # formatter for the other cards rather than redefining it.
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
@@ -279,8 +285,7 @@ class SyncthingUIPlugin(UIPlugin):
             'need_bytes', 'devices_expected', 'devices_disconnected',
         ])
 
-        def _int_or_dash(v):
-            return '--' if v is None else str(int(v))
+        _int_or_dash = FORMATTERS['int']
 
         def _need_text(v):
             if v is None:

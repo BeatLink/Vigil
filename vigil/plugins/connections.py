@@ -102,16 +102,20 @@ class ConnectionsUIPlugin(UIPlugin):
 
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
+        from vigil.web.ui.spec import FORMATTERS
         from vigil.web.ui.theme import STATUS_COLORS
 
+        # Two charts (total_chart/established_chart) don't fit UI_SPEC's
+        # single 'chart' key, so this stays a manual layout+page build,
+        # reusing the shared 'int_rounded' formatter and plugin_utils'
+        # level_for directly rather than redefining a threshold rule.
         total_warning   = int(self.config.get('total_warning',   500))
         total_threshold = int(self.config.get('total_threshold', 1000))
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
         page = self.page(metric_names=['total', 'established', 'listen', 'time_wait'])
 
-        def _int_or_dash(v):
-            return '--' if v is None else f'{v:.0f}'
+        _int_or_dash = FORMATTERS['int_rounded']
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()

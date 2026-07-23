@@ -403,32 +403,56 @@ class PiholeCollectorPlugin(CollectorPlugin):
 
 
 class PiholeUIPlugin(UIPlugin):
-    """Dashboard rendering for the pihole monitor."""
+    """
+    Dashboard rendering for the pihole monitor — mixed: block_rate_card,
+    queries_card, clients_card, and blocking_card fit UI_SPEC's single-metric
+    card model (block_rate_card's color is config-driven, inverted-direction
+    3-tier threshold — LOW rate is bad, so plugin_utils.level_for's normal
+    "higher is worse" direction doesn't apply; that inversion is expressed as
+    a local per-instance rule). gravity_card combines gravity_domains AND
+    gravity_age_seconds into one "N domains (age old)" string with its own
+    threshold, which doesn't fit the single-metric card model, so it stays a
+    manual bind alongside generic_render()'s output for the rest of the page.
+    """
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.block_rate_warning = float(config.get('block_rate_warning', 5))
+        self.block_rate_threshold = float(config.get('block_rate_threshold', 1))
+        self.gravity_max_age = parse_duration(config.get('gravity_max_age', '8d'))
+
+        from vigil.web.ui.spec import register_color_rule
+        self._block_rate_rule_name = f'pihole_block_rate_{self.id}'
+
+        @register_color_rule(self._block_rate_rule_name)
+        def _block_rate_color(v, _warning=self.block_rate_warning, _threshold=self.block_rate_threshold):
+            if v is None:
+                return None
+            if v < _threshold:
+                return 'failed'
+            if v < _warning:
+                return 'warning'
+            return 'online'
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
+        from vigil.web.ui.spec import FORMATTERS, COLOR_RULES
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
-
-        block_rate_warning = float(self.config.get('block_rate_warning', 5))
-        block_rate_threshold = float(self.config.get('block_rate_threshold', 1))
-        gravity_max_age = parse_duration(self.config.get('gravity_max_age', '8d'))
-
         page = self.page(metric_names=[
             'block_rate_pct', 'queries_total', 'gravity_domains',
             'gravity_age_seconds', 'clients_active', 'blocking_enabled',
         ])
 
-        def _pct_or_dash(v):
-            return '-- %' if v is None else f'{v:.1f}%'
-
-        def _int_or_dash(v):
-            return '--' if v is None else f'{int(v):,}'
+        pct_formatter = FORMATTERS['percent1']
+        count_formatter = FORMATTERS['count_comma']
+        int_formatter = FORMATTERS['int']
+        block_rate_rule = COLOR_RULES[self._block_rate_rule_name]
 
         def _enabled_text(v):
             if v is None:
@@ -438,17 +462,16 @@ class PiholeUIPlugin(UIPlugin):
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('block_rate_card'):
-            block_rate_label = info_card('BLOCK RATE', '-- %').bind_text_from(
-                page.model, ('metrics', 'block_rate_pct'), backward=_pct_or_dash)
+            block_rate_label = info_card('BLOCK RATE', pct_formatter(None)).bind_text_from(
+                page.model, ('metrics', 'block_rate_pct'), backward=pct_formatter)
         with layout.cell('queries_card'):
-            info_card('QUERIES', '--').bind_text_from(
-                page.model, ('metrics', 'queries_total'), backward=_int_or_dash)
+            info_card('QUERIES', count_formatter(None)).bind_text_from(
+                page.model, ('metrics', 'queries_total'), backward=count_formatter)
         with layout.cell('gravity_card'):
             gravity_label = info_card('BLOCKLIST', '--')
         with layout.cell('clients_card'):
-            info_card('ACTIVE CLIENTS', '--').bind_text_from(
-                page.model, ('metrics', 'clients_active'),
-                backward=lambda v: '--' if v is None else str(int(v)))
+            info_card('ACTIVE CLIENTS', int_formatter(None)).bind_text_from(
+                page.model, ('metrics', 'clients_active'), backward=int_formatter)
         with layout.cell('blocking_card'):
             blocking_label = info_card('BLOCKING', '--').bind_text_from(
                 page.model, ('metrics', 'blocking_enabled'), backward=_enabled_text)
@@ -460,13 +483,9 @@ class PiholeUIPlugin(UIPlugin):
         def update_colors():
             block_rate = page.model.metrics.get('block_rate_pct')
             if block_rate is not None:
-                if block_rate < block_rate_threshold:
-                    colour = STATUS_COLORS['failed']
-                elif block_rate < block_rate_warning:
-                    colour = STATUS_COLORS['warning']
-                else:
-                    colour = STATUS_COLORS['online']
-                block_rate_label.style(f'color: {colour}')
+                state = block_rate_rule(block_rate)
+                if state is not None:
+                    block_rate_label.style(f'color: {STATUS_COLORS[state]}')
 
             domains = page.model.metrics.get('gravity_domains')
             age = page.model.metrics.get('gravity_age_seconds')
@@ -475,7 +494,7 @@ class PiholeUIPlugin(UIPlugin):
                 if age is not None:
                     text += f' ({_format_age(age)} old)'
                     gravity_label.style(
-                        f'color: {STATUS_COLORS["warning" if age > gravity_max_age else "online"]}'
+                        f'color: {STATUS_COLORS["warning" if age > self.gravity_max_age else "online"]}'
                     )
                 gravity_label.text = text
 

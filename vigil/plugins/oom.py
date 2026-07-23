@@ -130,39 +130,46 @@ class OomCollectorPlugin(CollectorPlugin):
 
 
 class OomUIPlugin(UIPlugin):
-    """Dashboard rendering for the oom monitor."""
+    """Dashboard rendering for the oom monitor — declarative, see UI_SPEC.
+
+    recent_card's color is config-dependent (is_warning selects 'warning' vs
+    'failed' for a nonzero count, not a plain threshold), so it's a
+    per-instance color rule registered in __init__ rather than the shared
+    'nonzero_warning' rule (which always maps nonzero -> warning regardless
+    of is_warning).
+    """
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.is_warning = bool(config.get('is_warning', False))
+
+        from vigil.web.ui.spec import register_color_rule
+        self._color_rule_name = f'oom_recent_{self.id}'
+
+        @register_color_rule(self._color_rule_name)
+        def _recent_color(v, _is_warning=self.is_warning):
+            if v is None:
+                return None
+            return 'online' if v == 0 else ('warning' if _is_warning else 'failed')
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'total_card': {
+                    'metric': 'oom_kills_total', 'title': 'OOM KILLS (BOOT)',
+                    'format': 'count_comma_rounded',
+                },
+                'recent_card': {
+                    'metric': 'oom_kills_new', 'title': 'SINCE LAST CHECK',
+                    'format': 'count_comma_rounded', 'color': self._color_rule_name,
+                },
+            },
+            'chart': {'metric': 'oom_kills_total', 'title': 'OOM KILLS SINCE BOOT'},
+            'events': True,
+        }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['oom_kills_total', 'oom_kills_new'])
-
-        def _count_or_dash(v):
-            return '--' if v is None else f'{v:,.0f}'
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('total_card'):
-            info_card('OOM KILLS (BOOT)', '--').bind_text_from(
-                page.model, ('metrics', 'oom_kills_total'), backward=_count_or_dash)
-        with layout.cell('recent_card'):
-            recent_label = info_card('SINCE LAST CHECK', '--').bind_text_from(
-                page.model, ('metrics', 'oom_kills_new'), backward=_count_or_dash)
-        with layout.cell('oom_chart'):
-            history_chart(page, 'OOM KILLS SINCE BOOT', self.id, 'oom_kills_total')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
-
-        def update_recent_color():
-            recent = page.model.metrics.get('oom_kills_new')
-            if recent is not None:
-                level = 'online' if recent == 0 else (
-                    'warning' if self.config.get('is_warning', False) else 'failed')
-                recent_label.style(f'color: {STATUS_COLORS[level]}')
-
-        page.on_refresh(update_recent_color)
-
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

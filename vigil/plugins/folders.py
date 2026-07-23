@@ -131,16 +131,21 @@ class FoldersUIPlugin(UIPlugin):
         from vigil.core.data.database import Metric
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card
+        from vigil.web.ui.spec import FORMATTERS
         from vigil.web.ui.theme import STATUS_COLORS
 
+        # The 'folders' cell holds a dynamically-sized per-folder container
+        # (one card per configured folder, queried live from Metric), which
+        # doesn't fit UI_SPEC's fixed card model, so this stays a manual
+        # layout+page build — reusing the shared 'bytes_gb' formatter rather
+        # than redefining it.
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
         page = self.page(metric_names=['worst_folder_gb'])
 
         # Map sanitized metric suffix -> folder config for threshold coloring.
         by_key = {_sanitize(f.get('path', '')): f for f in self.folders if f.get('path')}
 
-        def _gb_or_dash(v):
-            return '--' if v is None else _format_gb(v)
+        _gb_or_dash = FORMATTERS['bytes_gb']
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()

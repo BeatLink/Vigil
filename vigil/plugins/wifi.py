@@ -139,12 +139,14 @@ class WifiUIPlugin(UIPlugin):
         return 'online'
 
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
+        # Two charts (quality_chart/signal_chart) don't fit UI_SPEC's single
+        # 'chart' key, so this stays a manual layout+page build — but reuses
+        # the shared 'int' / a locally-scoped signal formatter rather than
+        # redefining every card's dash text from scratch.
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
         page = self.page(metric_names=['link_quality', 'signal_dbm'])
 

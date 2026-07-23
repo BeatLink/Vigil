@@ -126,42 +126,39 @@ class BlockurlCollectorPlugin(CollectorPlugin):
 
 
 class BlockurlUIPlugin(UIPlugin):
-    """Dashboard rendering for the blockurl monitor."""
+    """Dashboard rendering for the blockurl monitor — declarative, see
+    UI_SPEC. domains_card's color is config-driven (min_domains), so it's a
+    per-instance rule (same pattern as disk_space.py).
+    """
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.min_domains = int(config.get('min_domains', 1))
+
+        from vigil.web.ui.spec import register_color_rule
+        self._color_rule_name = f'blockurl_min_domains_{self.id}'
+
+        @register_color_rule(self._color_rule_name)
+        def _domains_color(v, _min_domains=self.min_domains):
+            if v is None:
+                return None
+            return 'warning' if v < _min_domains else 'online'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'domains_card': {
+                    'metric': 'domains_total', 'title': 'DOMAINS',
+                    'format': 'int', 'color': self._color_rule_name,
+                },
+                'urls_card': {'metric': 'urls_total', 'title': 'BLOCKED URLS', 'format': 'count_comma'},
+            },
+            'chart': {'metric': 'urls_total', 'title': 'BLOCKED URLS'},
+            'events': True,
+        }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-        page = self.page(metric_names=['domains_total', 'urls_total'])
-        min_domains = int(self.config.get('min_domains', 1))
-
-        def _urls_or_dash(v):
-            return '--' if v is None else f'{int(v):,}'
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('domains_card'):
-            domains_label = info_card('DOMAINS', '--').bind_text_from(
-                page.model, ('metrics', 'domains_total'),
-                backward=lambda v: '--' if v is None else str(int(v)))
-        with layout.cell('urls_card'):
-            info_card('BLOCKED URLS', '--').bind_text_from(
-                page.model, ('metrics', 'urls_total'), backward=_urls_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'BLOCKED URLS', self.id, 'urls_total')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
-
-        def update_color():
-            count = page.model.metrics.get('domains_total')
-            if count is not None:
-                domains_label.style(
-                    f'color: {STATUS_COLORS["warning" if count < min_domains else "online"]}')
-
-        page.on_refresh(update_color)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

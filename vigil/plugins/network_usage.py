@@ -134,14 +134,17 @@ class NetworkUsageUIPlugin(UIPlugin):
 
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
+        from vigil.web.ui.spec import FORMATTERS
 
+        # Two charts (rx_chart/tx_chart) don't fit UI_SPEC's single 'chart'
+        # key, so this stays a manual layout+page build — reusing the shared
+        # 'kbps_rate' formatter (identical to this module's own _format_rate)
+        # rather than redefining it.
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
         page = self.page(metric_names=['rx_kbps', 'tx_kbps'])
 
         configured_interface = self.config.get('interface')
-
-        def _rate_or_dash(v):
-            return '-- KB/s' if v is None else _format_rate(v)
+        _rate_or_dash = FORMATTERS['kbps_rate']
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()

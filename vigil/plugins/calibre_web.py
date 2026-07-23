@@ -149,46 +149,38 @@ class CalibreWebCollectorPlugin(CollectorPlugin):
 
 
 class CalibreWebUIPlugin(UIPlugin):
-    """Dashboard rendering for the calibre_web monitor."""
+    """Dashboard rendering for the calibre_web monitor — declarative, see UI_SPEC."""
+
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'feed_card': {
+                'metric': 'feed_ok', 'title': 'OPDS FEED',
+                'format': 'calibre_web_ok_text', 'color': 'calibre_web_ok_color',
+            },
+            'latency_card': {'metric': 'feed_latency_ms', 'title': 'LATENCY', 'format': 'ms0'},
+        },
+        'chart': {'metric': 'feed_latency_ms', 'title': 'OPDS LATENCY (ms)'},
+        'events': True,
+    }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-        page = self.page(metric_names=['feed_ok', 'feed_latency_ms'])
 
-        def _ok_text(v):
-            if v is None:
-                return '--'
-            return 'OK' if v >= 1.0 else 'FAILED'
+from vigil.web.ui.spec import register_formatter, register_color_rule
 
-        def _latency_text(v):
-            return '--' if v is None else f'{v:.0f} ms'
 
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('feed_card'):
-            feed_label = info_card('OPDS FEED', '--').bind_text_from(
-                page.model, ('metrics', 'feed_ok'), backward=_ok_text)
-        with layout.cell('latency_card'):
-            info_card('LATENCY', '--').bind_text_from(
-                page.model, ('metrics', 'feed_latency_ms'), backward=_latency_text)
-        with layout.cell('chart'):
-            history_chart(page, 'OPDS LATENCY (ms)', self.id, 'feed_latency_ms')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+@register_formatter('calibre_web_ok_text')
+def _feed_text(v):
+    if v is None:
+        return '--'
+    return 'OK' if v >= 1.0 else 'FAILED'
 
-        def update_color():
-            ok = page.model.metrics.get('feed_ok')
-            if ok is not None:
-                passed = ok >= 1.0
-                feed_label.style(
-                    f'color: {STATUS_COLORS["online" if passed else "failed"]}')
 
-        page.on_refresh(update_color)
-        page.start()
+@register_color_rule('calibre_web_ok_color')
+def _feed_color(v):
+    if v is None:
+        return None
+    return 'online' if v >= 1.0 else 'failed'

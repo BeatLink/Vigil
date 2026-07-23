@@ -211,54 +211,53 @@ class FreshrssCollectorPlugin(CollectorPlugin):
 
 
 class FreshrssUIPlugin(UIPlugin):
-    """Dashboard rendering for the freshrss monitor."""
+    """Dashboard rendering for the freshrss monitor — declarative, see
+    UI_SPEC. refresh_card's color is config-driven (refresh_stale_warning,
+    single warning tier with no failed tier), so it's a per-instance local
+    rule. stale_card reuses the shared 'nonzero_warning' rule — verified
+    identical semantics (nonzero -> warning, zero -> online).
+    """
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.refresh_stale_warning = float(config.get('refresh_stale_warning', 6))
 
+        from vigil.web.ui.spec import register_color_rule
+        self._color_rule_name = f'freshrss_refresh_stale_{self.id}'
+
+        @register_color_rule(self._color_rule_name)
+        def _refresh_color(v, _warning=self.refresh_stale_warning):
+            if v is None:
+                return None
+            return 'warning' if v >= _warning else 'online'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'refresh_card': {
+                    'metric': 'refresh_age_hours', 'title': 'LAST REFRESH',
+                    'format': 'freshrss_age', 'color': self._color_rule_name,
+                },
+                'feeds_card': {'metric': 'feeds_total', 'title': 'FEEDS', 'format': 'int'},
+                'stale_card': {
+                    'metric': 'feeds_stale', 'title': 'STALE FEEDS',
+                    'format': 'int', 'color': 'nonzero_warning',
+                },
+            },
+            'chart': {'metric': 'refresh_age_hours', 'title': 'REFRESH AGE (HOURS)'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-        page = self.page(metric_names=['refresh_age_hours', 'feeds_total', 'feeds_stale'])
 
-        def _age_or_dash(v):
-            return '--' if v is None else _format_age(v)
+from vigil.web.ui.spec import register_formatter
 
-        def _int_or_dash(v):
-            return '--' if v is None else str(int(v))
 
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('refresh_card'):
-            refresh_label = info_card('LAST REFRESH', '--').bind_text_from(
-                page.model, ('metrics', 'refresh_age_hours'), backward=_age_or_dash)
-        with layout.cell('feeds_card'):
-            info_card('FEEDS', '--').bind_text_from(
-                page.model, ('metrics', 'feeds_total'), backward=_int_or_dash)
-        with layout.cell('stale_card'):
-            stale_label = info_card('STALE FEEDS', '--').bind_text_from(
-                page.model, ('metrics', 'feeds_stale'), backward=_int_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'REFRESH AGE (HOURS)', self.id, 'refresh_age_hours')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
-
-        def update_colors():
-            refresh_age = page.model.metrics.get('refresh_age_hours')
-            if refresh_age is not None:
-                refresh_label.style(
-                    f'color: {STATUS_COLORS["warning" if refresh_age >= self.refresh_stale_warning else "online"]}')
-            stale = page.model.metrics.get('feeds_stale')
-            if stale is not None:
-                stale_label.style(
-                    f'color: {STATUS_COLORS["warning" if int(stale) else "online"]}')
-
-        page.on_refresh(update_colors)
-        page.start()
+@register_formatter('freshrss_age')
+def _refresh_age_text(v):
+    return '--' if v is None else _format_age(v)

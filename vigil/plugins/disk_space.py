@@ -69,54 +69,44 @@ class DiskSpaceCollectorPlugin(CollectorPlugin):
 
 
 class DiskSpaceUIPlugin(UIPlugin):
-    """Dashboard rendering for the disk_space monitor."""
+    """Dashboard rendering for the disk_space monitor — declarative, see UI_SPEC.
+
+    used_pct's color rule is registered per-instance in __init__ (not at
+    module level like frigate.py's) because the threshold is config-driven
+    (`threshold: N` in config.yaml) rather than a fixed constant — each
+    monitor instance needs its own rule reflecting ITS OWN threshold, keyed
+    by this instance's id so two disk_space monitors with different
+    thresholds don't collide in the shared COLOR_RULES registry.
+    """
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.path = config.get('path', '/')
         self.threshold = int(config.get('threshold', 90))
 
+        from vigil.web.ui.spec import register_color_rule, threshold_color
+        self._color_rule_name = f'disk_space_threshold_{self.id}'
+        register_color_rule(self._color_rule_name)(
+            threshold_color(warning=self.threshold, threshold=self.threshold))
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'path_card': {'title': 'PATH', 'value_attr': 'path'},
+                'threshold_card': {'title': 'THRESHOLD', 'value_attr': 'threshold', 'value_format': '{}%'},
+                'usage_card': {
+                    'metric': 'used_pct', 'title': 'USAGE',
+                    'format': 'percent1', 'color': self._color_rule_name,
+                },
+                'avail_card': {'metric': 'avail_gb', 'title': 'AVAILABLE', 'format': 'bytes_gb'},
+                'total_card': {'metric': 'size_gb', 'title': 'TOTAL SIZE', 'format': 'bytes_gb'},
+            },
+            'chart': {'metric': 'used_pct', 'title': f'USAGE HISTORY — {self.path} (%)'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['used_pct', 'avail_gb', 'size_gb'])
-
-        def _pct_or_dash(v):
-            return '-- %' if v is None else f'{v:.1f}%'
-
-        def _gb_or_dash(v):
-            return '--' if v is None else _format_gb(v)
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('path_card'):
-            info_card('PATH', self.path)
-        with layout.cell('threshold_card'):
-            info_card('THRESHOLD', f'{self.threshold}%')
-        with layout.cell('usage_card'):
-            usage_label = info_card('USAGE', '-- %').bind_text_from(
-                page.model, ('metrics', 'used_pct'), backward=_pct_or_dash)
-        with layout.cell('avail_card'):
-            info_card('AVAILABLE', '--').bind_text_from(
-                page.model, ('metrics', 'avail_gb'), backward=_gb_or_dash)
-        with layout.cell('total_card'):
-            info_card('TOTAL SIZE', '--').bind_text_from(
-                page.model, ('metrics', 'size_gb'), backward=_gb_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, f'USAGE HISTORY — {self.path} (%)', self.id, 'used_pct')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
-
-        def update_color():
-            pct = page.model.metrics.get('used_pct')
-            if pct is not None:
-                color = STATUS_COLORS['failed'] if pct >= self.threshold else STATUS_COLORS['online']
-                usage_label.style(f'color: {color}')
-
-        page.on_refresh(update_color)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

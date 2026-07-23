@@ -168,48 +168,49 @@ class TriliumCollectorPlugin(CollectorPlugin):
 
 
 class TriliumUIPlugin(UIPlugin):
-    """Dashboard rendering for the trilium monitor."""
+    """Dashboard rendering for the trilium monitor — declarative, see UI_SPEC.
+    lastmod_card's color is config-driven (stale_warning), so it's a
+    per-instance rule. The '{age} ago' text format is structurally different
+    from any FORMATTERS entry (age + trailing ' ago'), so it's registered
+    locally rather than reusing a generic age formatter.
+    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.stale_warning = float(self.config.get('stale_warning', 72))
 
+        from vigil.web.ui.spec import register_color_rule
+        self._color_rule_name = f'trilium_stale_{self.id}'
+
+        @register_color_rule(self._color_rule_name)
+        def _lastmod_color(v, _stale_warning=self.stale_warning):
+            if v is None:
+                return None
+            return 'warning' if v >= _stale_warning else 'online'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'lastmod_card': {
+                    'metric': 'last_modified_age_hours', 'title': 'LAST MODIFIED',
+                    'format': 'trilium_age_ago', 'color': self._color_rule_name,
+                },
+                'notes_card': {'metric': 'notes_total', 'title': 'TOTAL NOTES', 'format': 'count_comma'},
+            },
+            'chart': {'metric': 'last_modified_age_hours', 'title': 'HOURS SINCE LAST MODIFIED'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-        page = self.page(metric_names=['last_modified_age_hours', 'notes_total'])
 
-        def _age_or_dash(v):
-            return '--' if v is None else f'{_format_age(v)} ago'
+from vigil.web.ui.spec import register_formatter
 
-        def _count_or_dash(v):
-            return '--' if v is None else f'{int(v):,}'
 
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('lastmod_card'):
-            lastmod_label = info_card('LAST MODIFIED', '--').bind_text_from(
-                page.model, ('metrics', 'last_modified_age_hours'), backward=_age_or_dash)
-        with layout.cell('notes_card'):
-            info_card('TOTAL NOTES', '--').bind_text_from(
-                page.model, ('metrics', 'notes_total'), backward=_count_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'HOURS SINCE LAST MODIFIED', self.id, 'last_modified_age_hours')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
-
-        def update_lastmod_color():
-            age = page.model.metrics.get('last_modified_age_hours')
-            if age is not None:
-                lastmod_label.style(
-                    f'color: {STATUS_COLORS["warning" if age >= self.stale_warning else "online"]}')
-
-        page.on_refresh(update_lastmod_color)
-
-        page.start()
+@register_formatter('trilium_age_ago')
+def _lastmod_text(v):
+    return '--' if v is None else f'{_format_age(v)} ago'

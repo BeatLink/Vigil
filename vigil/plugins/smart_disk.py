@@ -74,41 +74,46 @@ class SmartDiskCollectorPlugin(CollectorPlugin):
 
 
 class SmartDiskUIPlugin(UIPlugin):
-    """Dashboard rendering for the smart_disk monitor."""
+    """Dashboard rendering for the smart_disk monitor — declarative, see
+    UI_SPEC. ok_card keeps its fixed 'online' color (unconditional) via a
+    locally registered trivial rule; failed_card colors 'failed' once
+    nonzero, 'online' otherwise, via another local rule with the same
+    nonzero -> failed shape raid.py's degraded_card uses (registered
+    independently here rather than imported, to keep each plugin file
+    self-contained).
+    """
+
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'total_card': {'metric': 'disks_total', 'title': 'DISKS', 'format': 'int'},
+            'ok_card': {
+                'metric': 'disks_ok', 'title': 'HEALTHY', 'format': 'int',
+                'color': 'smart_disk_always_online',
+            },
+            'failed_card': {
+                'metric': 'disks_failed', 'title': 'FAILED', 'format': 'int',
+                'color': 'smart_disk_nonzero_failed',
+            },
+        },
+        'events': True,
+    }
 
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
-        from vigil.web.ui.theme import STATUS_COLORS
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
 
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['disks_total', 'disks_ok', 'disks_failed'])
+from vigil.web.ui.spec import register_color_rule
 
-        def _int_or_dash(v):
-            return '--' if v is None else str(int(v))
 
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('total_card'):
-            info_card('DISKS', '--').bind_text_from(
-                page.model, ('metrics', 'disks_total'), backward=_int_or_dash)
-        with layout.cell('ok_card'):
-            info_card('HEALTHY', '--').bind_text_from(
-                page.model, ('metrics', 'disks_ok'), backward=_int_or_dash
-            ).style(f"color: {STATUS_COLORS['online']}")
-        with layout.cell('failed_card'):
-            failed_label = info_card('FAILED', '--').bind_text_from(
-                page.model, ('metrics', 'disks_failed'), backward=_int_or_dash)
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+@register_color_rule('smart_disk_always_online')
+def _smart_disk_ok_color(v):
+    return None if v is None else 'online'
 
-        def update_color():
-            failed = page.model.metrics.get('disks_failed')
-            if failed is not None:
-                color = STATUS_COLORS['failed'] if failed else STATUS_COLORS['online']
-                failed_label.style(f"color: {color}")
 
-        page.on_refresh(update_color)
-        page.start()
+@register_color_rule('smart_disk_nonzero_failed')
+def _smart_disk_failed_color(v):
+    if v is None:
+        return None
+    return 'failed' if v else 'online'

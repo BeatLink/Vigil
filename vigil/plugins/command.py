@@ -149,14 +149,19 @@ class CommandUIPlugin(UIPlugin):
                 return _level_for(-value, -float(warning), -float(threshold))
             return _level_for(value, float(warning), float(threshold))
 
+        # Layout structure itself is conditional on whether `pattern` is set
+        # (an extra value_card + chart appear only then), which UI_SPEC's
+        # fixed layout key doesn't express, so this stays a manual build —
+        # reusing the shared 'int' formatter for exit_code rather than
+        # redefining it.
+        from vigil.web.ui.spec import FORMATTERS
         has_value = pattern is not None
         base = _DEFAULT_LAYOUT_METRIC if has_value else _DEFAULT_LAYOUT_PLAIN
         layout = PluginLayout(self.config, base if context == 'page' else make_inline_layout(base))
         metric_names = ['exit_code'] + (['value'] if has_value else [])
         page = self.page(metric_names=metric_names)
 
-        def _exit_text(v):
-            return '--' if v is None else str(int(v))
+        _exit_text = FORMATTERS['int']
 
         def _value_text(v):
             return '--' if v is None else f'{v:g}{value_unit}'

@@ -99,42 +99,44 @@ class RaidCollectorPlugin(CollectorPlugin):
 
 
 class RaidUIPlugin(UIPlugin):
-    """Dashboard rendering for the raid monitor."""
+    """Dashboard rendering for the raid monitor — declarative, see UI_SPEC.
+    ok_card keeps its fixed 'online' color (unconditional, like vms.py's
+    running_card) via a locally registered trivial rule; degraded_card uses
+    the shared 'nonzero_warning'-shaped semantics but needs 'failed' not
+    'warning' for nonzero, so it gets its own local rule too.
+    """
+
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'total_card': {'metric': 'arrays_total', 'title': 'ARRAYS', 'format': 'int'},
+            'ok_card': {
+                'metric': 'arrays_ok', 'title': 'CLEAN', 'format': 'int',
+                'color': 'raid_always_online',
+            },
+            'degraded_card': {
+                'metric': 'arrays_degraded', 'title': 'DEGRADED', 'format': 'int',
+                'color': 'raid_nonzero_failed',
+            },
+        },
+        'events': True,
+    }
 
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
-        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['arrays_total', 'arrays_ok', 'arrays_degraded'])
 
-        def _int_or_dash(v):
-            return '--' if v is None else str(int(v))
+from vigil.web.ui.spec import register_color_rule
 
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('total_card'):
-            info_card('ARRAYS', '--').bind_text_from(
-                page.model, ('metrics', 'arrays_total'), backward=_int_or_dash)
-        with layout.cell('ok_card'):
-            info_card('CLEAN', '--').bind_text_from(
-                page.model, ('metrics', 'arrays_ok'), backward=_int_or_dash
-            ).style(f"color: {STATUS_COLORS['online']}")
-        with layout.cell('degraded_card'):
-            degraded_label = info_card('DEGRADED', '--').bind_text_from(
-                page.model, ('metrics', 'arrays_degraded'), backward=_int_or_dash)
-        with layout.cell('arrays'):
-            ui.element('div')  # reserved for future per-array detail
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
 
-        def update_color():
-            degraded = page.model.metrics.get('arrays_degraded')
-            if degraded is not None:
-                color = STATUS_COLORS['failed'] if degraded else STATUS_COLORS['online']
-                degraded_label.style(f"color: {color}")
+@register_color_rule('raid_always_online')
+def _raid_ok_color(v):
+    return None if v is None else 'online'
 
-        page.on_refresh(update_color)
-        page.start()
+
+@register_color_rule('raid_nonzero_failed')
+def _raid_degraded_color(v):
+    if v is None:
+        return None
+    return 'failed' if v else 'online'

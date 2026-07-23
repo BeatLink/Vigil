@@ -85,47 +85,40 @@ class LoadAverageCollectorPlugin(CollectorPlugin):
 
 
 class LoadAverageUIPlugin(UIPlugin):
-    """Dashboard rendering for the load_average monitor."""
+    """Dashboard rendering for the load_average monitor — declarative, see
+    UI_SPEC. Thresholds are optional (see collector docstring); when unset,
+    no color rule is attached, matching the pre-UI_SPEC behavior of never
+    calling update_load_1m_color.
+    """
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.load_warning   = float(config['load_warning'])   if 'load_warning'   in config else None
+        self.load_threshold = float(config['load_threshold']) if 'load_threshold' in config else None
+
+        self._color_rule_name = None
+        if self.load_warning is not None and self.load_threshold is not None:
+            from vigil.web.ui.spec import register_color_rule, threshold_color
+            self._color_rule_name = f'load_average_threshold_{self.id}'
+            register_color_rule(self._color_rule_name)(
+                threshold_color(warning=self.load_warning, threshold=self.load_threshold))
+
+    @property
+    def UI_SPEC(self):
+        load_1m_card = {'metric': 'load_pct_1m', 'title': 'LOAD 1M', 'format': 'percent0_plain_dash'}
+        if self._color_rule_name:
+            load_1m_card['color'] = self._color_rule_name
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'load_1m_card': load_1m_card,
+                'load_5m_card': {'metric': 'load_pct_5m', 'title': 'LOAD 5M', 'format': 'percent0_plain_dash'},
+                'load_15m_card': {'metric': 'load_pct_15m', 'title': 'LOAD 15M', 'format': 'percent0_plain_dash'},
+            },
+            'chart': {'metric': 'load_pct_1m', 'title': 'LOAD AVERAGE (%)'},
+            'events': True,
+        }
 
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['load_pct_1m', 'load_pct_5m', 'load_pct_15m'])
-
-        load_warning   = float(self.config['load_warning'])   if 'load_warning'   in self.config else None
-        load_threshold = float(self.config['load_threshold']) if 'load_threshold' in self.config else None
-
-        def _pct_or_dash(v):
-            return '--' if v is None else f'{v:.0f}%'
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('load_1m_card'):
-            load_1m_label = info_card('LOAD 1M', '-- %').bind_text_from(
-                page.model, ('metrics', 'load_pct_1m'), backward=_pct_or_dash)
-        with layout.cell('load_5m_card'):
-            info_card('LOAD 5M', '-- %').bind_text_from(
-                page.model, ('metrics', 'load_pct_5m'), backward=_pct_or_dash)
-        with layout.cell('load_15m_card'):
-            info_card('LOAD 15M', '-- %').bind_text_from(
-                page.model, ('metrics', 'load_pct_15m'), backward=_pct_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'LOAD AVERAGE (%)', self.id, 'load_pct_1m')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
-
-        def update_load_1m_color():
-            if load_warning is None or load_threshold is None:
-                return
-            value = page.model.metrics.get('load_pct_1m')
-            if value is not None:
-                load_1m_label.style(f'color: {STATUS_COLORS[_level_for(value, load_warning, load_threshold)]}')
-
-        page.on_refresh(update_load_1m_color)
-
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

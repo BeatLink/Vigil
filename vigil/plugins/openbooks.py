@@ -136,40 +136,37 @@ class OpenbooksCollectorPlugin(CollectorPlugin):
 
 
 class OpenbooksUIPlugin(UIPlugin):
-    """Dashboard rendering for the openbooks monitor."""
+    """Dashboard rendering for the openbooks monitor — declarative, see UI_SPEC."""
+
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'bridge_card': {
+                'metric': 'bridge_connected', 'title': 'IRC BRIDGE',
+                'format': 'openbooks_bridge_text', 'color': 'openbooks_bridge_color',
+            },
+        },
+        'chart': {'metric': 'bridge_connected', 'title': 'IRC BRIDGE CONNECTED'},
+        'events': True,
+    }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-        page = self.page(metric_names=['bridge_connected'])
 
-        def _on_off_text(value):
-            if value is None:
-                return '--'
-            return 'CONNECTED' if value >= 1.0 else 'DISCONNECTED'
+from vigil.web.ui.spec import register_formatter, register_color_rule
 
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('bridge_card'):
-            bridge_label = info_card('IRC BRIDGE', '--').bind_text_from(
-                page.model, ('metrics', 'bridge_connected'), backward=_on_off_text)
-        with layout.cell('chart'):
-            history_chart(page, 'IRC BRIDGE CONNECTED', self.id, 'bridge_connected')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
 
-        def update_color():
-            value = page.model.metrics.get('bridge_connected')
-            if value is not None:
-                ok = value >= 1.0
-                bridge_label.style(
-                    f'color: {STATUS_COLORS["online" if ok else "failed"]}')
+@register_formatter('openbooks_bridge_text')
+def _bridge_text(v):
+    if v is None:
+        return '--'
+    return 'CONNECTED' if v >= 1.0 else 'DISCONNECTED'
 
-        page.on_refresh(update_color)
-        page.start()
+
+@register_color_rule('openbooks_bridge_color')
+def _bridge_color(v):
+    if v is None:
+        return None
+    return 'online' if v >= 1.0 else 'failed'

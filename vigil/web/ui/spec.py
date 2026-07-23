@@ -77,13 +77,31 @@ def _fmt(value):
 
 @register_formatter('int')
 def _int(v):
+    """Truncating int, plain dash — the most common shape, verified against
+    ~15 plugins' `_int_or_dash`/`_exit_text`/etc: str(int(v))."""
     return '--' if v is None else str(int(v))
+
+@register_formatter('int_rounded')
+def _int_rounded(v):
+    """Rounding (not truncating) int, plain dash — distinct from 'int':
+    connections.py/interrupts.py/oom.py's variants use f'{v:.0f}', which
+    rounds (4.9 -> '5') where 'int' truncates (4.9 -> '4'). Kept separate
+    rather than collapsed, since the two round differently."""
+    return '--' if v is None else f'{v:.0f}'
 
 @register_formatter('count_comma')
 def _count_comma(v):
-    """Thousands-separated integer, e.g. '12,345' — for counters (queries,
-    interrupts) where a bare int is hard to read at a glance."""
+    """Thousands-separated integer, e.g. '12,345', plain dash — for counters
+    (queries, interrupts, archive counts) where a bare int is hard to read.
+    Matches oom.py/unbound.py/trilium.py's `_count_or_dash`."""
     return '--' if v is None else f'{int(v):,}'
+
+@register_formatter('count_comma_rounded')
+def _count_comma_rounded(v):
+    """Thousands-separated, rounding not truncating — interrupts.py's
+    `_rate_or_dash` (f'{v:,.0f}'), distinct from 'count_comma' the same way
+    'int_rounded' differs from 'int'."""
+    return '--' if v is None else f'{v:,.0f}'
 
 @register_formatter('decimal1')
 def _decimal1(v):
@@ -91,30 +109,64 @@ def _decimal1(v):
 
 @register_formatter('percent0')
 def _percent0(v):
+    """'-- %' dash text, 0 decimals — e.g. load_average.py."""
     return '-- %' if v is None else f'{v:.0f}%'
+
+@register_formatter('percent0_plain_dash')
+def _percent0_plain_dash(v):
+    """Plain '--' dash text (no ' %'), 0 decimals — verified distinct from
+    'percent0': some plugins' dash state omits the unit suffix entirely."""
+    return '--' if v is None else f'{v:.0f}%'
 
 @register_formatter('percent1')
 def _percent1(v):
+    """'-- %' dash text, 1 decimal — e.g. disk_space.py, cpu_usage.py."""
     return '-- %' if v is None else f'{v:.1f}%'
+
+@register_formatter('percent1_plain_dash')
+def _percent1_plain_dash(v):
+    """Plain '--' dash text, 1 decimal — verified distinct from 'percent1':
+    memory_usage.py/unbound.py's variant omits the ' %' in the dash state."""
+    return '--' if v is None else f'{v:.1f}%'
+
+@register_formatter('ms0')
+def _ms0(v):
+    """'--' dash, 0 decimals, ' ms' suffix — calibre_web.py/mosquitto.py/
+    radicale.py's `_latency_text`/`_ms_or_dash`."""
+    return '--' if v is None else f'{v:.0f} ms'
 
 @register_formatter('ms1')
 def _ms1(v):
+    """'--' dash, 1 decimal, ' ms' suffix."""
     return '--' if v is None else f'{v:.1f} ms'
 
 @register_formatter('seconds_ms')
 def _latency_ms(v):
+    """'-- ms' dash text (unit in the dash state too), 1 decimal — uptime.py."""
     return '-- ms' if v is None else f'{v:.1f} ms'
+
+@register_formatter('temp_c0')
+def _temp_c0(v):
+    """0-decimal Celsius — gpu.py's `_temp_or_dash`."""
+    return '--' if v is None else f'{v:.0f}°C'
+
+@register_formatter('temp_c1')
+def _temp_c1(v):
+    """1-decimal Celsius — temperature.py's `_temp_or_dash`, distinct
+    precision from gpu.py's."""
+    return '--' if v is None else f'{v:.1f}°C'
 
 @register_formatter('bytes_gb')
 def _bytes_gb(v):
-    """GB value through plugin_utils.format_bytes (auto MB/GB/TB scaling)."""
+    """GB value through plugin_utils.format_bytes (auto MB/GB/TB scaling) —
+    folders.py/disk_space.py's `_gb_or_dash`."""
     from vigil.core.common.plugin_utils import format_bytes
     return '--' if v is None else format_bytes(v)
 
 @register_formatter('kbps_rate')
 def _kbps_rate(v):
-    """KB/s value, auto-scaled to MB/s past 1024 — matches diskio.py/
-    network_usage.py's existing _format_rate."""
+    """KB/s value, auto-scaled to MB/s past 1024, 1 decimal — matches
+    diskio.py/network_usage.py's shared `_format_rate` helper exactly."""
     if v is None:
         return '-- KB/s'
     if v >= 1024:
@@ -123,6 +175,9 @@ def _kbps_rate(v):
 
 @register_formatter('on_off')
 def _on_off(v):
+    """Generic ON/OFF text for a binary metric NOT going through
+    status_card (e.g. a secondary boolean on a page that already has its
+    own status_card for the primary one)."""
     if v is None:
         return 'Checking...'
     return 'ON' if v > 0.5 else 'OFF'
@@ -215,7 +270,11 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
     )
 
     if page is None:
-        metric_names = [c['metric'] for c in cards.values() if 'metric' in c]
+        # status_card excluded: it isn't a page.model.metrics binding like the
+        # others — internal_modules['ui']['status_card'] tracks its own
+        # metric via page.track_metric() once built, below.
+        metric_names = [c['metric'] for name, c in cards.items()
+                        if 'metric' in c and name != 'status_card']
         if chart_spec:
             metric_names.append(chart_spec['metric'])
         page = plugin.page(metric_names=metric_names)
@@ -225,8 +284,27 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
     for widget_name, card_spec in cards.items():
         if widget_name == 'host_card' or widget_name == 'status_card':
             continue  # handled below as special-cased standard widgets
-        metric_name = card_spec['metric']
+
         title = card_spec['title']
+
+        if 'metric' not in card_spec:
+            # Static card: fixed or config-derived text, no DB binding —
+            # e.g. disk_space.py's PATH/THRESHOLD cards, which show
+            # self.path/self.threshold, not a collected metric. 'value' is
+            # a literal; 'value_attr' reads a plugin attribute at render
+            # time (so it reflects this instance's config, not a shared
+            # default) and passes it through 'value_format' if given
+            # (a str.format-style template, e.g. '{}%').
+            if 'value_attr' in card_spec:
+                value = getattr(plugin, card_spec['value_attr'])
+                text = card_spec.get('value_format', '{}').format(value)
+            else:
+                text = card_spec.get('value', '--')
+            with layout.cell(widget_name):
+                info_card(title, text)
+            continue
+
+        metric_name = card_spec['metric']
         fmt_name = card_spec.get('format', 'int')
         formatter = FORMATTERS.get(fmt_name)
         if formatter is None:

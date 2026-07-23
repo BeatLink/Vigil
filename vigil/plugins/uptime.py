@@ -69,35 +69,23 @@ class UptimeCollectorPlugin(CollectorPlugin):
 
 
 class UptimeUIPlugin(UIPlugin):
-    """Dashboard rendering for the uptime monitor."""
+    """Dashboard rendering for the uptime monitor — fully declarative, see UI_SPEC."""
+
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'status_card': {
+                'metric': 'up', 'title': 'CURRENT STATUS',
+                'on_text': 'ONLINE', 'off_text': 'OFFLINE',
+            },
+            'latency_card': {
+                'metric': 'latency_ms', 'title': 'LAST LATENCY', 'format': 'seconds_ms',
+            },
+        },
+        'chart': {'metric': 'latency_ms', 'title': 'RESPONSE TIME HISTORY (ms)'},
+        'events': True,
+    }
 
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['latency_ms'])
-
-        def _latency_or_dash(v):
-            return '-- ms' if v is None else f'{v:.1f} ms'
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('status_card'):
-            self.internal_modules['ui']['status_card'](
-                page,
-                metric_name='up',
-                title='CURRENT STATUS',
-                on_text='ONLINE',
-                off_text='OFFLINE'
-            )
-        with layout.cell('latency_card'):
-            info_card('LAST LATENCY', '-- ms').bind_text_from(
-                page.model, ('metrics', 'latency_ms'), backward=_latency_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'RESPONSE TIME HISTORY (ms)', self.id, 'latency_ms')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
-
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
