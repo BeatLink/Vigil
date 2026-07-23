@@ -174,74 +174,60 @@ class FrigateCollectorPlugin(CollectorPlugin):
         return False
 
 
+from vigil.web.ui.spec import generic_render, register_formatter, register_color_rule
+
+# Frigate-specific: 0..3 worst-to-best rank <-> Frigate's own quality enum
+# (see _QUALITY_ORDER above). Registered under plugin-specific names rather
+# than a generic shared one, since "quality rank" has no meaning outside
+# this plugin's own metric.
+_RANK_TO_LABEL = {0: 'UNUSABLE', 1: 'POOR', 2: 'FAIR', 3: 'EXCELLENT'}
+
+
+@register_formatter('frigate_quality_rank')
+def _quality_text(v):
+    return '--' if v is None else _RANK_TO_LABEL.get(int(v), 'UNKNOWN')
+
+
+@register_color_rule('frigate_quality_rank_color')
+def _quality_rank_color(v):
+    if v is None:
+        return None
+    rank = int(v)
+    if rank == 0:
+        return 'failed'
+    if rank == 1:
+        return 'warning'
+    return 'online'
+
+
 class FrigateUIPlugin(UIPlugin):
-    """Dashboard rendering for the frigate monitor."""
+    """Dashboard rendering for the frigate monitor — fully declarative, see UI_SPEC."""
+
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'quality_card': {
+                'metric': 'worst_quality_rank', 'title': 'WORST QUALITY',
+                'format': 'frigate_quality_rank', 'color': 'frigate_quality_rank_color',
+            },
+            'fps_card': {
+                'metric': 'camera_fps_total', 'title': 'CAMERA FPS', 'format': 'decimal1',
+            },
+            'detector_card': {
+                'metric': 'detector_inference_ms', 'title': 'INFERENCE', 'format': 'ms1',
+            },
+            'stalls_card': {
+                'metric': 'stalls_last_hour', 'title': 'STALLS/H',
+                'format': 'int', 'color': 'nonzero_warning',
+            },
+            'reconnects_card': {
+                'metric': 'reconnects_last_hour', 'title': 'RECONNECTS/H',
+                'format': 'int', 'color': 'nonzero_warning',
+            },
+        },
+        'chart': {'metric': 'camera_fps_total', 'title': 'CAMERA FPS'},
+        'events': True,
+    }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-        page = self.page(metric_names=[
-            'worst_quality_rank', 'camera_fps_total', 'detector_inference_ms',
-            'stalls_last_hour', 'reconnects_last_hour',
-        ])
-
-        _rank_to_label = {0: 'UNUSABLE', 1: 'POOR', 2: 'FAIR', 3: 'EXCELLENT'}
-
-        def _quality_text(v):
-            return '--' if v is None else _rank_to_label.get(int(v), 'UNKNOWN')
-
-        def _fps_or_dash(v):
-            return '--' if v is None else f'{v:.1f}'
-
-        def _ms_or_dash(v):
-            return '--' if v is None else f'{v:.1f} ms'
-
-        def _int_or_dash(v):
-            return '--' if v is None else str(int(v))
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('quality_card'):
-            quality_label = info_card('WORST QUALITY', '--').bind_text_from(
-                page.model, ('metrics', 'worst_quality_rank'), backward=_quality_text)
-        with layout.cell('fps_card'):
-            info_card('CAMERA FPS', '--').bind_text_from(
-                page.model, ('metrics', 'camera_fps_total'), backward=_fps_or_dash)
-        with layout.cell('detector_card'):
-            info_card('INFERENCE', '--').bind_text_from(
-                page.model, ('metrics', 'detector_inference_ms'), backward=_ms_or_dash)
-        with layout.cell('stalls_card'):
-            stalls_label = info_card('STALLS/H', '--').bind_text_from(
-                page.model, ('metrics', 'stalls_last_hour'), backward=_int_or_dash)
-        with layout.cell('reconnects_card'):
-            reconnects_label = info_card('RECONNECTS/H', '--').bind_text_from(
-                page.model, ('metrics', 'reconnects_last_hour'), backward=_int_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'CAMERA FPS', self.id, 'camera_fps_total')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
-
-        def update_colors():
-            rank = page.model.metrics.get('worst_quality_rank')
-            if rank is not None:
-                colour = (STATUS_COLORS['failed'] if rank == 0
-                          else STATUS_COLORS['warning'] if rank == 1
-                          else STATUS_COLORS['online'])
-                quality_label.style(f'color: {colour}')
-            stalls = page.model.metrics.get('stalls_last_hour')
-            if stalls is not None:
-                stalls_label.style(
-                    f'color: {STATUS_COLORS["warning" if stalls > 0 else "online"]}')
-            reconn = page.model.metrics.get('reconnects_last_hour')
-            if reconn is not None:
-                reconnects_label.style(
-                    f'color: {STATUS_COLORS["warning" if reconn > 0 else "online"]}')
-
-        page.on_refresh(update_colors)
-        page.start()
+        generic_render(self, context)

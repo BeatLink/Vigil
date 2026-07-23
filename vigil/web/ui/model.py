@@ -101,16 +101,24 @@ class PluginPage:
         """
         Begin the shared refresh timer. Call once render_ui() has finished
         building widgets and registering on_refresh() callbacks.
+
+        Does one synchronous refresh immediately, before the timer starts —
+        without it, every widget shows its constructed default ('--', an
+        empty table) until the first tick fires, which for a plain page
+        load/HTTP response is indistinguishable from the page being broken:
+        verified empirically that a single request's response is fully
+        serialized before any deferred timer for that request can ever
+        run, so "defer to the next tick" previously meant "never, for that
+        response". The timer itself still uses defer_first=True — this
+        first refresh already did the initial paint's DB read, so the
+        timer's own immediate-first-call would just repeat it.
         """
         def _tick():
             self._refresh_model()
             for cb in self._refresh_callbacks:
                 cb()
 
-        # defer_first: the widgets bound to `.model` already show its
-        # constructed defaults on first paint; deferring means the timer's
-        # actual DB reads happen on the next tick rather than racing
-        # render_ui()'s own remaining setup code.
+        _tick()  # populate real data before anything is ever shown to a client
         self._timer = safe_timer(self._interval, _tick, defer_first=True)
 
     def _refresh_model(self) -> None:
