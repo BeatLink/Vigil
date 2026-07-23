@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.plugin_utils import format_bytes as _format_gb
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 
@@ -162,5 +162,4 @@ class FoldersPlugin(BasePlugin):
             if worst_m is not None:
                 worst_label.text = _format_gb(worst_m.value)
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event('metric', worst_label, update)

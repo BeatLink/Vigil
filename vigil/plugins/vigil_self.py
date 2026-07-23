@@ -32,7 +32,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # Ticks per second for /proc/self/stat's utime+stime fields. This is a kernel
@@ -259,7 +259,7 @@ class VigilSelfPlugin(BasePlugin):
                     monitors_label.text = f'{int(total.value)} OK'
                     monitors_label.style(f'color: {STATUS_COLORS["online"]}')
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', uptime_label, update_cards)
 
 
 def _format_uptime(seconds: float) -> str:

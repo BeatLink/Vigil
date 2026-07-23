@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 _COLLECT_CMD = "grep -E 'MemTotal:|MemAvailable:' /proc/meminfo"
@@ -105,4 +105,4 @@ class MemoryUsagePlugin(BasePlugin):
             if mem_used and mem_total:
                 mem_used_label.text = f'{_fmt_gb(mem_used.value)} / {_fmt_gb(mem_total.value)}'
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', mem_pct_label, update_cards)

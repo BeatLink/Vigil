@@ -1,7 +1,7 @@
 import re
 from typing import Dict, Any
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # /proc/mdstat lays out one array per md device. The line after the "mdN :"
@@ -132,4 +132,4 @@ class RaidPlugin(BasePlugin):
                 color = STATUS_COLORS['failed'] if degraded else STATUS_COLORS['online']
                 degraded_label.style(f"color: {color}")
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', total_label, update_cards)

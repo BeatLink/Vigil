@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional
 
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 
@@ -156,5 +156,4 @@ class OomPlugin(BasePlugin):
                     'warning' if self.is_warning else 'failed')
                 recent_label.style(f'color: {STATUS_COLORS[level]}')
 
-        update_cards()
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', total_label, update_cards)

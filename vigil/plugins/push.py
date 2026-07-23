@@ -28,7 +28,7 @@ from typing import Any, Dict, Optional
 
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.time_utils import format_age, format_duration
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 
 _DEFAULT_LAYOUT = [
     ['status_card', 'lastbeat_card', 'maxage_card'],
@@ -145,5 +145,4 @@ class PushPlugin(BasePlugin):
                 age = int(time.time() - last.value)
                 lastbeat_label.text = format_age(age)
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event('metric', lastbeat_label, update)

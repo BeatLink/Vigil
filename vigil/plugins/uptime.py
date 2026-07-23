@@ -4,7 +4,7 @@ import re
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'status_card', 'latency_card'],
@@ -96,4 +96,4 @@ class UptimePlugin(BasePlugin):
             if last:
                 latency_label.text = f"{last.value:.1f} ms"
 
-        safe_timer(2.0, update_latency)
+        on_data_event('metric', latency_label, update_latency)

@@ -4,7 +4,7 @@ import asyncio
 from typing import Any, Dict, List, Optional
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.time_utils import parse_duration
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 _DEFAULT_LAYOUT = [
@@ -306,7 +306,7 @@ class ServiceListPlugin(BasePlugin):
                 update_table()
 
             search_in.on('update:modelValue', lambda e: update())
-            safe_timer(5.0, update)
+            on_data_event('metric', table, update)
 
         with layout.cell('events'):
             self.internal_modules['ui']['events_table'](title='PLUGIN EVENTS')

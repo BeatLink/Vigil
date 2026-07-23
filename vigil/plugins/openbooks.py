@@ -41,7 +41,7 @@ import shlex
 from typing import Any, Dict, Optional, Tuple
 
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # OpenBooks' own message type/appearance enums (server/messages.go).
@@ -160,4 +160,4 @@ class OpenbooksPlugin(BasePlugin):
                 bridge_label.style(
                     f'color: {STATUS_COLORS["online" if ok else "failed"]}')
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', bridge_label, update_cards)

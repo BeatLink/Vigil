@@ -1,6 +1,6 @@
 from typing import Dict, Any
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 _COLLECT_CMD = (
@@ -149,5 +149,4 @@ class TemperaturePlugin(BasePlugin):
                 max_label.text = f'{latest_max.value:.1f}°C'
                 max_label.style(f'color: {STATUS_COLORS[_level_for(latest_max.value, self.temp_warning, self.temp_threshold)]}')
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event('metric', max_label, update)

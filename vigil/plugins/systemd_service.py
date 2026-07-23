@@ -4,7 +4,7 @@ import time
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.time_utils import parse_duration, format_duration, format_age
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 
 _DEFAULT_UNIT_FILE_WRITE_PATHS = (
     '/etc/systemd/system',
@@ -352,7 +352,7 @@ class SystemdPlugin(BasePlugin):
             if last:
                 time_label.text = last.timestamp.strftime('%H:%M:%S')
 
-        safe_timer(2.0, update_time)
+        on_data_event('status', time_label, update_time)
 
     def _render_oneshot_ui(self, context: str = 'page'):
         from nicegui import ui
@@ -424,8 +424,7 @@ class SystemdPlugin(BasePlugin):
                     color = STATUS_COLORS['failed'] if age > self.max_age else STATUS_COLORS['online']
                     age_label.style(f"color: {color}")
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event('metric', state_label, update)
 
     # -------------------------------------------------------------------------
     # Actions

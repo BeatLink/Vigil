@@ -50,7 +50,7 @@ import requests
 
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.time_utils import format_age
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # Plain-text IP echo services, tried in order. Each returns the caller's
@@ -315,5 +315,4 @@ class DdnsUpdaterPlugin(BasePlugin):
                 age = int(time.time() - last_update.value)
                 lastupdate_label.text = format_age(age)
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event(('setting', 'metric'), public_ip_label, update)

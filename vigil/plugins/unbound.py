@@ -58,7 +58,7 @@ import shlex
 from typing import Any, Dict, Optional, Tuple
 
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # Marks the end of the stats payload so the probe query's own output can
@@ -286,4 +286,4 @@ class UnboundPlugin(BasePlugin):
                 hours = int((uptime.value % 86400) // 3600)
                 uptime_label.text = f'{days}d {hours}h' if days else f'{hours}h'
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', resolution_label, update_cards)

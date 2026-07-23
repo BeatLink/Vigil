@@ -1,7 +1,7 @@
 from typing import Dict, Any
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # Query utilization, memory, and temperature for every GPU in one call.
@@ -186,5 +186,4 @@ class GpuPlugin(BasePlugin):
                     lbl = info_card(f'GPU {idx}', f'{val:.0f}%')
                     lbl.style(f'color: {STATUS_COLORS[_level_for(val, self.util_warning, self.util_threshold)]}')
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event('metric', util_label, update)

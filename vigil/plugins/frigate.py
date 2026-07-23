@@ -39,7 +39,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # Frigate's own precomputed verdict, ordered worst-to-best is the reverse of
@@ -228,4 +228,4 @@ class FrigatePlugin(BasePlugin):
                 reconnects_label.style(
                     f'color: {STATUS_COLORS["warning" if reconn.value > 0 else "online"]}')
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', quality_label, update_cards)

@@ -81,7 +81,7 @@ import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # Marks the end of the transfer payload so both API responses can be fetched in
@@ -547,4 +547,4 @@ class QbittorrentPlugin(BasePlugin):
                 errored_label.style(
                     f'color: {STATUS_COLORS["failed" if count else "online"]}')
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', connection_label, update_cards)

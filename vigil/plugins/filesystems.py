@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.plugin_utils import format_bytes as _format_gb
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # List every mounted filesystem in one shot: mountpoint, total, used, use%.
@@ -308,5 +308,4 @@ class FilesystemsPlugin(BasePlugin):
                 worst_label.style(f'color: {STATUS_COLORS[self._level_for(worst_m.value)]}')
             count_label.text = str(len(fs_pct))
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event('metric', fs_container, update)

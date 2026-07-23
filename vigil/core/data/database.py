@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 from typing import Optional, Any, Dict, Callable
 from peewee import *
 
+from .events import bus
+
 # Initialize a Peewee database instance
 db = SqliteDatabase(None)
 
@@ -22,17 +24,17 @@ class _AsyncWriter:
     fsync never happens on the event loop. A single writer also means SQLite only
     ever sees one writer, which is exactly what it wants.
 
-    Queued writes are additionally batched: rather than committing (and fsyncing
-    at the WAL checkpoint) on every single insert, the thread accumulates
-    whatever arrives within `batch_window` seconds and commits them as one
-    transaction. That trades up to `batch_window` seconds of durability — a
-    crash can lose the batch still in memory — for far fewer commit round-trips
-    under load. Acceptable here: this is monitoring data (metrics, status
-    history, events, log lines), not financial or user-authored records, and it
-    was already being written from a best-effort background thread.
+    Queued writes are additionally batched: rather than committing on every
+    single insert, the thread accumulates whatever arrives within
+    `batch_window` seconds and commits them as one transaction — fewer commit
+    round-trips under load, and (see DataBus) the batch's event-type tags are
+    what DataBus notifies subscribed widgets with once the commit lands. That
+    makes `batch_window` a direct latency floor for the UI as well as a
+    durability trade-off: a crash can lose the batch still in memory, same as
+    before.
     """
-    def __init__(self, batch_window: float = 5.0):
-        self._q: "queue.Queue[Optional[Callable[[], None]]]" = queue.Queue()
+    def __init__(self, batch_window: float = 1.0):
+        self._q: "queue.Queue[Optional[tuple]]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self.batch_window = batch_window
         # When True, submit() executes inline instead of queueing. Used by tests
@@ -45,13 +47,19 @@ class _AsyncWriter:
         self._thread = threading.Thread(target=self._run, name="vigil-db-writer", daemon=True)
         self._thread.start()
 
-    def submit(self, fn: Callable[[], None]):
-        """Enqueue a write. Returns immediately; the writer thread executes it."""
+    def submit(self, fn: Callable[[], None], event: Optional[str] = None):
+        """
+        Enqueue a write. Returns immediately; the writer thread executes it.
+
+        `event` is the DataBus event type this write should notify on once
+        its batch commits (e.g. 'status', 'metric', 'event', 'log_line').
+        Left as None for writes nothing subscribes to (settings, pruning).
+        """
         if self.synchronous:
             with db.connection_context():
                 fn()
             return
-        self._q.put(fn)
+        self._q.put((fn, event))
 
     def flush(self, timeout: Optional[float] = None):
         """Block until all currently-queued writes have been executed."""
@@ -59,14 +67,15 @@ class _AsyncWriter:
 
     def _run(self):
         while True:
-            fn = self._q.get()
-            if fn is None:  # sentinel (unused today; kept for clean shutdown)
+            item = self._q.get()
+            if item is None:  # sentinel (unused today; kept for clean shutdown)
                 self._q.task_done()
                 break
+            fn, event = item
 
             # Collect whatever else arrives within batch_window so the whole
-            # group commits (and fsyncs) once, instead of once per write.
-            batch = [fn]
+            # group commits once, instead of once per write.
+            batch = [(fn, event)]
             deadline = time.monotonic() + self.batch_window
             stop = False
             while not stop:
@@ -88,11 +97,18 @@ class _AsyncWriter:
                 # WAL lets it write while reader threads (web UI) read on theirs.
                 with db.connection_context():
                     with db.atomic():
-                        for item in batch:
+                        for item_fn, _ in batch:
                             try:
-                                item()
+                                item_fn()
                             except Exception as e:
                                 logging.error(f"DB write failed: {e}")
+                # Only after the commit above actually lands: a reader on
+                # another connection cannot see this batch's rows before
+                # this point (true even in WAL mode), so notifying any
+                # earlier would have widgets re-query and find nothing new.
+                events_in_batch = {ev for _, ev in batch if ev}
+                for ev in events_in_batch:
+                    bus.emit(ev)
             finally:
                 for _ in batch:
                     self._q.task_done()
@@ -298,7 +314,7 @@ class InternalDatabaseLogger:
 # DATABASE MANAGER ##################################################################################################################################
 class DatabaseManager:
     """Manages the Peewee ORM connection and schema for Vigil."""
-    def __init__(self, db_path: str = "vigil.db", write_batch_seconds: float = 5.0):
+    def __init__(self, db_path: str = "vigil.db", write_batch_seconds: float = 1.0):
         self.db_path = db_path
         _writer.batch_window = write_batch_seconds
         self._connect_and_init()
@@ -381,11 +397,12 @@ class DatabaseManager:
     def insert_metric(self, target: str, collector: str, metric_name: str, value: float, metadata: Optional[str] = None):
         """Queue a metric record for the background writer (non-blocking)."""
         _writer.submit(lambda: Metric.create(
-            target=target, collector=collector, metric_name=metric_name, value=value, metadata=metadata))
+            target=target, collector=collector, metric_name=metric_name, value=value, metadata=metadata),
+            event='metric')
 
     def insert_status(self, collector_id: str, state: str):
         """Queue a status history record for the background writer (non-blocking)."""
-        _writer.submit(lambda: StatusHistory.create(collector_id=collector_id, state=state))
+        _writer.submit(lambda: StatusHistory.create(collector_id=collector_id, state=state), event='status')
 
     def flush(self, timeout: Optional[float] = None):
         """Block until all queued writes have been committed (mainly for tests)."""
@@ -459,7 +476,7 @@ class DatabaseManager:
                      source_id: Optional[str] = None):
         """Queue an event record for the background writer (non-blocking)."""
         _writer.submit(lambda: Event.create(level=level, message=message, target=target,
-                                            source_id=source_id))
+                                            source_id=source_id), event='event')
 
     def recent_events(self, limit: int = 200, level: Optional[str] = None,
                       target: Optional[str] = None, search: Optional[str] = None):
@@ -510,7 +527,7 @@ class DatabaseManager:
             .insert(target=target, source=source, level=level,
                     message=message, dedup_hash=dedup_hash)
             .on_conflict_ignore()
-            .execute()))
+            .execute()), event='log_line')
 
     def prune_logs(self, retention_days: int) -> int:
         """
@@ -674,7 +691,8 @@ class DatabaseManager:
 
     def set_setting(self, key: str, value: str):
         """Queue a runtime setting update for the background writer (non-blocking)."""
-        _writer.submit(lambda: Setting.insert(key=key, value=value).on_conflict_replace().execute())
+        _writer.submit(lambda: Setting.insert(key=key, value=value).on_conflict_replace().execute(),
+                       event='setting')
 
     def get_logger(self, target: str, plugin_name: str,
                    plugin_id: Optional[str] = None) -> InternalDatabaseLogger:

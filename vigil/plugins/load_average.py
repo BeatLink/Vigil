@@ -1,6 +1,6 @@
 from typing import Dict, Any, Optional
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # Single SSH read — no sleep needed for load averages.
@@ -118,4 +118,4 @@ class LoadAveragePlugin(BasePlugin):
             if load_15m:
                 load_15m_label.text = f'{load_15m.value:.0f}%'
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', load_1m_label, update_cards)

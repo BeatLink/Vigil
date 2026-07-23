@@ -61,7 +61,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 def _folder_status_script(api_url: str, timeout: int, api_key_command: Optional[str],
@@ -315,4 +315,4 @@ class SyncthingPlugin(BasePlugin):
                 stalled_label.style(
                     f'color: {STATUS_COLORS["warning" if count else "online"]}')
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', folders_label, update_cards)

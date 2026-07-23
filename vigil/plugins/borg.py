@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.time_utils import parse_duration, format_duration, format_age
 from vigil.core.modules.controllers.job_controller import JobRejected
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event, safe_timer
 
 
 _DEFAULT_LAYOUT = [
@@ -872,13 +872,21 @@ class BorgPlugin(BasePlugin):
             self.internal_modules['ui']['events_table'](title='EVENTS', limit=100,
                                                         full_height=True)
 
+        # Job state (running/progress/finished) isn't covered by any DataBus
+        # event — jobs stay synchronous/DB-backed by design (see
+        # DatabaseManager's JOBS section), so a running backup's progress can
+        # update many times with no accompanying metric write to piggyback
+        # on. Polled on its own short timer instead of folded into the
+        # metric-driven `update()` below, so watching a live backup's
+        # progress doesn't stall waiting for an unrelated metric to fire.
+        safe_timer(2.0, update_jobs)
+
         def update():
             m = self.latest_metric('last_backup_epoch')
             epoch_val = m.value if m else None
 
             self._update_stat_cards(size_label, dedup_label, count_label)
             self._refresh_archives_table(archives_table)
-            update_jobs()
 
             if epoch_val is None:
                 state_label.text = 'UNKNOWN'
@@ -900,8 +908,7 @@ class BorgPlugin(BasePlugin):
             age_label.text = format_age(age)
             age_label.style(f"color: {STATUS_COLORS['online' if is_fresh else 'failed']}")
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event('metric', state_label, update)
 
     def _update_stat_cards(self, size_label, dedup_label, count_label) -> None:
         """Refresh the repository statistics cards from the latest metrics."""
@@ -980,8 +987,10 @@ class BorgPlugin(BasePlugin):
         """
         Build the job panel: run/cancel controls, live progress, and history.
 
-        Returns an update callable the page timer drives, so job state stays
-        current without the panel owning a second timer.
+        Returns an update callable. Job state isn't covered by any DataBus
+        event (jobs stay synchronous/DB-backed by design), so the caller
+        drives this on its own short safe_timer rather than the metric-driven
+        on_data_event the rest of the page now uses.
         """
         from nicegui import ui
         from vigil.core.ui.components import card

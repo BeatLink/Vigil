@@ -1,6 +1,6 @@
 from typing import Dict, Any, Optional, Tuple
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 _COLLECT_CMD = (
@@ -116,4 +116,4 @@ class CpuUsagePlugin(BasePlugin):
                 cpu_label.text = f'{cpu.value:.1f}%'
                 cpu_label.style(f'color: {STATUS_COLORS[_level_for(cpu.value, self.cpu_warning, self.cpu_threshold)]}')
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', cpu_label, update_cards)

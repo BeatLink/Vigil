@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 
 
 _DEFAULT_LAYOUT = [
@@ -81,4 +81,4 @@ class ZFSPoolPlugin(BasePlugin):
                 color = STATUS_COLORS['failed'] if pct >= self.threshold else STATUS_COLORS['online']
                 usage_label.style(f'color: {color}')
 
-        safe_timer(5.0, update_usage)
+        on_data_event('metric', usage_label, update_usage)

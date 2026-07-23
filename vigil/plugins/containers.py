@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # List every container (running and stopped) as tab-separated Name<TAB>State.
@@ -176,7 +176,7 @@ class ContainersPlugin(BasePlugin):
                 color = STATUS_COLORS['warning'] if stopped else STATUS_COLORS['online']
                 stopped_label.style(f"color: {color}")
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', total_label, update_cards)
 
 
 def _shquote(s: str) -> str:

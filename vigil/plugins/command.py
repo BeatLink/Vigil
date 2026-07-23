@@ -2,7 +2,7 @@ import re
 from typing import Dict, Any, Optional
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 _DEFAULT_LAYOUT_METRIC = [
@@ -157,8 +157,7 @@ class CommandPlugin(BasePlugin):
                     value_label.text = f'{val_m.value:g}{self.value_unit}'
                     value_label.style(f"color: {STATUS_COLORS[self._level_for_value(val_m.value)]}")
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event('metric', exit_label, update)
 
 
 def _shquote(s: str) -> str:

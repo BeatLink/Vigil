@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional, Tuple
 
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 
 # Sectors are a fixed 512 bytes in /proc/diskstats regardless of physical
 # sector size — this is a kernel ABI constant, not the device geometry.
@@ -167,4 +167,4 @@ class DiskIoPlugin(BasePlugin):
             if write:
                 write_label.text = _format_rate(write.value)
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', read_label, update_cards)

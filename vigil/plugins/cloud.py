@@ -1,6 +1,6 @@
 from typing import Dict, Any, Optional, Tuple
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 
 # The link-local metadata endpoint is the same address on every major provider;
 # the paths differ, and AWS IMDSv2 additionally requires a token header.
@@ -150,8 +150,7 @@ class CloudPlugin(BasePlugin):
                     if fields.get(key):
                         info_card(key.replace('_', ' ').upper(), str(fields[key]))
 
-        update()
-        safe_timer(10.0, update)
+        on_data_event('setting', provider_label, update)
 
 
 def _parse_kv(text: str) -> Dict[str, str]:

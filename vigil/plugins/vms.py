@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # `virsh list --all` output has a header + separator then rows:
@@ -172,7 +172,7 @@ class VmsPlugin(BasePlugin):
                 running_label.style(f"color: {STATUS_COLORS['online']}")
                 stopped_label.text = str(stopped)
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', total_label, update_cards)
 
 
 def _parse_row(line: str):

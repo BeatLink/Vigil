@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 
@@ -197,4 +197,4 @@ class TriliumPlugin(BasePlugin):
             if total:
                 notes_label.text = f'{int(total.value):,}'
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', lastmod_label, update_cards)

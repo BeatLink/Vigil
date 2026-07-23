@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from nicegui import app, ui
 from vigil.core.data.database import Metric, Event, StatusHistory, Setting
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
-from .components import action_chip, card, section_title, safe_timer
+from .components import action_chip, card, section_title, safe_timer, on_data_event
 
 _ICON = Path(__file__).parent.parent.parent / 'static' / 'icon.svg'
 
@@ -176,8 +176,8 @@ def init_gui(engine: Any, port: int = 8080):
               tree._props['nodes'] = build_tree_nodes(engine.plugins)
               tree.update()
 
-          # Periodically refresh tree data (dots and nodes)
-          safe_timer(5.0, refresh_tree)
+          # Refresh tree data (dots and nodes) whenever a monitor's status changes
+          on_data_event('status', tree, refresh_tree, run_now=False)
 
           # Restore previously saved expanded state
           def _load_expanded() -> list:
@@ -283,7 +283,7 @@ def init_gui(engine: Any, port: int = 8080):
           target_in.on_value_change(_on_target)
           search_in.on_value_change(_on_search)
 
-          safe_timer(5.0, refresh_events, defer_first=True)
+          on_data_event('event', events_table, refresh_events, run_now=False)
 
       def render_overview():
           section_title('Monitors', 'mb-6 font-light')
@@ -451,7 +451,7 @@ def init_gui(engine: Any, port: int = 8080):
               type_chart.update()
               update_table()
 
-          safe_timer(10.0, update_charts, defer_first=True)
+          on_data_event('status', status_chart, update_charts, run_now=False)
 
           with ui.row().classes('w-full gap-4'):
               with card('flex-1'):
@@ -469,7 +469,7 @@ def init_gui(engine: Any, port: int = 8080):
                       query = Metric.select().order_by(Metric.timestamp.desc()).limit(20)
                       m_table.rows = [m.__data__ for m in query]
                       m_table.update()
-                  safe_timer(5.0, update_m)
+                  on_data_event('metric', m_table, update_m)
 
               with card('flex-1'):
                   ui.label('Recent Events').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
@@ -485,7 +485,7 @@ def init_gui(engine: Any, port: int = 8080):
                       query = Event.select().order_by(Event.timestamp.desc()).limit(20)
                       e_table.rows = [e.__data__ for e in query]
                       e_table.update()
-                  safe_timer(5.0, update_e)
+                  on_data_event('event', e_table, update_e)
 
       def render_plugin_detail(plugin: Any):
           info = plugin.present()

@@ -1,4 +1,5 @@
 from nicegui import ui
+from vigil.core.data.events import bus
 from .theme import TEXT, TEXT_MUTED, PRIMARY, ACCENT, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
 
 
@@ -72,6 +73,70 @@ def safe_timer(interval: float, callback, defer_first: bool = False):
     return timer
 
 
+def on_data_event(event, element, callback, run_now: bool = True):
+    """
+    Re-run `callback` whenever DataBus fires `event`, instead of polling it
+    on a fixed interval.
+
+    `event` is a single event name, or an iterable of several — some widgets
+    read more than one data type in one callback (e.g. a plugin card that
+    displays both a Setting and a Metric) and need to refresh on any of them
+    without running `callback` more than once per actual firing or paying
+    for `run_now`'s initial call more than once.
+
+    `element` is the widget `callback` updates (a table, chart, label, ...) —
+    used purely to detect when it's gone, the same way _SafeTimer checks its
+    own `self.id not in self.client.elements`. This helper isn't itself a
+    NiceGUI Element the way a timer is, so it has no such attachment of its
+    own to check; the caller's widget stands in for it.
+
+    `run_now=True` (default) calls it once immediately for the widget's
+    initial paint, same as safe_timer(..., defer_first=False) does today.
+
+    Unlike safe_timer, a stale subscription has no natural next tick to
+    detect its own detachment on and cancel itself — DataBus may not fire
+    `event` again for a long time (or ever) after the widget is gone, and
+    until it does, the callback (and everything its closure holds) stays
+    registered, leaking. So detachment is checked from two directions:
+      - each firing checks whether `element` has since been detached and
+        unsubscribes if so — handles same-client navigation
+        (main_container.clear()), but only runs when another event fires;
+      - client.on_disconnect() unsubscribes immediately on a full browser
+        disconnect, which otherwise might never trigger another event.
+    """
+    events = [event] if isinstance(event, str) else list(event)
+
+    def _detached() -> bool:
+        if getattr(element, 'is_deleted', False):
+            return True
+        try:
+            return element.id not in element.client.elements
+        except Exception:
+            return True
+
+    offs: list = []
+
+    def _unsubscribe():
+        for off in offs:
+            off()
+
+    def _wrapped():
+        if _detached():
+            _unsubscribe()
+            return
+        try:
+            callback()
+        except RuntimeError as e:
+            if 'parent slot' not in str(e) and 'has been deleted' not in str(e):
+                raise
+            _unsubscribe()
+
+    offs.extend(bus.on(ev, _wrapped) for ev in events)
+    element.client.on_disconnect(_unsubscribe)
+    if run_now:
+        _wrapped()
+
+
 # Standardized UI Sizing Constants
 LABEL_CLASS = 'text-xs font-bold'
 VALUE_CLASS = 'text-2xl font-bold'
@@ -116,7 +181,7 @@ def metric_table(collector: str, title: str = 'Monitor Metrics', limit: int = 15
             table.rows = [m.__data__ for m in query]
             table.update()
 
-        safe_timer(5.0, update)
+        on_data_event('metric', table, update)
         return table
 
 def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', limit: int = 15, full_height: bool = False):
@@ -160,7 +225,7 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
             table.rows = [e.__data__ for e in query]
             table.update()
 
-        safe_timer(5.0, update_logs)
+        on_data_event('log_line', table, update_logs)
         return table
 
 def event_table(plugin_name: str, plugin_id: str = '', target: str = '',
@@ -230,8 +295,7 @@ def event_table(plugin_name: str, plugin_id: str = '', target: str = '',
             ]
             table.update()
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event('event', table, update)
         return table
 
 
@@ -263,8 +327,7 @@ def history_chart(title: str, collector: str, metric_name: str, limit: int = 30)
             chart.options['series'][0]['data'] = [m.value for m in history]
             chart.update()
 
-        safe_timer(5.0, update)
-        update()
+        on_data_event('metric', chart, update)
         return chart
 
 def render_host_card(target: str):
@@ -287,5 +350,5 @@ def render_status_card(collector: str, metric_name: str, title: str = 'STATUS',
             is_on = last.value > 0.5
             lbl.text = on_text if is_on else off_text
             lbl.style(f"color: {STATUS_COLORS['online'] if is_on else STATUS_COLORS['failed']}")
-    safe_timer(2.0, update)
+    on_data_event('metric', lbl, update)
     return lbl

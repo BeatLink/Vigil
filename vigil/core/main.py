@@ -181,6 +181,14 @@ class VigilEngine:
 
     async def run(self):
         logging.info("Vigil Engine started...")
+
+        # DataBus notifications from the background DB-writer thread need a
+        # running event loop to hand off to (call_soon_threadsafe); this is
+        # the first point one is guaranteed to exist and be the loop NiceGUI
+        # itself is serving requests on.
+        from vigil.core.data.events import bus
+        bus.bind_loop(asyncio.get_running_loop())
+
         self.db.insert_event("INFO", "Vigil Engine started polling loop.", "vigil_core")
 
         self._start_exporters()

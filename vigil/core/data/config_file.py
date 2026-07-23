@@ -32,15 +32,22 @@ class ConfigFileManager:
 
     # Default window over which queued DB writes (metrics, status history,
     # events, log lines) are batched into one commit. Larger values mean
-    # fewer disk commits/fsyncs under load, at the cost of losing up to this
-    # many seconds of unwritten data on a crash.
-    DEFAULT_WRITE_BATCH_SECONDS = 5.0
+    # fewer disk commits under load, at the cost of losing up to this many
+    # seconds of unwritten data on a crash, AND of the same delay before
+    # DataBus notifies subscribed widgets (an event only fires once its
+    # batch has actually committed — see _AsyncWriter). Kept short now that
+    # `synchronous=OFF` (database.py) removed the fsync cost batching was
+    # originally hiding; a short window still coalesces write bursts into
+    # one transaction, it just does so quickly enough that event-driven
+    # widgets feel responsive rather than merely no-worse-than-polling.
+    DEFAULT_WRITE_BATCH_SECONDS = 1.0
 
     @property
     def write_batch_seconds(self) -> float:
         """
         Seconds the background DB writer accumulates queued writes before
-        committing them as one transaction.
+        committing them as one transaction, and thus the floor on how soon
+        DataBus can notify the UI of that write.
 
         Read from `database.write_batch_seconds`; defaults to
         DEFAULT_WRITE_BATCH_SECONDS. A value <= 0 disables batching (each

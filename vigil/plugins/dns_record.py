@@ -31,7 +31,7 @@ import dns.exception
 import dns.resolver
 
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, safe_timer
+from vigil.core.ui.components import info_card, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 _DEFAULT_LAYOUT = [
@@ -203,5 +203,4 @@ class DnsRecordPlugin(BasePlugin):
                         f'background: {color}22; color: {color}'
                     )
 
-        update()
-        safe_timer(5.0, update)
+        on_data_event(('metric', 'setting'), ttl_label, update)

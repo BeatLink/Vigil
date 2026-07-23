@@ -66,7 +66,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.time_utils import parse_duration
-from vigil.core.ui.components import info_card, history_chart, safe_timer
+from vigil.core.ui.components import info_card, history_chart, on_data_event
 from vigil.core.ui.theme import STATUS_COLORS
 
 # Marks the end of the summary payload so both API responses can be fetched in
@@ -460,4 +460,4 @@ class PiholePlugin(BasePlugin):
                 blocking_label.text = 'ENABLED' if on else 'DISABLED'
                 blocking_label.style(f'color: {STATUS_COLORS["online" if on else "failed"]}')
 
-        safe_timer(5.0, update_cards)
+        on_data_event('metric', block_rate_label, update_cards)
