@@ -44,10 +44,25 @@ Config options:
   min_queries         Queries needed before the block rate is judged at all
                       (default: 100). Below this the ratio is noise — a freshly
                       restarted FTL legitimately shows 0% after two queries.
+
+Control actions:
+
+  Enable Blocking    Turns blocking back on with no timer, for the "blocking is
+                      DISABLED" fault this monitor flags. Safe to fire any time
+                      blocking is off, whether that was deliberate or not — it
+                      is not offered when blocking already reads enabled.
+  Update Gravity      Rebuilds the blocklist database, the remediation for both
+                      an empty gravity list and a stale one. Run on demand
+                      rather than on a timer here: an automatic rebuild retry
+                      would mask a blocklist source that is failing every time.
+
+Disabling blocking is deliberately not offered as a button: it is the one state
+this monitor exists to catch, so a dashboard control for it would let a
+mis-click quietly recreate the fault it watches for.
 """
 import json
 import shlex
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.time_utils import parse_duration
@@ -60,39 +75,101 @@ from vigil.core.ui.theme import STATUS_COLORS
 _SEP = "@@VIGIL_SPLIT@@"
 
 
+def _auth_preamble(base: str, timeout: int, password_command: Optional[str],
+                   password: Optional[str]) -> Tuple[List[str], str]:
+    """
+    Build the shell lines that exchange a password for a session id, and the
+    curl flags that carry it.
+
+    Returns (lines, auth_flags). When no credentials are configured the lines
+    are empty and the flags blank, matching an instance reachable without auth.
+    The password is resolved on the monitored host when `password_command` is
+    used, so it never passes through Vigil.
+    """
+    if not (password_command or password):
+        return [], ''
+
+    lines = []
+    if password_command:
+        lines.append(f"__pw=$({password_command})")
+    else:
+        lines.append(f"__pw={shlex.quote(password)}")
+
+    # Exchange the password for a session id. jq is not assumed present, so
+    # the sid is pulled out with sed.
+    lines.append(
+        f'__sid=$(curl -s -m {timeout} -X POST {shlex.quote(base + "/api/auth")} '
+        f'-H "Content-Type: application/json" '
+        f'''--data "{{\\"password\\":\\"$__pw\\"}}" '''
+        f"""| sed -n 's/.*"sid"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')"""
+    )
+    return lines, '-H "X-FTL-SID: $__sid"'
+
+
 def _build_fetch_script(api_url: str, timeout: int, password_command: Optional[str],
                         password: Optional[str]) -> str:
     """
     Build a shell script that fetches the summary and blocking-status endpoints.
 
     Authenticates first when a password is supplied, reusing the returned
-    session id (SID) for both calls. The password is resolved on the remote host
-    when `password_command` is used, so it never passes through Vigil.
+    session id (SID) for both calls.
     """
     base = api_url.rstrip('/')
     lines = ["set -e"]
 
-    if password_command:
-        lines.append(f"__pw=$({password_command})")
-    elif password:
-        lines.append(f"__pw={shlex.quote(password)}")
-
-    if password_command or password:
-        # Exchange the password for a session id. jq is not assumed present, so
-        # the sid is pulled out with sed.
-        lines.append(
-            f'__sid=$(curl -s -m {timeout} -X POST {shlex.quote(base + "/api/auth")} '
-            f'-H "Content-Type: application/json" '
-            f'''--data "{{\\"password\\":\\"$__pw\\"}}" '''
-            f"""| sed -n 's/.*"sid"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')"""
-        )
-        auth = '-H "X-FTL-SID: $__sid"'
-    else:
-        auth = ''
+    auth_lines, auth = _auth_preamble(base, timeout, password_command, password)
+    lines.extend(auth_lines)
 
     lines.append(f'curl -s -m {timeout} {auth} {shlex.quote(base + "/api/stats/summary")}')
     lines.append(f'echo "{_SEP}"')
     lines.append(f'curl -s -m {timeout} {auth} {shlex.quote(base + "/api/dns/blocking")}')
+    return '\n'.join(lines)
+
+
+def _build_blocking_script(api_url: str, timeout: int, password_command: Optional[str],
+                           password: Optional[str], enabled: bool) -> str:
+    """
+    Build a shell script that POSTs a new blocking state.
+
+    `--fail` turns a rejected request (e.g. an expired session) into a non-zero
+    exit rather than a "successful" curl that merely fetched an error body.
+    """
+    base = api_url.rstrip('/')
+    lines = ["set -e"]
+
+    auth_lines, auth = _auth_preamble(base, timeout, password_command, password)
+    lines.extend(auth_lines)
+
+    body = json.dumps({"blocking": enabled, "timer": None})
+    lines.append(
+        f'curl -s -f -m {timeout} -X POST {auth} '
+        f'-H "Content-Type: application/json" '
+        f'--data {shlex.quote(body)} '
+        f'{shlex.quote(base + "/api/dns/blocking")}'
+    )
+    return '\n'.join(lines)
+
+
+def _build_gravity_script(api_url: str, timeout: int, password_command: Optional[str],
+                          password: Optional[str]) -> str:
+    """
+    Build a shell script that triggers a gravity (blocklist) rebuild.
+
+    `/api/action/gravity` streams progress as Server-Sent Events rather than
+    returning a single JSON body; the stream is discarded and only the exit
+    code is used; a generous timeout is used since a full rebuild can take
+    much longer than the usual API round trip.
+    """
+    base = api_url.rstrip('/')
+    lines = ["set -e"]
+
+    auth_lines, auth = _auth_preamble(base, timeout, password_command, password)
+    lines.extend(auth_lines)
+
+    lines.append(
+        f'curl -s -f -m {timeout} {auth} '
+        f'{shlex.quote(base + "/api/action/gravity")} > /dev/null'
+    )
     return '\n'.join(lines)
 
 
@@ -162,6 +239,9 @@ class PiholePlugin(BasePlugin):
         # Seconds allowed for the remote curl calls. Distinct from self.timeout,
         # which bounds the SSH command as a whole and must stay the larger.
         self.api_timeout = int(config.get('api_timeout', 10))
+        # Gravity rebuilds take far longer than a status read, so they get
+        # their own generous deadline rather than inheriting api_timeout.
+        self.gravity_timeout = int(config.get('gravity_timeout', 120))
 
     async def on_collect(self):
         script = _build_fetch_script(
@@ -274,7 +354,52 @@ class PiholePlugin(BasePlugin):
         self.db_logger.write(' | '.join(parts), level=log_level)
         self.set_status(level)
 
+    def get_actions(self) -> List[Dict[str, str]]:
+        """
+        Expose the remediations for the faults this monitor detects.
+
+        Disabling blocking is deliberately not offered: it is the one state
+        this monitor exists to catch, so a dashboard control for it would let
+        a mis-click quietly recreate the fault it watches for. Enable and
+        gravity-rebuild are both reversible, queue-free operations, matching
+        the "no confirmation step" constraint the dashboard fires actions
+        under.
+        """
+        return [
+            {'name': 'Enable Blocking', 'action_id': 'enable_blocking',
+             'variant': 'primary', 'icon': 'shield'},
+            {'name': 'Update Gravity', 'action_id': 'update_gravity',
+             'variant': 'secondary', 'icon': 'refresh'},
+        ]
+
     async def on_action(self, action_id: str, **kwargs) -> bool:
+        if action_id == 'enable_blocking':
+            script = _build_blocking_script(
+                self.api_url, self.api_timeout, self.api_password_command,
+                self.api_password, enabled=True,
+            )
+            status, _, stderr = await self.ssh_controller.execute_action(script)
+            if status != 0:
+                self.db_logger.write(
+                    f"Failed to enable blocking: {stderr.strip()}", level="ERROR")
+                return False
+            self.db_logger.write("Blocking enabled", level="INFO")
+            return True
+
+        if action_id == 'update_gravity':
+            script = _build_gravity_script(
+                self.api_url, self.gravity_timeout, self.api_password_command,
+                self.api_password,
+            )
+            status, _, stderr = await self.ssh_controller.execute_action(
+                script, timeout=self.gravity_timeout)
+            if status != 0:
+                self.db_logger.write(
+                    f"Gravity update failed: {stderr.strip()}", level="ERROR")
+                return False
+            self.db_logger.write("Gravity update triggered", level="INFO")
+            return True
+
         return False
 
     def render_ui(self, context: str = 'page'):

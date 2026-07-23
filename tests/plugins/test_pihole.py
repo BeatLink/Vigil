@@ -7,7 +7,9 @@ import pytest
 from vigil.plugins.pihole import (
     PiholePlugin,
     _SEP,
+    _build_blocking_script,
     _build_fetch_script,
+    _build_gravity_script,
     _format_age,
     _parse_response,
 )
@@ -254,6 +256,78 @@ class TestBlockingDisabled:
         assert _latest_status() == "failed"
 
 
+class TestBuildBlockingScript:
+    def test_posts_to_blocking_endpoint(self):
+        script = _build_blocking_script(
+            "http://127.0.0.1:9018", 10, None, None, enabled=True)
+        assert "/api/dns/blocking" in script
+        assert '"blocking": true' in script
+
+    def test_disabled_body(self):
+        script = _build_blocking_script(
+            "http://127.0.0.1:9018", 10, None, None, enabled=False)
+        assert '"blocking": false' in script
+
+    def test_authenticates_when_password_given(self):
+        script = _build_blocking_script(
+            "http://127.0.0.1:9018", 10, None, "hunter2", enabled=True)
+        assert "/api/auth" in script
+        assert "X-FTL-SID" in script
+
+    def test_password_command_runs_on_remote_host(self):
+        script = _build_blocking_script(
+            "http://127.0.0.1:9018", 10, "cat /run/secrets/pihole_api", None, enabled=True)
+        assert "cat /run/secrets/pihole_api" in script
+
+
+class TestBuildGravityScript:
+    def test_hits_gravity_endpoint(self):
+        script = _build_gravity_script("http://127.0.0.1:9018", 120, None, None)
+        assert "/api/action/gravity" in script
+
+    def test_authenticates_when_password_given(self):
+        script = _build_gravity_script("http://127.0.0.1:9018", 120, None, "hunter2")
+        assert "/api/auth" in script
+        assert "X-FTL-SID" in script
+
+
 class TestPiholeActions:
-    async def test_on_action_always_returns_false(self, plugin):
+    def test_exposes_expected_actions(self, plugin):
+        ids = {a["action_id"] for a in plugin.get_actions()}
+        assert ids == {"enable_blocking", "update_gravity"}
+
+    def test_disable_blocking_is_not_offered(self, plugin):
+        # Disabling blocking is the one fault this monitor exists to catch;
+        # a dashboard control for it would let a mis-click recreate it.
+        blob = json.dumps(plugin.get_actions()).lower()
+        assert "disable" not in blob
+
+    async def test_unknown_action_returns_false(self, plugin):
         assert await plugin.on_action("anything") is False
+
+    async def test_enable_blocking_success(self, plugin):
+        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
+        assert await plugin.on_action("enable_blocking") is True
+        script = plugin.ssh_controller.execute_action.call_args[0][0]
+        assert "/api/dns/blocking" in script
+        assert '"blocking": true' in script
+
+    async def test_enable_blocking_failure(self, plugin):
+        plugin.ssh_controller.execute_action = AsyncMock(return_value=(1, "", "connection refused"))
+        assert await plugin.on_action("enable_blocking") is False
+
+    async def test_update_gravity_success(self, plugin):
+        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
+        assert await plugin.on_action("update_gravity") is True
+        script = plugin.ssh_controller.execute_action.call_args[0][0]
+        assert "/api/action/gravity" in script
+
+    async def test_update_gravity_failure(self, plugin):
+        plugin.ssh_controller.execute_action = AsyncMock(return_value=(1, "", "timed out"))
+        assert await plugin.on_action("update_gravity") is False
+
+    async def test_update_gravity_uses_gravity_timeout(self, plugin):
+        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
+        await plugin.on_action("update_gravity")
+        _, kwargs = plugin.ssh_controller.execute_action.call_args
+        assert kwargs.get("timeout") == plugin.gravity_timeout
