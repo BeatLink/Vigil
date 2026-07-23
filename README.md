@@ -58,7 +58,7 @@ vigil/
 | Concern        | Technology                          |
 |----------------|--------------------------------------|
 | Language       | Python 3.9+                          |
-| Connectivity   | Paramiko (SSH), Requests/Httpx (HTTP)|
+| Connectivity   | AsyncSSH (SSH), Requests/Httpx (HTTP)|
 | Configuration  | YAML                                 |
 | Concurrency    | `asyncio`                            |
 | Storage        | SQLite via Peewee ORM                |
@@ -985,6 +985,25 @@ ssh_config:
   port: 22
   key_file: "/home/vigil/.ssh/id_ed25519"
 ```
+
+Vigil speaks SSH natively (AsyncSSH) rather than shelling out to the system
+`ssh` client, and opens one persistent connection per host — every SSH-based
+monitor on that host runs its commands as a channel on that one connection
+rather than a separate connection each. Host key verification is
+trust-on-first-use: the first successful connection to a host stores its key
+(under `$VIGIL_SSH_CONTROL_DIR/known_hosts`, defaulting to a `vigil-ssh`
+directory under the system temp dir), and every later connection is checked
+against it — a changed key is refused rather than silently accepted.
+
+**The number of monitors you can point at one host is bounded by how many
+concurrent SSH sessions that host's `sshd` allows** (`MaxSessions` in
+`sshd_config`, default `10`). Vigil caps its own concurrency per host below
+that default (8 regular monitors + 2 for long-running jobs like `borg`, at
+most 10 total in flight at once), so a host running its `sshd` at the
+OpenSSH default is safe by construction — extra monitors queue rather than
+fail. Hosts with many monitors, or where jobs may overlap with a burst of
+polling, benefit from raising `MaxSessions` in that host's own `sshd_config`
+(e.g. `MaxSessions 50`) to reduce queuing.
 
 ---
 

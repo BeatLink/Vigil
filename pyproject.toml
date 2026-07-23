@@ -20,6 +20,11 @@ dependencies = [
     # Already a transitive dependency of fastapi/uvicorn; declared directly
     # since Vigil's own code imports it at runtime, not just in tests.
     "httpx>=0.27.0",
+    # Native async SSH transport (see vigil/core/common/ssh_connector.py) —
+    # replaces shelling out to the system `ssh` client with a persistent
+    # asyncssh connection per host, removing the fork/exec cost and the
+    # collector's old thread-pool/semaphore ceiling.
+    "asyncssh>=2.14.0",
 ]
 
 [project.scripts]

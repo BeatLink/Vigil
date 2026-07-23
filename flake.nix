@@ -44,9 +44,12 @@
                     nicegui
                     dnspython
                     # Async HTTP client the web process uses to reach the
-                    # collector's internal API (see
-                    # vigil/core/modules/controllers/remote_proxy.py).
+                    # collector's internal API (see vigil/web/remote_proxy.py).
                     httpx
+                    # Native async SSH transport (see
+                    # vigil/core/common/ssh_connector.py) — the collector
+                    # process's only way of talking to monitored hosts.
+                    asyncssh
                 ];
 
                 vigil-pkg = pkgs.python312Packages.buildPythonApplication {

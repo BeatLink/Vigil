@@ -239,15 +239,17 @@ in
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
 
-      # ping (uptime plugin) and the ssh client (multiplexed remote commands)
-      # must be on PATH.
+      # ping (uptime plugin, run as a local subprocess) must be on PATH.
+      # The system `ssh` client is NOT needed here — Vigil speaks SSH
+      # natively via asyncssh (see core/common/ssh_connector.py) rather than
+      # shelling out.
       path = [
         pkgs.iputils
-        pkgs.openssh
       ];
 
-      # OpenSSH ControlMaster sockets + known_hosts live here (writable, and
-      # ProtectHome hides ~/.ssh). Under the service's private /tmp.
+      # The known_hosts file Vigil's own TOFU host-key trust persists to
+      # (see ssh_connector.py's _TofuClient) lives here — writable, and
+      # ProtectHome hides ~/.ssh. Under the service's private /tmp.
       environment.VIGIL_SSH_CONTROL_DIR = "/tmp/vigil-ssh";
 
       serviceConfig = {

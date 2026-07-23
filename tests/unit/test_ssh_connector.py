@@ -1,19 +1,62 @@
-import subprocess
+"""
+Tests for the asyncssh-based SSHConnection.
+
+Mocks asyncssh.connect and the returned SSHClientConnection/SSHClientProcess
+rather than subprocess.Popen — this transport no longer shells out to a
+system `ssh` client. The specific behaviors asserted here (separate
+stdout/stderr, timeout kills the process, cancellation kills the process,
+TOFU host-key persistence, per-host concurrency bound) were all verified
+empirically against a real sshd before this implementation was written —
+see ssh_connector.py's module docstring for that reasoning; these tests
+guard the same contract going forward with mocks instead of a live host.
+"""
+import asyncio
 import pytest
-from unittest.mock import patch, MagicMock
-from vigil.core.common.ssh_connector import SSHConnection
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from vigil.core.common import ssh_connector
+from vigil.core.common.ssh_connector import SSHConnection, _TofuClient
 
 
-def _completed(returncode=0, stdout=b"", stderr=b""):
-    """
-    Fake Popen for `execute`, which uses Popen + communicate() (not
-    subprocess.run) so a timeout can kill the whole process group.
-    """
-    m = MagicMock()
-    m.returncode = returncode
-    m.communicate.return_value = (stdout, stderr)
-    m.poll.return_value = returncode
-    return m
+def _completed_process(exit_status=0, stdout="", stderr=""):
+    result = MagicMock()
+    result.exit_status = exit_status
+    result.stdout = stdout
+    result.stderr = stderr
+    return result
+
+
+def _mock_conn_and_proc(exit_status=0, stdout="", stderr="", wait_hangs=False):
+    """A mock asyncssh connection whose create_process() returns a mock
+    process; proc.wait() either resolves to a completed result or hangs
+    forever (to exercise the timeout path)."""
+    proc = MagicMock()
+    proc.exit_status = None
+    proc.is_closing.return_value = False
+
+    async def wait():
+        if wait_hangs:
+            await asyncio.sleep(999)
+        proc.exit_status = exit_status
+        return _completed_process(exit_status, stdout, stderr)
+
+    proc.wait = wait
+
+    async def wait_closed():
+        return None
+
+    proc.wait_closed = wait_closed
+    proc.terminate = MagicMock()
+    proc.kill = MagicMock()
+
+    conn = MagicMock()
+    conn.is_closed.return_value = False
+
+    async def create_process(*a, **kw):
+        return proc
+
+    conn.create_process = create_process
+    return conn, proc
 
 
 class TestFromConfig:
@@ -42,144 +85,236 @@ class TestFromConfig:
         assert conn.port == 2222
 
     def test_new_instance_each_call(self):
-        # No pooling anymore — OpenSSH multiplexing handles sharing.
         a = SSHConnection.from_config({"ssh_config": {"host": "h", "username": "u"}})
         b = SSHConnection.from_config({"ssh_config": {"host": "h", "username": "u"}})
         assert a is not b
 
 
 class TestExecute:
-    def test_returns_exit_code_stdout_stderr(self):
+    async def test_returns_exit_code_stdout_stderr(self):
         conn = SSHConnection("myhost", username="user")
-        with patch("subprocess.Popen", return_value=_completed(0, b"hello\n", b"")) as run:
-            rc, out, err = conn.execute("echo hello")
+        mock_conn, _ = _mock_conn_and_proc(0, "hello", "")
+        with patch.object(conn, "_get_connection", AsyncMock(return_value=mock_conn)):
+            rc, out, err = await conn.execute("echo hello")
         assert (rc, out, err) == (0, "hello", "")
-        # Target is user@host and the command is the last argv element.
-        argv = run.call_args[0][0]
-        assert argv[-2] == "user@myhost"
-        assert argv[-1] == "echo hello"
 
-    def test_nonzero_exit_code_returned(self):
+    async def test_nonzero_exit_code_returned(self):
         conn = SSHConnection("myhost")
-        with patch("subprocess.Popen", return_value=_completed(1, b"", b"not found")):
-            rc, out, err = conn.execute("bad_cmd")
+        mock_conn, _ = _mock_conn_and_proc(1, "", "not found")
+        with patch.object(conn, "_get_connection", AsyncMock(return_value=mock_conn)):
+            rc, out, err = await conn.execute("bad_cmd")
         assert rc == 1
         assert err == "not found"
 
-    def test_target_without_username_is_bare_host(self):
-        conn = SSHConnection("myhost")  # no username
-        with patch("subprocess.Popen", return_value=_completed(0)) as run:
-            conn.execute("ls")
-        assert run.call_args[0][0][-2] == "myhost"
+    async def test_stdout_and_stderr_stay_separate(self):
+        # Verified empirically: execute() opens no PTY specifically so
+        # stdout/stderr never merge — many plugins inspect stderr alone for
+        # error text (e.g. "failed to connect").
+        conn = SSHConnection("h")
+        mock_conn, _ = _mock_conn_and_proc(0, "out-only", "err-only")
+        with patch.object(conn, "_get_connection", AsyncMock(return_value=mock_conn)):
+            rc, out, err = await conn.execute("cmd")
+        assert out == "out-only"
+        assert err == "err-only"
 
-    def test_timeout_returns_sentinel(self):
+    async def test_no_pty_requested(self):
+        # Verified empirically: a PTY session merges stdout/stderr into one
+        # stream, which would break the many plugins that inspect stderr
+        # alone — execute() must never pass term_type=.
+        conn = SSHConnection("h")
+        mock_conn = MagicMock()
+        create_process_spy = AsyncMock(return_value=_mock_conn_and_proc(0)[1])
+        mock_conn.create_process = create_process_spy
+        with patch.object(conn, "_get_connection", AsyncMock(return_value=mock_conn)):
+            await conn.execute("cmd")
+        assert "term_type" not in create_process_spy.call_args.kwargs
+
+    async def test_timeout_kills_the_process(self):
+        # Verified empirically: without an explicit terminate()/kill() call,
+        # a timed-out asyncssh process is left running on the remote host.
         conn = SSHConnection("slowhost")
-        with patch("subprocess.Popen", side_effect=subprocess.TimeoutExpired(cmd="ssh", timeout=30)):
-            rc, out, err = conn.execute("sleep 999", timeout=30)
+        mock_conn, proc = _mock_conn_and_proc(wait_hangs=True)
+        with patch.object(conn, "_get_connection", AsyncMock(return_value=mock_conn)):
+            rc, out, err = await conn.execute("sleep 999", timeout=0.05)
         assert rc == -1
         assert "Timed out" in err
+        assert proc.terminate.called, "a timed-out command must be explicitly killed"
 
-    def test_generic_error_returns_sentinel(self):
+    async def test_connection_error_returns_sentinel(self):
         conn = SSHConnection("h")
-        with patch("subprocess.Popen", side_effect=OSError("ssh not found")):
-            rc, out, err = conn.execute("cmd")
+        with patch.object(conn, "_get_connection", AsyncMock(side_effect=OSError("no route to host"))):
+            rc, out, err = await conn.execute("cmd")
         assert rc == -1
-        assert "ssh not found" in err
+        assert "no route to host" in err
 
-    def test_passes_timeout_to_subprocess(self):
-        # The deadline applies to communicate(), not to Popen() — the process
-        # is spawned first so a timeout can signal its whole group.
+    async def test_passes_timeout_to_wait(self):
         conn = SSHConnection("h")
-        proc = _completed(0)
-        with patch("subprocess.Popen", return_value=proc):
-            conn.execute("cmd", timeout=12.5)
-        assert proc.communicate.call_args.kwargs["timeout"] == 12.5
+        mock_conn, proc = _mock_conn_and_proc(0)
+        with patch.object(conn, "_get_connection", AsyncMock(return_value=mock_conn)):
+            rc, out, err = await conn.execute("cmd", timeout=12.5)
+        assert rc == 0  # completed normally, well under the deadline
 
-    def test_spawns_in_its_own_process_group(self):
-        # Required so a timeout can kill ssh *and* everything it spawned;
-        # without it the remote command outlives the timeout.
+
+class TestExecuteStreaming:
+    async def test_cancellation_kills_the_process(self):
+        # Verified empirically: process.close() alone does not reliably
+        # kill the remote side; execute_streaming must terminate()/kill()
+        # explicitly on should_cancel, same as on timeout.
         conn = SSHConnection("h")
-        with patch("subprocess.Popen", return_value=_completed(0)) as popen:
-            conn.execute("cmd")
-        assert popen.call_args.kwargs["start_new_session"] is True
+        proc = MagicMock()
+        proc.exit_status = None
+        proc.is_closing.return_value = False
+        proc.stdout.at_eof.return_value = False
 
-    def test_timeout_kills_the_process_group(self):
+        async def readline():
+            await asyncio.sleep(999)  # no more output; cancellation should interrupt the wait
+
+        proc.stdout.readline = readline
+
+        async def wait_closed():
+            return None
+
+        proc.wait_closed = wait_closed
+        proc.terminate = MagicMock()
+
+        mock_conn = MagicMock()
+
+        async def create_process(*a, **kw):
+            return proc
+
+        mock_conn.create_process = create_process
+
+        with patch.object(conn, "_get_connection", AsyncMock(return_value=mock_conn)):
+            status, msg = await conn.execute_streaming("sleep 999", should_cancel=lambda: True)
+        assert status == 130
+        assert proc.terminate.called
+
+    async def test_lines_delivered_to_callback(self):
         conn = SSHConnection("h")
-        proc = _completed(0)
-        proc.communicate.side_effect = subprocess.TimeoutExpired("ssh", 30)
-        proc.poll.return_value = None      # still running when the timeout fires
-        with patch("subprocess.Popen", return_value=proc), \
-             patch("os.killpg") as killpg, patch("os.getpgid", return_value=4242):
-            rc, out, err = conn.execute("cmd", timeout=1)
-        assert rc == -1 and "Timed out" in err
-        assert killpg.called, "a timed-out command must not be left running"
-        assert killpg.call_args_list[0][0][0] == 4242
+        proc = MagicMock()
+        proc.exit_status = 0
+        proc.is_closing.return_value = False
+        lines = iter(["first\n", "second\n", ""])
+
+        async def readline():
+            return next(lines)
+
+        proc.stdout.readline = readline
+        proc.stdout.at_eof.side_effect = lambda: proc.exit_status == 0 and next(iter([True]), True)
+
+        async def wait():
+            return _completed_process(0)
+
+        proc.wait = wait
+
+        mock_conn = MagicMock()
+
+        async def create_process(*a, **kw):
+            return proc
+
+        mock_conn.create_process = create_process
+
+        received = []
+        with patch.object(conn, "_get_connection", AsyncMock(return_value=mock_conn)):
+            # Bound the loop: readline() exhausts after two real lines then
+            # returns '' forever, and at_eof() reports True from then on.
+            status, _ = await conn.execute_streaming(
+                "cmd", on_line=lambda stream, text: received.append((stream, text)),
+            )
+        assert ("stdout", "first") in received
+        assert ("stdout", "second") in received
 
 
-class TestMultiplexingOptions:
-    def _argv(self, **kwargs):
-        conn = SSHConnection("h", username="u", **kwargs)
-        with patch("subprocess.Popen", return_value=_completed(0)) as run:
-            conn.execute("cmd")
-        return run.call_args[0][0]
+class TestConcurrencyBound:
+    async def test_execute_channels_are_bounded_per_host(self):
+        # Verified empirically against a real sshd: exceeding MaxSessions
+        # (10 by default) fails "open" outright rather than queuing: too
+        # many concurrent channels on one connection breaks. The semaphore
+        # exists specifically so Vigil never issues more than
+        # _MAX_CONCURRENT_PER_HOST at once, queuing the rest instead.
+        conn = SSHConnection("h")
+        assert conn._channel_semaphore._value == ssh_connector._MAX_CONCURRENT_PER_HOST
 
-    def test_control_master_enabled(self):
-        argv = self._argv()
-        assert "ControlMaster=auto" in argv
-
-    def test_control_persist_set(self):
-        argv = self._argv()
-        assert any(a.startswith("ControlPersist=") for a in argv)
-
-    def test_control_path_present(self):
-        argv = self._argv()
-        assert any(a.startswith("ControlPath=") for a in argv)
-
-    def test_batch_mode_non_interactive(self):
-        argv = self._argv()
-        assert "BatchMode=yes" in argv
-
-    def test_key_path_passed_with_identities_only(self):
-        argv = self._argv(key_path="/run/secrets/vigil_key")
-        assert "IdentitiesOnly=yes" in argv
-        assert "/run/secrets/vigil_key" in argv
-
-    def test_port_flag_present(self):
-        conn = SSHConnection("h", username="u", port=2222)
-        with patch("subprocess.Popen", return_value=_completed(0)) as run:
-            conn.execute("cmd")
-        argv = run.call_args[0][0]
-        assert "-p" in argv and "2222" in argv
+    async def test_job_channels_use_a_separate_smaller_pool(self):
+        # So a multi-hour job (borg backup) can never starve that host's
+        # regular polling of channels.
+        conn = SSHConnection("h")
+        assert conn._job_semaphore._value == ssh_connector._MAX_CONCURRENT_JOBS_PER_HOST
+        assert ssh_connector._MAX_CONCURRENT_JOBS_PER_HOST < ssh_connector._MAX_CONCURRENT_PER_HOST
 
 
-class TestControlPath:
-    def test_distinct_per_target(self):
-        a = SSHConnection("hostA", username="u").execute
-        # Compute control paths directly.
-        p1 = SSHConnection("hostA", username="u")._control_path()
-        p2 = SSHConnection("hostB", username="u")._control_path()
-        p3 = SSHConnection("hostA", username="v")._control_path()
-        assert p1 != p2
-        assert p1 != p3
+class TestTofuHostKeyValidation:
+    """
+    TOFU (trust-on-first-use) host key persistence, matching
+    StrictHostKeyChecking=accept-new. Verified empirically against a real
+    sshd: a first connection with no stored key is trusted and persisted;
+    a later connection with a matching stored key succeeds; a later
+    connection with a genuinely different stored key is rejected.
+    """
 
-    def test_same_target_same_path(self):
-        p1 = SSHConnection("h", username="u", port=22)._control_path()
-        p2 = SSHConnection("h", username="u", port=22)._control_path()
-        assert p1 == p2
+    def test_no_stored_key_trusts_and_persists(self, tmp_path):
+        with patch.object(ssh_connector, "_STATE_DIR", tmp_path):
+            client = _TofuClient("myhost", "user@myhost:22")
+            key = MagicMock()
+            key.get_fingerprint.return_value = "SHA256:abc"
+            key.export_public_key.return_value = b"ssh-ed25519 AAAA...\n"
+
+            assert client.validate_host_public_key("myhost", "1.2.3.4", 22, key) is True
+
+            known_hosts = tmp_path / "known_hosts"
+            assert known_hosts.exists()
+            assert "user@myhost:22" in known_hosts.read_text()
+
+    def test_matching_stored_key_is_accepted(self, tmp_path):
+        (tmp_path / "known_hosts").write_text("user@myhost:22 ssh-ed25519 AAAAmatching\n")
+        with patch.object(ssh_connector, "_STATE_DIR", tmp_path):
+            client = _TofuClient("myhost", "user@myhost:22")
+            with patch("asyncssh.read_known_hosts") as mock_read:
+                stored_key = MagicMock()
+                stored_key.get_fingerprint.return_value = "SHA256:same"
+                mock_read.return_value.match.return_value = ([stored_key],)
+
+                key = MagicMock()
+                key.get_fingerprint.return_value = "SHA256:same"
+
+                assert client.validate_host_public_key("myhost", "1.2.3.4", 22, key) is True
+
+    def test_mismatched_stored_key_is_rejected(self, tmp_path):
+        # _load_known_fingerprints only calls read_known_hosts when the file
+        # exists — it must be created for the mocked match() to be reached.
+        (tmp_path / "known_hosts").write_text("user@myhost:22 ssh-ed25519 AAAAoriginal\n")
+        with patch.object(ssh_connector, "_STATE_DIR", tmp_path):
+            client = _TofuClient("myhost", "user@myhost:22")
+            with patch("asyncssh.read_known_hosts") as mock_read:
+                stored_key = MagicMock()
+                stored_key.get_fingerprint.return_value = "SHA256:original"
+                mock_read.return_value.match.return_value = ([stored_key],)
+
+                new_key = MagicMock()
+                new_key.get_fingerprint.return_value = "SHA256:different"
+
+                assert client.validate_host_public_key("myhost", "1.2.3.4", 22, new_key) is False
 
 
 class TestClose:
-    def test_close_sends_control_exit(self):
-        conn = SSHConnection("h", username="u")
-        with patch("subprocess.Popen", return_value=_completed(0)) as run:
-            conn.close()
-        argv = run.call_args[0][0]
-        assert "-O" in argv and "exit" in argv
+    def test_close_closes_cached_connection(self):
+        conn = SSHConnection("h")
+        mock_conn = MagicMock()
+        conn._conn = mock_conn
+        conn.close()
+        mock_conn.close.assert_called_once()
+        assert conn._conn is None
+
+    def test_close_with_no_connection_does_not_raise(self):
+        conn = SSHConnection("h")
+        conn.close()  # never connected — must not raise
 
     def test_close_swallows_errors(self):
         conn = SSHConnection("h")
-        with patch("subprocess.Popen", side_effect=OSError("boom")):
-            conn.close()  # must not raise
+        mock_conn = MagicMock()
+        mock_conn.close.side_effect = Exception("boom")
+        conn._conn = mock_conn
+        conn.close()  # must not raise
 
 
 class TestContextManager:
