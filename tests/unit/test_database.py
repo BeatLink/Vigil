@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 import pytest
-from vigil.core.data.database import DatabaseManager, Metric, Event, Setting, StatusHistory, LogLine, db
+from vigil.core.data.database import (
+    DatabaseManager, Metric, Event, Setting, StatusHistory, LogLine, PluginSnapshot, db,
+)
 
 
 @pytest.fixture
@@ -21,6 +23,7 @@ class TestDatabaseManagerInit:
             assert Setting.table_exists()
             assert StatusHistory.table_exists()
             assert LogLine.table_exists()
+            assert PluginSnapshot.table_exists()
 
 
 class TestMetrics:
@@ -279,3 +282,41 @@ class TestInternalDatabaseLogger:
         assert m is not None
         assert m.value == pytest.approx(42.5)
         assert m.target == "host1"
+
+    def test_snapshot_round_trips_through_get_snapshot(self, mgr):
+        # This is the collector-write / web-read path processes.py and
+        # service_list.py depend on for their per-row tables (see
+        # PluginSnapshot's docstring): the collector writes via
+        # InternalDatabaseLogger.snapshot(), the web process reads the same
+        # data back via DatabaseManager.get_snapshot() (wrapped by
+        # UIPlugin.latest_snapshot() — tested at the plugin_base level).
+        logger = mgr.get_logger("host1", "test-plugin", "svc-list")
+        rows = [{"pid": 1, "command": "init"}, {"pid": 2, "command": "sshd"}]
+        logger.snapshot(rows)
+        mgr.flush()
+        import json
+        assert json.loads(mgr.get_snapshot("svc-list")) == rows
+
+
+class TestSnapshot:
+    def test_get_snapshot_returns_none_when_never_written(self, mgr):
+        assert mgr.get_snapshot("never-written") is None
+
+    def test_set_snapshot_upserts_not_appends(self, mgr):
+        # Latest state, not history — a second write must replace the first,
+        # not accumulate rows the way Metric/Event do.
+        mgr.set_snapshot("p", '["first"]')
+        mgr.flush()
+        mgr.set_snapshot("p", '["second"]')
+        mgr.flush()
+        with db.connection_context():
+            count = PluginSnapshot.select().where(PluginSnapshot.plugin_id == "p").count()
+        assert count == 1
+        assert mgr.get_snapshot("p") == '["second"]'
+
+    def test_snapshots_are_scoped_by_plugin_id(self, mgr):
+        mgr.set_snapshot("a", '["from-a"]')
+        mgr.set_snapshot("b", '["from-b"]')
+        mgr.flush()
+        assert mgr.get_snapshot("a") == '["from-a"]'
+        assert mgr.get_snapshot("b") == '["from-b"]'

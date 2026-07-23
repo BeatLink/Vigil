@@ -5,10 +5,10 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.time_utils import parse_duration, format_duration, format_age
-from vigil.core.modules.controllers.job_controller import JobRejected
-from vigil.core.ui.components import info_card, on_data_event, safe_timer
+from vigil.collector.controllers.job_controller import JobRejected
 
 
 _DEFAULT_LAYOUT = [
@@ -125,7 +125,7 @@ def _parse_archive_time(value: str) -> int:
     return int(dt.timestamp())
 
 
-class BorgPlugin(BasePlugin):
+class BorgCollectorPlugin(CollectorPlugin):
     """
     Monitors a BorgBackup repository directly over SSH.
 
@@ -831,257 +831,6 @@ class BorgPlugin(BasePlugin):
         return data.get('archives') or [], data.get('repository') or {}
 
     # -------------------------------------------------------------------------
-    # UI
-    # -------------------------------------------------------------------------
-
-    def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.core.ui.theme import STATUS_COLORS
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
-
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
-        )
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('repo_card'):
-            info_card('REPO', self.repo or '--')
-        with layout.cell('maxage_card'):
-            info_card('MAX AGE', format_duration(self.max_age))
-        with layout.cell('state_card'):
-            state_label = info_card('CURRENT STATE', '--')
-        with layout.cell('size_card'):
-            size_label = info_card('REPO SIZE', '--')
-        with layout.cell('dedup_card'):
-            dedup_label = info_card('DEDUP RATIO', '--')
-        with layout.cell('count_card'):
-            count_label = info_card('ARCHIVES', '--')
-        with layout.cell('age_card'):
-            age_label = info_card('LAST ARCHIVE', '--')
-        with layout.cell('archives'):
-            archives_table = self._render_archives_table()
-        with layout.cell('jobs'):
-            update_jobs = self._render_jobs_panel()
-        with layout.cell('events'):
-            # events_table, not logs_table: this plugin writes its own messages
-            # via db_logger.write (the Event table) rather than collecting log
-            # lines off the target, so a LogLine-backed table would always be
-            # empty here.
-            self.internal_modules['ui']['events_table'](title='EVENTS', limit=100,
-                                                        full_height=True)
-
-        # Job state (running/progress/finished) isn't covered by any DataBus
-        # event — jobs stay synchronous/DB-backed by design (see
-        # DatabaseManager's JOBS section), so a running backup's progress can
-        # update many times with no accompanying metric write to piggyback
-        # on. Polled on its own short timer instead of folded into the
-        # metric-driven `update()` below, so watching a live backup's
-        # progress doesn't stall waiting for an unrelated metric to fire.
-        safe_timer(2.0, update_jobs)
-
-        def update():
-            m = self.latest_metric('last_backup_epoch')
-            epoch_val = m.value if m else None
-
-            self._update_stat_cards(size_label, dedup_label, count_label)
-            self._refresh_archives_table(archives_table)
-
-            if epoch_val is None:
-                state_label.text = 'UNKNOWN'
-                state_label.style(f"color: {STATUS_COLORS['offline']}")
-                return
-
-            epoch = int(epoch_val)
-            if epoch == 0:
-                state_label.text = 'NO ARCHIVES'
-                state_label.style(f"color: {STATUS_COLORS['failed']}")
-                age_label.text = 'Never'
-                age_label.style(f"color: {STATUS_COLORS['failed']}")
-                return
-
-            age = int(time.time()) - epoch
-            is_fresh = age <= self.max_age
-            state_label.text = 'OK' if is_fresh else 'STALE'
-            state_label.style(f"color: {STATUS_COLORS['online' if is_fresh else 'failed']}")
-            age_label.text = format_age(age)
-            age_label.style(f"color: {STATUS_COLORS['online' if is_fresh else 'failed']}")
-
-        on_data_event('metric', state_label, update)
-
-    def _update_stat_cards(self, size_label, dedup_label, count_label) -> None:
-        """Refresh the repository statistics cards from the latest metrics."""
-        dedup_metric = self.latest_metric('deduplicated_size')
-        size_label.text = (
-            _format_bytes(dedup_metric.value) if dedup_metric else '--'
-        )
-
-        ratio_metric = self.latest_metric('dedup_ratio')
-        dedup_label.text = f"{ratio_metric.value:.1f}x" if ratio_metric else '--'
-
-        count_metric = self.latest_metric('archive_count')
-        count_label.text = str(int(count_metric.value)) if count_metric else '--'
-
-    def _render_archives_table(self):
-        """
-        Build the archive table: one row per archive with its name and age.
-
-        Replaces dumping archives into the event log, where they were
-        interleaved with status messages and could not be sorted or scanned.
-        """
-        from nicegui import ui
-        from vigil.core.ui.components import card
-        from vigil.core.ui.theme import PRIMARY
-
-        with card('w-full'):
-            ui.label('ARCHIVES').classes('font-bold mb-2').style(f'color: {PRIMARY}')
-            return ui.table(
-                columns=[
-                    {'name': 'name', 'label': 'Archive', 'field': 'name',
-                     'align': 'left', 'sortable': True},
-                    {'name': 'created', 'label': 'Created', 'field': 'created',
-                     'align': 'left', 'sortable': True},
-                    {'name': 'age', 'label': 'Age', 'field': 'age', 'align': 'left'},
-                    # Size of the source data this archive captured.
-                    {'name': 'size', 'label': 'Size', 'field': 'size',
-                     'align': 'right', 'sortable': True},
-                    # What this archive actually added to the repo — near zero
-                    # for an incremental run, which is the number that explains
-                    # why the repo is not growing by `size` every backup.
-                    {'name': 'added', 'label': 'Added', 'field': 'added',
-                     'align': 'right', 'sortable': True},
-                    {'name': 'files', 'label': 'Files', 'field': 'files',
-                     'align': 'right', 'sortable': True},
-                ],
-                rows=[],
-                row_key='name',
-            ).classes('w-full border-none')
-
-    def _refresh_archives_table(self, table) -> None:
-        """Repopulate the archive table from the last poll's cached list."""
-        archives, _ = self.cached_archives()
-        now = int(time.time())
-        table.rows = [
-            {
-                'name': a.get('name', '?'),
-                'created': (
-                    datetime.fromtimestamp(a['epoch']).strftime('%Y-%m-%d %H:%M')
-                    if a.get('epoch') else 'unknown'
-                ),
-                'age': format_age(now - a['epoch']) if a.get('epoch') else 'unknown',
-                # Sizes arrive from `borg info`, a separate call than the one
-                # that produced the names; '--' covers a poll where stats are
-                # disabled or the info call failed.
-                'size': _format_bytes(a['original']) if 'original' in a else '--',
-                'added': (
-                    _format_bytes(a['deduplicated']) if 'deduplicated' in a else '--'
-                ),
-                'files': f"{int(a['nfiles']):,}" if 'nfiles' in a else '--',
-            }
-            for a in archives
-        ]
-        table.update()
-
-    def _render_jobs_panel(self):
-        """
-        Build the job panel: run/cancel controls, live progress, and history.
-
-        Returns an update callable. Job state isn't covered by any DataBus
-        event (jobs stay synchronous/DB-backed by design), so the caller
-        drives this on its own short safe_timer rather than the metric-driven
-        on_data_event the rest of the page now uses.
-        """
-        from nicegui import ui
-        from vigil.core.ui.components import card
-        from vigil.core.ui.theme import PRIMARY, STATUS_COLORS
-
-        with card('w-full'):
-            with ui.row().classes('w-full items-center justify-between mb-2'):
-                ui.label('BACKUP JOBS').classes('font-bold').style(f'color: {PRIMARY}')
-                with ui.row().classes('gap-2'):
-                    run_btn = ui.button(
-                        'Run Backup', icon='play_arrow',
-                        on_click=lambda: self._start_backup_from_ui(),
-                    ).props('dense')
-                    cancel_btn = ui.button(
-                        'Cancel', icon='stop',
-                        on_click=lambda: self._cancel_backup_from_ui(),
-                    ).props('dense outline color=negative')
-
-            progress_label = ui.label('').classes('text-xs font-mono mb-2')
-
-            jobs_table = ui.table(
-                columns=[
-                    {'name': 'started', 'label': 'Started', 'field': 'started', 'align': 'left'},
-                    {'name': 'kind', 'label': 'Kind', 'field': 'kind', 'align': 'left'},
-                    {'name': 'state', 'label': 'State', 'field': 'state', 'align': 'left'},
-                    {'name': 'duration', 'label': 'Duration', 'field': 'duration', 'align': 'left'},
-                ],
-                rows=[],
-                row_key='id',
-            ).classes('w-full border-none')
-
-            def update():
-                running = self.job_controller.is_running()
-                # Backups need somewhere to back up from; without source_paths
-                # the button would only ever produce a config error.
-                run_btn.set_enabled(bool(self.source_paths) and not running)
-                cancel_btn.set_visibility(running)
-
-                if running:
-                    job = self.db.get_job(self.job_controller.current_job_id())
-                    progress = (job or {}).get('progress') or 'Starting...'
-                    progress_label.text = progress
-                    progress_label.style(f"color: {STATUS_COLORS['online']}")
-                elif not self.source_paths:
-                    progress_label.text = 'No source_paths configured — backups disabled'
-                    progress_label.style(f"color: {STATUS_COLORS['offline']}")
-                else:
-                    progress_label.text = ''
-
-                jobs_table.rows = [
-                    {
-                        'id': j['id'],
-                        'started': j['started'],
-                        'kind': j['kind'],
-                        'state': j['state'],
-                        'duration': format_duration(j['duration']),
-                    }
-                    for j in self.job_controller.recent(limit=10)
-                ]
-                jobs_table.update()
-
-            update()
-            return update
-
-    def _start_backup_from_ui(self) -> None:
-        """Kick off a backup from the UI button, reporting the outcome."""
-        from nicegui import ui
-        import asyncio
-
-        if not self.source_paths:
-            ui.notify('No source_paths configured for this monitor', type='negative')
-            return
-        if self.job_controller.is_running():
-            ui.notify('A job is already running', type='warning')
-            return
-
-        ui.notify('Backup started', type='positive')
-        # Fire-and-forget: the job outlives this request, and its state is in
-        # the DB, so the panel picks it up on the next timer tick rather than
-        # this handler waiting hours for a result.
-        asyncio.create_task(self.on_action('run_backup'))
-
-    def _cancel_backup_from_ui(self) -> None:
-        """Request cancellation of the running job."""
-        from nicegui import ui
-        if self.job_controller.cancel():
-            ui.notify('Cancellation requested', type='warning')
-        else:
-            ui.notify('No job is running', type='info')
-
-    # -------------------------------------------------------------------------
     # Actions
     # -------------------------------------------------------------------------
 
@@ -1212,3 +961,303 @@ class BorgPlugin(BasePlugin):
             message = record.get('message') or ''
             if message and level in ('WARNING', 'ERROR', 'CRITICAL'):
                 self.db_logger.write(f"borg: {message}", level=level)
+
+
+class BorgUIPlugin(UIPlugin):
+    """
+    Dashboard rendering for the borg monitor: repo/status cards, archive
+    table, and the backup job panel (run/cancel/progress/history). See
+    BorgCollectorPlugin for collection/backup-execution logic.
+
+    The job-control code below (run/cancel buttons, progress panel) calls
+    self.job_controller / self.on_action directly, exactly as it did in the
+    original single-class plugin — UIPlugin's RemoteJobController and
+    on_action proxy expose the same method names as the collector-side
+    versions, so no logic changes are needed here beyond one: cancel().
+    RemoteJobController.cancel() is a network call (async def), unlike
+    JobController.cancel() which is a synchronous in-process Event flip, so
+    _cancel_backup_from_ui is async here and its on_click site wraps it in
+    asyncio.create_task the same way _start_backup_from_ui already does.
+    """
+
+    def render_ui(self, context: str = 'page'):
+        from nicegui import ui
+        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event, safe_timer
+
+        # UIPlugin has no repo/max_age/source_paths attributes (collector-side
+        # state) — re-derived here from config the same way
+        # BorgCollectorPlugin.__init__ does.
+        repo = self.config.get('repo')
+        max_age = parse_duration(self.config.get('max_age', '1d'))
+        source_paths = _as_list(self.config.get('source_paths'))
+
+        layout = PluginLayout(
+            self.config,
+            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
+        )
+
+        with layout.cell('host_card'):
+            self.internal_modules['ui']['host_card']()
+        with layout.cell('repo_card'):
+            info_card('REPO', repo or '--')
+        with layout.cell('maxage_card'):
+            info_card('MAX AGE', format_duration(max_age))
+        with layout.cell('state_card'):
+            state_label = info_card('CURRENT STATE', '--')
+        with layout.cell('size_card'):
+            size_label = info_card('REPO SIZE', '--')
+        with layout.cell('dedup_card'):
+            dedup_label = info_card('DEDUP RATIO', '--')
+        with layout.cell('count_card'):
+            count_label = info_card('ARCHIVES', '--')
+        with layout.cell('age_card'):
+            age_label = info_card('LAST ARCHIVE', '--')
+        with layout.cell('archives'):
+            archives_table = self._render_archives_table()
+        with layout.cell('jobs'):
+            update_jobs = self._render_jobs_panel(source_paths)
+        with layout.cell('events'):
+            # events_table, not logs_table: this plugin writes its own messages
+            # via db_logger.write (the Event table) rather than collecting log
+            # lines off the target, so a LogLine-backed table would always be
+            # empty here.
+            self.internal_modules['ui']['events_table'](title='EVENTS', limit=100,
+                                                        full_height=True)
+
+        # Job state (running/progress/finished) isn't covered by any DataBus
+        # event — jobs stay synchronous/DB-backed by design (see
+        # DatabaseManager's JOBS section), so a running backup's progress can
+        # update many times with no accompanying metric write to piggyback
+        # on. Polled on its own short timer instead of folded into the
+        # metric-driven `update()` below, so watching a live backup's
+        # progress doesn't stall waiting for an unrelated metric to fire.
+        safe_timer(2.0, update_jobs)
+
+        def update():
+            m = self.latest_metric('last_backup_epoch')
+            epoch_val = m.value if m else None
+
+            self._update_stat_cards(size_label, dedup_label, count_label)
+            self._refresh_archives_table(archives_table)
+
+            if epoch_val is None:
+                state_label.text = 'UNKNOWN'
+                state_label.style(f"color: {STATUS_COLORS['offline']}")
+                return
+
+            epoch = int(epoch_val)
+            if epoch == 0:
+                state_label.text = 'NO ARCHIVES'
+                state_label.style(f"color: {STATUS_COLORS['failed']}")
+                age_label.text = 'Never'
+                age_label.style(f"color: {STATUS_COLORS['failed']}")
+                return
+
+            age = int(time.time()) - epoch
+            is_fresh = age <= max_age
+            state_label.text = 'OK' if is_fresh else 'STALE'
+            state_label.style(f"color: {STATUS_COLORS['online' if is_fresh else 'failed']}")
+            age_label.text = format_age(age)
+            age_label.style(f"color: {STATUS_COLORS['online' if is_fresh else 'failed']}")
+
+        on_data_event('metric', state_label, update)
+
+    def _update_stat_cards(self, size_label, dedup_label, count_label) -> None:
+        """Refresh the repository statistics cards from the latest metrics."""
+        dedup_metric = self.latest_metric('deduplicated_size')
+        size_label.text = (
+            _format_bytes(dedup_metric.value) if dedup_metric else '--'
+        )
+
+        ratio_metric = self.latest_metric('dedup_ratio')
+        dedup_label.text = f"{ratio_metric.value:.1f}x" if ratio_metric else '--'
+
+        count_metric = self.latest_metric('archive_count')
+        count_label.text = str(int(count_metric.value)) if count_metric else '--'
+
+    def _render_archives_table(self):
+        """
+        Build the archive table: one row per archive with its name and age.
+
+        Replaces dumping archives into the event log, where they were
+        interleaved with status messages and could not be sorted or scanned.
+        """
+        from nicegui import ui
+        from vigil.web.ui.components import card
+        from vigil.web.ui.theme import PRIMARY
+
+        with card('w-full'):
+            ui.label('ARCHIVES').classes('font-bold mb-2').style(f'color: {PRIMARY}')
+            return ui.table(
+                columns=[
+                    {'name': 'name', 'label': 'Archive', 'field': 'name',
+                     'align': 'left', 'sortable': True},
+                    {'name': 'created', 'label': 'Created', 'field': 'created',
+                     'align': 'left', 'sortable': True},
+                    {'name': 'age', 'label': 'Age', 'field': 'age', 'align': 'left'},
+                    # Size of the source data this archive captured.
+                    {'name': 'size', 'label': 'Size', 'field': 'size',
+                     'align': 'right', 'sortable': True},
+                    # What this archive actually added to the repo — near zero
+                    # for an incremental run, which is the number that explains
+                    # why the repo is not growing by `size` every backup.
+                    {'name': 'added', 'label': 'Added', 'field': 'added',
+                     'align': 'right', 'sortable': True},
+                    {'name': 'files', 'label': 'Files', 'field': 'files',
+                     'align': 'right', 'sortable': True},
+                ],
+                rows=[],
+                row_key='name',
+            ).classes('w-full border-none')
+
+    def _refresh_archives_table(self, table) -> None:
+        """Repopulate the archive table from the last poll's cached list."""
+        archives, _ = self.cached_archives()
+        now = int(time.time())
+        table.rows = [
+            {
+                'name': a.get('name', '?'),
+                'created': (
+                    datetime.fromtimestamp(a['epoch']).strftime('%Y-%m-%d %H:%M')
+                    if a.get('epoch') else 'unknown'
+                ),
+                'age': format_age(now - a['epoch']) if a.get('epoch') else 'unknown',
+                # Sizes arrive from `borg info`, a separate call than the one
+                # that produced the names; '--' covers a poll where stats are
+                # disabled or the info call failed.
+                'size': _format_bytes(a['original']) if 'original' in a else '--',
+                'added': (
+                    _format_bytes(a['deduplicated']) if 'deduplicated' in a else '--'
+                ),
+                'files': f"{int(a['nfiles']):,}" if 'nfiles' in a else '--',
+            }
+            for a in archives
+        ]
+        table.update()
+
+    def cached_archives(self) -> (List[Dict[str, Any]], Dict[str, Any]):
+        """Same as BorgCollectorPlugin.cached_archives — a plain DB read via
+        latest_metric(), which UIPlugin provides identically."""
+        metric = self.latest_metric('archive_list')
+        if metric is None or not metric.metadata:
+            return [], {}
+        try:
+            data = json.loads(metric.metadata)
+        except (json.JSONDecodeError, ValueError):
+            return [], {}
+        if not isinstance(data, dict):
+            return [], {}
+        return data.get('archives') or [], data.get('repository') or {}
+
+    def _render_jobs_panel(self, source_paths: List[str]):
+        """
+        Build the job panel: run/cancel controls, live progress, and history.
+
+        Returns an update callable. Job state isn't covered by any DataBus
+        event (jobs stay synchronous/DB-backed by design), so the caller
+        drives this on its own short safe_timer rather than the metric-driven
+        on_data_event the rest of the page now uses.
+        """
+        from nicegui import ui
+        from vigil.web.ui.components import card
+        from vigil.web.ui.theme import PRIMARY, STATUS_COLORS
+
+        with card('w-full'):
+            with ui.row().classes('w-full items-center justify-between mb-2'):
+                ui.label('BACKUP JOBS').classes('font-bold').style(f'color: {PRIMARY}')
+                with ui.row().classes('gap-2'):
+                    run_btn = ui.button(
+                        'Run Backup', icon='play_arrow',
+                        on_click=lambda: self._start_backup_from_ui(),
+                    ).props('dense')
+                    cancel_btn = ui.button(
+                        'Cancel', icon='stop',
+                        on_click=lambda: self._cancel_backup_from_ui(),
+                    ).props('dense outline color=negative')
+
+            progress_label = ui.label('').classes('text-xs font-mono mb-2')
+
+            jobs_table = ui.table(
+                columns=[
+                    {'name': 'started', 'label': 'Started', 'field': 'started', 'align': 'left'},
+                    {'name': 'kind', 'label': 'Kind', 'field': 'kind', 'align': 'left'},
+                    {'name': 'state', 'label': 'State', 'field': 'state', 'align': 'left'},
+                    {'name': 'duration', 'label': 'Duration', 'field': 'duration', 'align': 'left'},
+                ],
+                rows=[],
+                row_key='id',
+            ).classes('w-full border-none')
+
+            def update():
+                running = self.job_controller.is_running()
+                # Backups need somewhere to back up from; without source_paths
+                # the button would only ever produce a config error.
+                run_btn.set_enabled(bool(source_paths) and not running)
+                cancel_btn.set_visibility(running)
+
+                if running:
+                    job = self.db.get_job(self.job_controller.current_job_id())
+                    progress = (job or {}).get('progress') or 'Starting...'
+                    progress_label.text = progress
+                    progress_label.style(f"color: {STATUS_COLORS['online']}")
+                elif not source_paths:
+                    progress_label.text = 'No source_paths configured — backups disabled'
+                    progress_label.style(f"color: {STATUS_COLORS['offline']}")
+                else:
+                    progress_label.text = ''
+
+                jobs_table.rows = [
+                    {
+                        'id': j['id'],
+                        'started': j['started'],
+                        'kind': j['kind'],
+                        'state': j['state'],
+                        'duration': format_duration(j['duration']),
+                    }
+                    for j in self.job_controller.recent(limit=10)
+                ]
+                jobs_table.update()
+
+            update()
+            return update
+
+    def _start_backup_from_ui(self) -> None:
+        """Kick off a backup from the UI button, reporting the outcome."""
+        from nicegui import ui
+        import asyncio
+
+        source_paths = _as_list(self.config.get('source_paths'))
+        if not source_paths:
+            ui.notify('No source_paths configured for this monitor', type='negative')
+            return
+        if self.job_controller.is_running():
+            ui.notify('A job is already running', type='warning')
+            return
+
+        ui.notify('Backup started', type='positive')
+        # Fire-and-forget: the job outlives this request, and its state is in
+        # the DB, so the panel picks it up on the next timer tick rather than
+        # this handler waiting hours for a result.
+        asyncio.create_task(self.on_action('run_backup'))
+
+    def _cancel_backup_from_ui(self) -> None:
+        """
+        Request cancellation of the running job.
+
+        RemoteJobController.cancel() is a network call to the collector
+        (async def), unlike JobController.cancel() which is a synchronous
+        in-process Event flip — so this wraps the call in asyncio.create_task,
+        the same fire-and-forget pattern _start_backup_from_ui already uses,
+        and does the actual awaiting in the async helper below.
+        """
+        import asyncio
+        asyncio.create_task(self._do_cancel_backup())
+
+    async def _do_cancel_backup(self) -> None:
+        from nicegui import ui
+        if await self.job_controller.cancel():
+            ui.notify('Cancellation requested', type='warning')
+        else:
+            ui.notify('No job is running', type='info')

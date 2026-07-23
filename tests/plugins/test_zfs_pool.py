@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.zfs_pool import ZFSPoolPlugin
+from vigil.plugins.zfs_pool import ZFSPoolCollectorPlugin
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -17,7 +17,7 @@ POOL_CFG = {
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(ZFSPoolPlugin, POOL_CFG)
+    return make_plugin(ZFSPoolCollectorPlugin, POOL_CFG)
 
 
 def _latest_status() -> str | None:
@@ -87,7 +87,7 @@ class TestZFSPoolCollection:
         assert _latest_status() == "failed"
 
     async def test_custom_threshold_respected(self, make_plugin):
-        plugin = make_plugin(ZFSPoolPlugin, {**POOL_CFG, "id": "pool-75", "threshold": 75})
+        plugin = make_plugin(ZFSPoolCollectorPlugin, {**POOL_CFG, "id": "pool-75", "threshold": 75})
         plugin.ssh_collector.fetch_output = AsyncMock(
             return_value=(0, "data-pool\t80%", "")
         )

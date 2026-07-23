@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.zfs_health import ZFSHealthPlugin
+from vigil.plugins.zfs_health import ZFSHealthCollectorPlugin
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -15,7 +15,7 @@ HEALTH_CFG = {
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(ZFSHealthPlugin, HEALTH_CFG)
+    return make_plugin(ZFSHealthCollectorPlugin, HEALTH_CFG)
 
 
 def _latest_status() -> str | None:

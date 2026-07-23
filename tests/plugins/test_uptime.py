@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.uptime import UptimePlugin
+from vigil.plugins.uptime import UptimeCollectorPlugin
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -16,7 +16,7 @@ UPTIME_CFG = {
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(UptimePlugin, UPTIME_CFG)
+    return make_plugin(UptimeCollectorPlugin, UPTIME_CFG)
 
 
 def _mock_process(returncode: int, stdout: bytes = b"", stderr: bytes = b""):

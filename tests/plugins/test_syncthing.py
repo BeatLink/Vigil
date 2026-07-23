@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from vigil.plugins.syncthing import SyncthingPlugin
+from vigil.plugins.syncthing import SyncthingCollectorPlugin
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -34,7 +34,7 @@ def _connections(connected=True):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(SyncthingPlugin, BASE_CFG)
+    return make_plugin(SyncthingCollectorPlugin, BASE_CFG)
 
 
 def _mock_calls(plugin, config=None, folder_statuses=None, connections=None, watched_folders=None):
@@ -122,7 +122,7 @@ class TestSyncthingCollection:
         assert _latest_status() == "failed"
 
     async def test_folder_filter_excludes_others(self, make_plugin):
-        p = make_plugin(SyncthingPlugin, {**BASE_CFG, "folders": ["docs"]})
+        p = make_plugin(SyncthingCollectorPlugin, {**BASE_CFG, "folders": ["docs"]})
         _mock_calls(p, watched_folders=["docs"], folder_statuses={
             "docs": _folder_status(),
             "photos": _folder_status(state="error"),

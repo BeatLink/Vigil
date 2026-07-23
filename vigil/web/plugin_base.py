@@ -92,6 +92,27 @@ class UIPlugin(PluginConfigMixin, ABC):
             .first()
         )
 
+    def latest_snapshot(self, default: Any = None) -> Any:
+        """
+        Return this monitor's latest row-level data snapshot (see
+        PluginSnapshot in core/data/database.py), decoded from JSON.
+
+        For plugins whose UI needs more than scalar metrics — a process
+        list, a systemd unit list — where the collector's on_collect()
+        writes rows via db_logger.snapshot(rows) and render_ui() here reads
+        them back with this method. Returns `default` (a `[]` or `{}` the
+        caller can render directly, typically) if the collector has never
+        written a snapshot yet — e.g. before its first poll.
+        """
+        import json
+        raw = self.db.get_snapshot(self.id)
+        if raw is None:
+            return default
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return default
+
     @abstractmethod
     def render_ui(self, context: str = 'page'):
         """Render the plugin UI.

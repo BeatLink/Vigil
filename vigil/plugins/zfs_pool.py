@@ -1,7 +1,7 @@
-import logging
-from typing import Dict, Any, List
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
+from typing import Dict, Any
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 
 _DEFAULT_LAYOUT = [
@@ -11,7 +11,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class ZFSPoolPlugin(BasePlugin):
+class ZFSPoolCollectorPlugin(CollectorPlugin):
     """
     Monitors ZFS zpool capacity over SSH.
     Reports usage percentage and marks the pool failed when it exceeds the threshold.
@@ -50,11 +50,21 @@ class ZFSPoolPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class ZFSPoolUIPlugin(UIPlugin):
+    """Dashboard rendering for the zfs_pool monitor."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pool = self.config.get('pool')
+        self.threshold = int(self.config.get('threshold', 90))
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
-        from vigil.core.ui.theme import STATUS_COLORS
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

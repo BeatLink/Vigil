@@ -74,6 +74,9 @@ class ServiceListCollectorPlugin(CollectorPlugin):
         self.db_metrics.metric('services_total', float(total))
         self.db_metrics.metric('services_active', float(active))
         self.db_metrics.metric('services_failed', float(failed))
+        # Full per-service rows for the web process's table — see
+        # PluginSnapshot's docstring in core/data/database.py.
+        self.db_logger.snapshot(services)
         self.db_logger.write(
             f'Collected {total} services, {active} active, {failed} failed',
             level='INFO'
@@ -201,14 +204,12 @@ class ServiceListUIPlugin(UIPlugin):
     per-row start/stop/restart/enable/disable/status/unit-file actions. See
     ServiceListCollectorPlugin for collection/action logic.
 
-    Note: like processes.py, the original single-process ServiceListPlugin
-    rendered its table straight from the in-memory `_services` list populated
-    by its own on_collect(). In the split architecture the UI process never
-    runs on_collect, so that snapshot never crosses to it — this class keeps
-    an (always-empty) `_services` list so the table-rendering code below stays
-    structurally unchanged, while the count card updates live from the
-    services_total metric. Per-row actions (start/stop/.../view unit file/edit
-    unit file) still work unchanged: they call self.ssh_controller /
+    Like processes.py, the table reads ServiceListCollectorPlugin's latest
+    snapshot (self.latest_snapshot()) rather than an in-memory list —
+    on_collect() runs in a different process here, so ServiceListCollectorPlugin
+    persists `_services` via db_logger.snapshot(services) specifically so this
+    class can read it back. Per-row actions (start/stop/.../view unit
+    file/edit unit file) work unchanged: they call self.ssh_controller /
     self.on_action, both of which UIPlugin proxies to the collector over its
     internal API with identical method signatures.
     """
@@ -216,7 +217,6 @@ class ServiceListUIPlugin(UIPlugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
-        self._services: List[Dict[str, Any]] = []
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
@@ -283,7 +283,7 @@ class ServiceListUIPlugin(UIPlugin):
             def update_table():
                 filter_term = (search_in.value or '').strip().lower()
                 rows = []
-                for service in self._services:
+                for service in self.latest_snapshot(default=[]):
                     if filter_term:
                         haystack = ' '.join(
                             str(service.get(key, '')).lower()
@@ -327,11 +327,14 @@ class ServiceListUIPlugin(UIPlugin):
 
             def update():
                 count_metric = self.latest_metric('services_total')
-                self._count_label.text = str(int(count_metric.value)) if count_metric else str(len(self._services))
+                self._count_label.text = (
+                    str(int(count_metric.value)) if count_metric
+                    else str(len(self.latest_snapshot(default=[])))
+                )
                 update_table()
 
             search_in.on('update:modelValue', lambda e: update())
-            on_data_event('metric', table, update)
+            on_data_event(('metric', 'snapshot'), table, update)
 
         with layout.cell('events'):
             self.internal_modules['ui']['events_table'](title='PLUGIN EVENTS')

@@ -217,6 +217,36 @@ class JobOutput(BaseModel):
         indexes = ((('job', 'seq'), True),)
 
 
+class PluginSnapshot(BaseModel):
+    """
+    Latest row-level data snapshot for a monitor, as one JSON blob.
+
+    Some plugins collect more than a handful of scalar metrics — a process
+    list, a systemd unit list — where every row (PID, unit name, state) is
+    itself meaningful and needed by a per-row UI (a table, per-row action
+    buttons). Metric is the wrong shape for that: it stores one named number
+    per row, which would mean one row *per process per poll* to reconstruct
+    a table, and still couldn't carry non-numeric fields like a unit's
+    "enabled" string.
+
+    In the collector/web process split, this is also the only way that data
+    reaches the web process at all: unlike a single-process design, where a
+    plugin's render_ui() could simply read an in-memory list its own
+    on_collect() populated, here render_ui() runs in a different process
+    from on_collect() entirely. Without a durable, readable snapshot, that
+    data is invisible to the web process — see processes.py and
+    service_list.py, both of which write one here (via
+    InternalDatabaseLogger.snapshot) so their per-row tables and per-row
+    actions work.
+
+    One row per plugin_id (upsert, not append) — this is *latest state*, not
+    history; Metric/StatusHistory already cover trends over time.
+    """
+    plugin_id = CharField(primary_key=True)
+    updated = DateTimeField(default=datetime.now)
+    data = TextField()  # JSON-encoded list/dict — shape is the plugin's own business
+
+
 class LogLine(BaseModel):
     """
     Persistent storage for log lines collected from targets (e.g. journald).
@@ -311,6 +341,21 @@ class InternalDatabaseLogger:
         # collapse it to a single row and one of them would lose it entirely.
         self.db.insert_log_line(self.target, self.plugin_id, level, message, log_time)
 
+    def snapshot(self, rows: Any):
+        """
+        Persist this plugin's current row-level data (e.g. a process list, a
+        systemd unit list) as its latest snapshot, for the web process's
+        render_ui() to read back via UIPlugin.latest_snapshot(). See
+        PluginSnapshot's docstring for why this exists — Metric cannot carry
+        a table's worth of per-row, non-numeric fields.
+
+        `rows` is any JSON-serializable value (typically a list of dicts,
+        one per row); this method owns the json.dumps, callers just pass
+        plain Python data.
+        """
+        import json
+        self.db.set_snapshot(self.plugin_id, json.dumps(rows))
+
 # DATABASE MANAGER ##################################################################################################################################
 class DatabaseManager:
     """Manages the Peewee ORM connection and schema for Vigil."""
@@ -362,7 +407,7 @@ class DatabaseManager:
                 'foreign_keys': 1,
             })
             db.connect()
-            db.create_tables([Metric, Event, Setting, StatusHistory, LogLine, Job, JobOutput])
+            db.create_tables([Metric, Event, Setting, StatusHistory, LogLine, Job, JobOutput, PluginSnapshot])
             self._migrate()
             db.close()  # release the init connection; per-thread ones open on demand
             logging.info(f"Database initialized and connected at {self.db_path}")
@@ -698,3 +743,25 @@ class DatabaseManager:
                    plugin_id: Optional[str] = None) -> InternalDatabaseLogger:
         """Factory method to provide a scoped logger for a specific plugin instance."""
         return InternalDatabaseLogger(self, target, plugin_name, plugin_id)
+
+    def set_snapshot(self, plugin_id: str, data: str):
+        """
+        Queue a plugin's row-level data snapshot for the background writer.
+
+        `data` is pre-serialized JSON (not a Python object) — the caller
+        (InternalDatabaseLogger.snapshot) owns the shape, this layer just
+        stores text, same as Metric.metadata. Upserts: only the latest
+        snapshot per plugin_id is kept.
+        """
+        _writer.submit(
+            lambda: PluginSnapshot.insert(
+                plugin_id=plugin_id, data=data, updated=datetime.now()
+            ).on_conflict_replace().execute(),
+            event='snapshot',
+        )
+
+    def get_snapshot(self, plugin_id: str) -> Optional[str]:
+        """Return a plugin's latest snapshot JSON, or None if it has never written one."""
+        with db.connection_context():
+            row = PluginSnapshot.get_or_none(PluginSnapshot.plugin_id == plugin_id)
+            return row.data if row else None

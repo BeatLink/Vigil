@@ -91,6 +91,10 @@ class ProcessesCollectorPlugin(CollectorPlugin):
 
         self.db_metrics.metric('process_count', float(process_count))
         self.db_metrics.metric('top_cpu_pct',   top_cpu)
+        # Full per-process rows for the web process's table — see
+        # PluginSnapshot's docstring in core/data/database.py for why this
+        # can't just be more metrics.
+        self.db_logger.snapshot(processes)
 
         if self.cpu_warning is not None and self.cpu_threshold is not None:
             overall = _level_for(top_cpu, self.cpu_warning, self.cpu_threshold)
@@ -134,20 +138,13 @@ class ProcessesUIPlugin(UIPlugin):
     Dashboard rendering for the processes monitor. See ProcessesCollectorPlugin
     for collection/action logic.
 
-    Note: the original single-process ProcessesPlugin rendered its process
-    table straight from the in-memory `_processes` list populated by its own
-    on_collect(). In the split architecture the UI process never runs
-    on_collect, so per-process detail never crosses to it — only the
-    aggregate process_count/top_cpu_pct metrics do, via latest_metric(). This
-    class keeps an (always-empty) `_processes` list so the table-rendering
-    code below stays structurally unchanged; the count/top-CPU cards still
-    update live from metrics, and kill actions still work by proxying to
-    on_action() as before.
+    The process table reads ProcessesCollectorPlugin's latest snapshot
+    (self.latest_snapshot()) rather than an in-memory list — on_collect()
+    runs in a different process here, so its `_processes` list never crosses
+    the boundary on its own; ProcessesCollectorPlugin.on_collect() persists
+    it via db_logger.snapshot(processes) specifically so this class can read
+    it back.
     """
-
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self._processes: List[Dict] = []
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
@@ -223,7 +220,7 @@ class ProcessesUIPlugin(UIPlugin):
                         f'color: {STATUS_COLORS[_level_for(top_cpu, cpu_warning, cpu_threshold)]}'
                     )
             rows = []
-            for p in self._processes:
+            for p in self.latest_snapshot(default=[]):
                 cpu_color = STATUS_COLORS['online']
                 if cpu_warning is not None and cpu_threshold is not None:
                     cpu_color = STATUS_COLORS[_level_for(p['cpu'], cpu_warning, cpu_threshold)]
@@ -231,4 +228,4 @@ class ProcessesUIPlugin(UIPlugin):
             table.rows[:] = rows
             table.update()
 
-        on_data_event('metric', table, update)
+        on_data_event(('metric', 'snapshot'), table, update)
