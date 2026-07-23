@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.oom import OomPlugin, _extract_counter
+from vigil.plugins.oom import OomCollectorPlugin, _extract_counter
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -37,7 +37,7 @@ def _vmstat(oom_kill=0, include=True):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(OomPlugin, BASE_CFG)
+    return make_plugin(OomCollectorPlugin, BASE_CFG)
 
 
 async def _collect(plugin, oom_kill, ret=0, include=True):
@@ -86,7 +86,7 @@ class TestKillDetection:
         assert _latest_metric("oom_kills_new") == pytest.approx(3.0)
 
     async def test_kill_as_warning_when_configured(self, make_plugin):
-        p = make_plugin(OomPlugin, dict(BASE_CFG, is_warning=True))
+        p = make_plugin(OomCollectorPlugin, dict(BASE_CFG, is_warning=True))
         await _collect(p, 0)
         await _collect(p, 1)
         assert _latest_status() == "warning"
@@ -94,7 +94,7 @@ class TestKillDetection:
 
 class TestAlertDecay:
     async def test_alert_holds_then_clears(self, make_plugin):
-        p = make_plugin(OomPlugin, dict(BASE_CFG, alert_for=3))
+        p = make_plugin(OomCollectorPlugin, dict(BASE_CFG, alert_for=3))
         await _collect(p, 0)          # baseline
         await _collect(p, 1)          # kill -> failed
         assert _latest_status() == "failed"
@@ -106,7 +106,7 @@ class TestAlertDecay:
         assert _latest_status() == "online"
 
     async def test_new_kill_resets_decay(self, make_plugin):
-        p = make_plugin(OomPlugin, dict(BASE_CFG, alert_for=3))
+        p = make_plugin(OomCollectorPlugin, dict(BASE_CFG, alert_for=3))
         await _collect(p, 0)
         await _collect(p, 1)
         await _collect(p, 1)          # decaying
@@ -115,7 +115,7 @@ class TestAlertDecay:
         assert _latest_status() == "failed"
 
     async def test_alert_for_zero_clears_immediately(self, make_plugin):
-        p = make_plugin(OomPlugin, dict(BASE_CFG, alert_for=0))
+        p = make_plugin(OomCollectorPlugin, dict(BASE_CFG, alert_for=0))
         await _collect(p, 0)
         await _collect(p, 1)
         assert _latest_status() == "failed"

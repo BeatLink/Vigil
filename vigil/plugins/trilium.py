@@ -40,9 +40,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 
 def _build_fetch_script(api_url: str, timeout: int, token_command: Optional[str],
@@ -100,7 +99,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class TriliumPlugin(BasePlugin):
+class TriliumCollectorPlugin(CollectorPlugin):
     """Monitors Trilium note write-activity via the ETAPI metrics endpoint."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -167,8 +166,18 @@ class TriliumPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class TriliumUIPlugin(UIPlugin):
+    """Dashboard rendering for the trilium monitor."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stale_warning = float(self.config.get('stale_warning', 72))
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,

@@ -1,9 +1,8 @@
 from typing import Dict, Any, Optional, Tuple
 
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
 
 
 def _parse_wireless(stdout: str) -> Dict[str, Tuple[float, float]]:
@@ -47,7 +46,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class WifiPlugin(BasePlugin):
+class WifiCollectorPlugin(CollectorPlugin):
     """
     Monitors WiFi link quality and signal strength over SSH via
     /proc/net/wireless — no wireless tools required on the remote host.
@@ -116,10 +115,35 @@ class WifiPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class WifiUIPlugin(UIPlugin):
+    """Dashboard rendering for the wifi monitor."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.interface: Optional[str] = self.config.get('interface')
+        self.quality_warning   = float(self.config.get('quality_warning',   40))
+        self.quality_threshold = float(self.config.get('quality_threshold', 20))
+        # Unlike the collector, the UI process never observes a live
+        # collection, so auto-detected interfaces only become known once a
+        # metric has been recorded; an explicit `interface` config is known
+        # immediately.
+        self._active_interface: Optional[str] = self.interface
+
+    def _level_for_quality(self, quality: float) -> str:
+        """Lower quality is worse, so treat the bounds as floors."""
+        if quality <= self.quality_threshold:
+            return 'failed'
+        if quality <= self.quality_warning:
+            return 'warning'
+        return 'online'
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

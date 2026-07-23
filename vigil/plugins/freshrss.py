@@ -52,9 +52,8 @@ import shlex
 import time
 from typing import Any, Dict, List, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 
 def _build_fetch_script(api_url: str, timeout: int, username: str,
@@ -111,7 +110,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class FreshrssPlugin(BasePlugin):
+class FreshrssCollectorPlugin(CollectorPlugin):
     """Monitors FreshRSS feed-refresh staleness via the Fever API."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -210,8 +209,18 @@ class FreshrssPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class FreshrssUIPlugin(UIPlugin):
+    """Dashboard rendering for the freshrss monitor."""
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.refresh_stale_warning = float(config.get('refresh_stale_warning', 6))
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,

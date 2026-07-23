@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from vigil.plugins.vigil_self import (
-    VigilSelfPlugin,
+    VigilSelfCollectorPlugin,
     _format_uptime,
     _read_rss_mb,
     _read_cpu_seconds,
@@ -24,13 +24,13 @@ BASE_CFG = {
 
 @pytest.fixture
 def plugin(make_plugin):
-    p = make_plugin(VigilSelfPlugin, BASE_CFG)
+    p = make_plugin(VigilSelfCollectorPlugin, BASE_CFG)
     # Default to a healthy engine with no monitors; individual tests override.
     p.engine = MagicMock(plugins=[])
     yield p
     # `engine` is a class attribute, so a test that sets it on the instance is
     # fine, but one that sets it on the class would leak into the next test.
-    VigilSelfPlugin.engine = None
+    VigilSelfCollectorPlugin.engine = None
 
 
 def _latest_status(plugin_id: str = "test-self") -> str | None:

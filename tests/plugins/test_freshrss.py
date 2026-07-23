@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from vigil.plugins.freshrss import FreshrssPlugin, _parse_response, _build_fetch_script
+from vigil.plugins.freshrss import FreshrssCollectorPlugin, _parse_response, _build_fetch_script
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -35,7 +35,7 @@ def _response(feeds=None, refresh_hours_ago=1.0, auth=1):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(FreshrssPlugin, BASE_CFG)
+    return make_plugin(FreshrssCollectorPlugin, BASE_CFG)
 
 
 def _respond(plugin, feeds=None, refresh_hours_ago=1.0, auth=1):
@@ -117,7 +117,7 @@ class TestFreshrssCollection:
 
     async def test_missing_username_sets_failed(self, make_plugin):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "username"}
-        p = make_plugin(FreshrssPlugin, cfg)
+        p = make_plugin(FreshrssCollectorPlugin, cfg)
         await p.on_collect()
         assert _latest_status("test-freshrss") == "failed"
 

@@ -80,9 +80,8 @@ import json
 import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # Marks the end of the transfer payload so both API responses can be fetched in
 # one SSH round trip and split apart again. A newline-free sentinel that cannot
@@ -259,7 +258,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class QbittorrentPlugin(BasePlugin):
+class QbittorrentCollectorPlugin(CollectorPlugin):
     """Monitors qBittorrent transfer health via the WebUI API."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -485,13 +484,22 @@ class QbittorrentPlugin(BasePlugin):
         return [t['hash'] for t in torrents
                 if t.get('state') in _ERROR_STATES and t.get('hash')]
 
+
+class QbittorrentUIPlugin(UIPlugin):
+    """Dashboard rendering for the qbittorrent monitor."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+
+        stalled_warning = int(self.config.get('stalled_warning', 3))
+        stalled_threshold = int(self.config.get('stalled_threshold', 10))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -534,9 +542,9 @@ class QbittorrentPlugin(BasePlugin):
             if stalled:
                 count = int(stalled.value)
                 stalled_label.text = str(count)
-                if count >= self.stalled_threshold:
+                if count >= stalled_threshold:
                     colour = STATUS_COLORS['failed']
-                elif count >= self.stalled_warning:
+                elif count >= stalled_warning:
                     colour = STATUS_COLORS['warning']
                 else:
                     colour = STATUS_COLORS['online']

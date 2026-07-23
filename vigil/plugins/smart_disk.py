@@ -1,6 +1,7 @@
 from typing import Dict, Any
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, on_data_event
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # Discovers all physical disks, checks transport type (USB needs -d sat),
 # and runs smartctl -H on each. Outputs one "PASS /dev/sdX" or "FAIL /dev/sdX" per disk.
@@ -27,7 +28,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class SmartDiskPlugin(BasePlugin):
+class SmartDiskCollectorPlugin(CollectorPlugin):
     """
     Monitors SMART health of all physical disks over SSH.
     Discovers disks via lsblk and runs smartctl -H on each one per cycle.
@@ -71,11 +72,16 @@ class SmartDiskPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class SmartDiskUIPlugin(UIPlugin):
+    """Dashboard rendering for the smart_disk monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.theme import STATUS_COLORS
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

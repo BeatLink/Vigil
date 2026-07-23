@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.cloud import CloudPlugin, _parse_kv
+from vigil.plugins.cloud import CloudCollectorPlugin, _parse_kv
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -47,14 +47,14 @@ class TestParseKv:
 
 class TestCloudCollection:
     async def test_aws_detected_online(self, make_plugin):
-        p = make_plugin(CloudPlugin, _cfg(provider="aws"))
+        p = make_plugin(CloudCollectorPlugin, _cfg(provider="aws"))
         p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _AWS_OUT, ""))
         await p.on_collect()
         assert _latest_status() == "online"
         assert _latest_metric("on_cloud") == pytest.approx(1.0)
 
     async def test_not_cloud_offline(self, make_plugin):
-        p = make_plugin(CloudPlugin, _cfg(provider="aws"))
+        p = make_plugin(CloudCollectorPlugin, _cfg(provider="aws"))
         # exit 7 is the "endpoint didn't answer" sentinel
         p.ssh_collector.fetch_output = AsyncMock(return_value=(7, "", ""))
         await p.on_collect()
@@ -62,7 +62,7 @@ class TestCloudCollection:
         assert _latest_metric("on_cloud") == pytest.approx(0.0)
 
     async def test_auto_falls_through_providers(self, make_plugin):
-        p = make_plugin(CloudPlugin, _cfg(provider="auto"))
+        p = make_plugin(CloudCollectorPlugin, _cfg(provider="auto"))
         # aws fails, gcp fails, azure succeeds
         p.ssh_collector.fetch_output = AsyncMock(side_effect=[
             (7, "", ""),
@@ -73,7 +73,7 @@ class TestCloudCollection:
         assert _latest_status() == "online"
 
     async def test_auto_none_respond_offline(self, make_plugin):
-        p = make_plugin(CloudPlugin, _cfg(provider="auto"))
+        p = make_plugin(CloudCollectorPlugin, _cfg(provider="auto"))
         p.ssh_collector.fetch_output = AsyncMock(return_value=(7, "", ""))
         await p.on_collect()
         assert _latest_status() == "offline"
@@ -81,5 +81,5 @@ class TestCloudCollection:
 
 class TestCloudActions:
     async def test_on_action_returns_false(self, make_plugin):
-        p = make_plugin(CloudPlugin, _cfg())
+        p = make_plugin(CloudCollectorPlugin, _cfg())
         assert await p.on_action("anything") is False

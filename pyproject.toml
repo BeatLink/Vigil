@@ -15,10 +15,16 @@ dependencies = [
     "peewee>=3.17.1",
     "nicegui>=1.4.12",
     "dnspython>=2.6.0",
+    # Async HTTP client for the web process's calls to the collector's
+    # internal API (see vigil/web/remote_proxy.py).
+    # Already a transitive dependency of fastapi/uvicorn; declared directly
+    # since Vigil's own code imports it at runtime, not just in tests.
+    "httpx>=0.27.0",
 ]
 
 [project.scripts]
-vigil = "vigil.__main__:main"
+vigil-collector = "vigil.collector.__main__:main"
+vigil-web = "vigil.web.__main__:main"
 
 [project.optional-dependencies]
 dev = [

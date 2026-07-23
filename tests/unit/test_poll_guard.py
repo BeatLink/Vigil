@@ -10,10 +10,10 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock
 
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
 
 
-class _Probe(BasePlugin):
+class _Probe(CollectorPlugin):
     """Minimal concrete plugin that records how often it collected."""
 
     def __init__(self, *a, **kw):
@@ -28,9 +28,6 @@ class _Probe(BasePlugin):
 
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
-
-    def render_ui(self, context: str = 'page'):
-        pass
 
 
 @pytest.fixture
@@ -75,7 +72,7 @@ class TestReturnValue:
 
 class TestTimeoutConfig:
     def test_defaults_to_framework_timeout(self, make_plugin):
-        from vigil.core.modules.collectors.ssh_collector import TIMEOUT
+        from vigil.collector.collectors.ssh_collector import TIMEOUT
         p = make_plugin(_Probe, {})
         assert p.timeout == TIMEOUT
 

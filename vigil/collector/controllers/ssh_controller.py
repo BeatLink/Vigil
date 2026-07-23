@@ -3,7 +3,7 @@ import functools
 import logging
 from typing import Optional, Tuple
 from vigil.core.common.ssh_connector import SSHConnection
-from vigil.core.modules.collectors.ssh_collector import TIMEOUT_GRACE
+from vigil.collector.collectors.ssh_collector import TIMEOUT_GRACE
 
 # Default ceiling on a control action (restart a unit, stop a container).
 # These are short by nature; anything long-running belongs to JobController,

@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.load_average import LoadAveragePlugin, _level_for
+from vigil.plugins.load_average import LoadAverageCollectorPlugin, _level_for
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -37,12 +37,12 @@ def _make_output(load, cpus=4):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(LoadAveragePlugin, BASE_CFG)
+    return make_plugin(LoadAverageCollectorPlugin, BASE_CFG)
 
 
 @pytest.fixture
 def thresh_plugin(make_plugin):
-    return make_plugin(LoadAveragePlugin, CFG_WITH_THRESHOLDS)
+    return make_plugin(LoadAverageCollectorPlugin, CFG_WITH_THRESHOLDS)
 
 
 def _latest_status(plugin_id: str = "test-load") -> str | None:

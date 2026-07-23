@@ -8,7 +8,7 @@ import asyncio
 import pytest
 import yaml
 from unittest.mock import MagicMock, AsyncMock, patch
-from vigil.core.main import VigilEngine
+from vigil.collector.main import VigilEngine
 from vigil.core.data.database import db
 
 
@@ -32,21 +32,21 @@ class TestEngineInitialization:
             "database": {"path": db_path},
             "plugins": [],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection"):
+        with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path)
         assert engine.db is not None
 
     def test_db_path_taken_from_config(self, tmp_path):
         db_path = str(tmp_path / "custom.db")
         cfg_path = _write_config(tmp_path, {"database": {"path": db_path}, "plugins": []})
-        with patch("vigil.core.common.base_plugin.SSHConnection"):
+        with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path)
         assert engine.db_path == db_path
 
     def test_db_path_override_takes_precedence(self, tmp_path):
         cfg_path = _write_config(tmp_path, {"database": {"path": "original.db"}, "plugins": []})
         override = str(tmp_path / "override.db")
-        with patch("vigil.core.common.base_plugin.SSHConnection"):
+        with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path, db_path_override=override)
         assert engine.db_path == override
 
@@ -63,7 +63,7 @@ class TestPluginLoading:
                 "target_host": "127.0.0.1",
             }],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection"):
+        with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         assert len(engine.plugins) == 1
@@ -75,7 +75,7 @@ class TestPluginLoading:
             "database": {"path": db_path},
             "plugins": [{"name": "Bad", "type": "does_not_exist"}],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection"):
+        with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         assert len(engine.plugins) == 0
@@ -92,7 +92,7 @@ class TestPluginLoading:
                 ],
             }],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection"):
+        with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         assert len(engine.plugins) == 1
@@ -109,7 +109,7 @@ class TestPluginLoading:
                 {"name": "Good", "id": "good", "type": "uptime", "target_host": "127.0.0.1"},
             ],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection"):
+        with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         assert len(engine.plugins) == 1
@@ -129,7 +129,7 @@ class TestSSHDefaultsMerge:
                 "ssh_config": {"host": "server.technet"},
             }],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection") as mock_ssh:
+        with patch("vigil.collector.plugin_base.SSHConnection") as mock_ssh:
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         passed_cfg = mock_ssh.from_config.call_args[0][0]
@@ -149,7 +149,7 @@ class TestSSHDefaultsMerge:
                 "ssh_config": {"host": "server.technet", "username": "root"},
             }],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection") as mock_ssh:
+        with patch("vigil.collector.plugin_base.SSHConnection") as mock_ssh:
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         passed_cfg = mock_ssh.from_config.call_args[0][0]
@@ -165,7 +165,7 @@ class TestSSHDefaultsMerge:
                 "target_host": "127.0.0.1",
             }],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection") as mock_ssh:
+        with patch("vigil.collector.plugin_base.SSHConnection") as mock_ssh:
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         passed_cfg = mock_ssh.from_config.call_args[0][0]
@@ -179,7 +179,7 @@ class TestLogRetention:
             "logging": {"retention_days": 14},
             "plugins": [],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection"):
+        with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path)
         assert engine.log_retention_days == 14
 
@@ -189,7 +189,7 @@ class TestLogRetention:
             "logging": {"retention_days": 30},
             "plugins": [],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection"):
+        with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path)
         engine.db = MagicMock()
         engine._maybe_prune_logs()          # first call prunes
@@ -203,75 +203,109 @@ class TestLogRetention:
             "logging": {"retention_days": 0},
             "plugins": [],
         })
-        with patch("vigil.core.common.base_plugin.SSHConnection"):
+        with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path)
         engine.db = MagicMock()
         engine._maybe_prune_logs()
         engine.db.prune_logs.assert_not_called()
 
 
-class TestBFSPollOrdering:
-    """Group plugins must aggregate AFTER their children have written fresh status."""
+class TestFlatten:
+    """_flatten yields every monitor in the tree, groups and leaves alike."""
 
-    async def test_children_polled_before_parents(self):
-        call_order = []
-
-        async def child_cycle():
-            call_order.append("child")
-
-        async def group_cycle():
-            call_order.append("group")
-
-        mock_child = MagicMock(id="child", children=[])
-        mock_child.run_cycle = child_cycle
-        mock_group = MagicMock(id="group", children=[mock_child])
-        mock_group.run_cycle = group_cycle
-
-        # Build a bare engine without file I/O
-        engine = object.__new__(VigilEngine)
-        engine.plugins = [mock_group]
-        engine.db = MagicMock()
-
-        # Run one BFS cycle (copy of engine.run logic without the sleep loop)
-        levels = []
-        current = list(engine.plugins)
-        while current:
-            levels.append(current)
-            current = [c for p in current for c in p.children]
-
-        for level in reversed(levels):
-            await asyncio.gather(*[p.run_cycle() for p in level])
-
-        assert call_order == ["child", "group"]
-
-    async def test_deeply_nested_runs_bottom_up(self):
-        call_order = []
-
-        def make_mock(name, children):
-            m = MagicMock(id=name, children=children)
-            async def run():
-                call_order.append(name)
-            m.run_cycle = run
-            return m
-
-        leaf   = make_mock("leaf",   [])
-        mid    = make_mock("mid",    [leaf])
-        root   = make_mock("root",   [mid])
+    def test_flattens_nested_tree(self):
+        leaf = MagicMock(id="leaf", children=[])
+        mid = MagicMock(id="mid", children=[leaf])
+        root = MagicMock(id="root", children=[mid])
 
         engine = object.__new__(VigilEngine)
         engine.plugins = [root]
-        engine.db = MagicMock()
 
-        levels = []
-        current = list(engine.plugins)
-        while current:
-            levels.append(current)
-            current = [c for p in current for c in p.children]
+        assert list(VigilEngine._flatten(engine.plugins)) == [root, mid, leaf]
 
-        for level in reversed(levels):
-            await asyncio.gather(*[p.run_cycle() for p in level])
 
-        assert call_order == ["leaf", "mid", "root"]
+class TestPerMonitorScheduling:
+    """
+    Each monitor is driven by its own independent task/loop (_monitor_loop),
+    not a shared tick. A group polls on its own schedule too — it aggregates
+    by re-reading live child status from the DB (GroupPlugin.on_collect), so
+    it has no ordering dependency on when its children last ran.
+    """
+
+    async def test_monitor_loop_reschedules_using_plugin_interval(self):
+        # _monitor_loop sleeps `plugin.interval` between calls; patch sleep to
+        # observe both the startup jitter and the interval, and to stop the
+        # otherwise-infinite loop after a couple of iterations.
+        calls = []
+
+        async def fake_sleep(seconds):
+            calls.append(seconds)
+            if len(calls) >= 3:  # jitter, then two interval sleeps
+                raise asyncio.CancelledError()
+
+        plugin = MagicMock(id="p", interval=42)
+        plugin.run_cycle = AsyncMock(return_value=True)
+
+        engine = object.__new__(VigilEngine)
+        with patch("vigil.collector.main.asyncio.sleep", side_effect=fake_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                await engine._monitor_loop(plugin)
+
+        assert plugin.run_cycle.await_count == 2
+        # First sleep is the startup jitter (0..STARTUP_JITTER_SECONDS); the
+        # rest are the monitor's own interval, independent of any other
+        # monitor's schedule.
+        assert calls[1:] == [42, 42]
+
+    async def test_a_crashing_monitor_keeps_polling(self):
+        # One monitor raising must not end its own loop, let alone anyone else's.
+        calls = []
+
+        async def fake_sleep(seconds):
+            calls.append(seconds)
+            if len(calls) >= 3:
+                raise asyncio.CancelledError()
+
+        plugin = MagicMock(id="p", interval=5)
+        plugin.run_cycle = AsyncMock(side_effect=RuntimeError("boom"))
+
+        engine = object.__new__(VigilEngine)
+        with patch("vigil.collector.main.asyncio.sleep", side_effect=fake_sleep):
+            with pytest.raises(asyncio.CancelledError):
+                await engine._monitor_loop(plugin)
+
+        assert plugin.run_cycle.await_count == 2
+
+    async def test_run_starts_one_task_per_flattened_monitor(self, tmp_path):
+        cfg_path = str(tmp_path / "config.yaml")
+        import yaml
+        with open(cfg_path, "w") as fh:
+            yaml.dump({"database": {"path": str(tmp_path / "t.db")}, "plugins": []}, fh)
+
+        with patch("vigil.collector.plugin_base.SSHConnection"):
+            engine = VigilEngine(cfg_path)
+
+        leaf = MagicMock(id="leaf", children=[], interval=60)
+        group = MagicMock(id="group", children=[leaf], interval=60)
+        engine.plugins = [group]
+        engine._start_exporters = MagicMock()
+
+        created = []
+        real_create_task = asyncio.create_task
+
+        def spy_create_task(coro, *a, **kw):
+            created.append(coro)
+            coro.close()  # never actually run it — just observe scheduling
+            return MagicMock()
+
+        with patch("vigil.collector.main.asyncio.create_task", side_effect=spy_create_task):
+            with patch.object(engine, "_prune_loop", AsyncMock()):
+                await engine.run()
+
+        # One task per monitor (groups included), plus the internal API task.
+        monitor_tasks = [c for c in created if c.cr_code.co_name == "_monitor_loop"]
+        assert len(monitor_tasks) == 2
+        assert any(c.cr_code.co_name == "_run_internal_api" for c in created)
 
 
 class TestExceptionIsolation:

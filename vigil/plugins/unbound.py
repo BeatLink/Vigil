@@ -57,9 +57,8 @@ import re
 import shlex
 from typing import Any, Dict, Optional, Tuple
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # Marks the end of the stats payload so the probe query's own output can
 # follow in the same SSH round trip and be split apart again.
@@ -135,7 +134,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class UnboundPlugin(BasePlugin):
+class UnboundCollectorPlugin(CollectorPlugin):
     """Monitors Unbound recursive resolution health via unbound-control and a live query."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -232,8 +231,19 @@ class UnboundPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class UnboundUIPlugin(UIPlugin):
+    """Dashboard rendering for the unbound monitor."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.servfail_warning = float(self.config.get('servfail_warning', 5))
+        self.servfail_threshold = float(self.config.get('servfail_threshold', 20))
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,

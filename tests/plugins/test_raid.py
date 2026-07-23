@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.raid import RaidPlugin
+from vigil.plugins.raid import RaidCollectorPlugin
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -54,7 +54,7 @@ unused devices: <none>
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(RaidPlugin, BASE_CFG)
+    return make_plugin(RaidCollectorPlugin, BASE_CFG)
 
 
 class TestRaidCollection:

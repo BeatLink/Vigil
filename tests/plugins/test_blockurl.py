@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from vigil.plugins.blockurl import BlockurlPlugin, _parse_response
+from vigil.plugins.blockurl import BlockurlCollectorPlugin, _parse_response
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -20,7 +20,7 @@ _DOMAINS = [["example.com", 5], ["other.com", 3]]
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(BlockurlPlugin, BASE_CFG)
+    return make_plugin(BlockurlCollectorPlugin, BASE_CFG)
 
 
 def _respond(plugin, domains=None):

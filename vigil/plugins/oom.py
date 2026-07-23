@@ -1,8 +1,7 @@
 from typing import Dict, Any, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 
 def _extract_counter(block: str, key: str) -> Optional[int]:
@@ -28,7 +27,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class OomPlugin(BasePlugin):
+class OomCollectorPlugin(CollectorPlugin):
     """
     Detects kernel Out-Of-Memory kills over SSH via /proc/vmstat — no extra
     tools required on the target.
@@ -129,8 +128,14 @@ class OomPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class OomUIPlugin(UIPlugin):
+    """Dashboard rendering for the oom monitor."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -153,7 +158,7 @@ class OomPlugin(BasePlugin):
             if recent:
                 recent_label.text = f'{recent.value:,.0f}'
                 level = 'online' if recent.value == 0 else (
-                    'warning' if self.is_warning else 'failed')
+                    'warning' if self.config.get('is_warning', False) else 'failed')
                 recent_label.style(f'color: {STATUS_COLORS[level]}')
 
         on_data_event('metric', total_label, update_cards)

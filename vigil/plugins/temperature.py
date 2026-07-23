@@ -1,7 +1,8 @@
 from typing import Dict, Any
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
+from vigil.core.common.plugin_utils import level_for as _level_for
 
 _COLLECT_CMD = (
     "for d in /sys/class/thermal/thermal_zone*; do "
@@ -18,9 +19,6 @@ def _sanitize(name: str) -> str:
     return ''.join(c if c.isalnum() or c == '_' else '_' for c in name.lower())
 
 
-from vigil.core.common.plugin_utils import level_for as _level_for
-
-
 _DEFAULT_LAYOUT = [
     ['host_card', 'max_card'],
     ['sensors'],
@@ -29,7 +27,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class TemperaturePlugin(BasePlugin):
+class TemperatureCollectorPlugin(CollectorPlugin):
     """
     Monitors CPU/system temperature over SSH via /sys/class/thermal/thermal_zone*.
 
@@ -91,10 +89,21 @@ class TemperaturePlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class TemperatureUIPlugin(UIPlugin):
+    """Dashboard rendering for the temperature monitor."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.temp_warning   = int(self.config.get('temp_warning',   70))
+        self.temp_threshold = int(self.config.get('temp_threshold', 80))
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,

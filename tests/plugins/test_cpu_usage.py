@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.cpu_usage import CpuUsagePlugin, _parse_cpu_line, _cpu_pct, _level_for
+from vigil.plugins.cpu_usage import CpuUsageCollectorPlugin, _parse_cpu_line, _cpu_pct, _level_for
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -35,7 +35,7 @@ def _make_output(cpu1, cpu2):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(CpuUsagePlugin, BASE_CFG)
+    return make_plugin(CpuUsageCollectorPlugin, BASE_CFG)
 
 
 def _latest_status(plugin_id: str = "test-cpu") -> str | None:
@@ -140,7 +140,7 @@ class TestCpuUsageCollection:
     async def test_custom_thresholds_respected(self, make_plugin):
         cfg = {**BASE_CFG, "name": "test-cpu-custom", "id": "test-cpu-custom",
                "cpu_warning": 40, "cpu_threshold": 50}
-        p = make_plugin(CpuUsagePlugin, cfg)
+        p = make_plugin(CpuUsageCollectorPlugin, cfg)
         p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _make_output(_CPU1_50, _CPU2_50), ""))
         await p.on_collect()
         assert _latest_status("test-cpu-custom") == "failed"

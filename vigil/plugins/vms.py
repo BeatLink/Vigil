@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # `virsh list --all` output has a header + separator then rows:
 #   Id   Name        State
@@ -25,7 +25,25 @@ def _shquote(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
 
 
-class VmsPlugin(BasePlugin):
+def _parse_row(line: str):
+    """Parse one `virsh list --all` row into (name, state). Returns (None, None) for
+    header/separator/blank lines."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith('---') or set(stripped) <= set('- '):
+        return None, None
+    parts = line.split()
+    # Header row: "Id Name State"
+    if parts[:2] == ['Id', 'Name'] or (parts and parts[0] == 'Id'):
+        return None, None
+    if len(parts) < 3:
+        return None, None
+    # Columns: Id, Name, State... — Id is a number or '-'; State can be 2 words.
+    name = parts[1]
+    state = ' '.join(parts[2:]).lower()
+    return name, state
+
+
+class VmsCollectorPlugin(CollectorPlugin):
     """
     Monitors libvirt/KVM virtual machines over SSH via `virsh list --all`.
 
@@ -139,9 +157,18 @@ class VmsPlugin(BasePlugin):
             self.db_logger.write(f"{verb} of {name} failed: {stderr}", level="ERROR")
         return status == 0
 
+
+class VmsUIPlugin(UIPlugin):
+    """Dashboard rendering for the vms monitor. See VmsCollectorPlugin for
+    collection/action logic — get_actions()/on_action() are inherited from
+    UIPlugin, which proxies to the collector's live instance, so this class
+    needs no knowledge of expect_running itself."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -173,21 +200,3 @@ class VmsPlugin(BasePlugin):
                 stopped_label.text = str(stopped)
 
         on_data_event('metric', total_label, update_cards)
-
-
-def _parse_row(line: str):
-    """Parse one `virsh list --all` row into (name, state). Returns (None, None) for
-    header/separator/blank lines."""
-    stripped = line.strip()
-    if not stripped or stripped.startswith('---') or set(stripped) <= set('- '):
-        return None, None
-    parts = line.split()
-    # Header row: "Id Name State"
-    if parts[:2] == ['Id', 'Name'] or (parts and parts[0] == 'Id'):
-        return None, None
-    if len(parts) < 3:
-        return None, None
-    # Columns: Id, Name, State... — Id is a number or '-'; State can be 2 words.
-    name = parts[1]
-    state = ' '.join(parts[2:]).lower()
-    return name, state

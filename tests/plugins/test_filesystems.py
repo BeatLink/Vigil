@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.filesystems import (
-    FilesystemsPlugin, _sanitize, _parse_inodes, _parse_readonly, _SNAP,
+    FilesystemsCollectorPlugin, _sanitize, _parse_inodes, _parse_readonly, _SNAP,
 )
 from vigil.core.data.database import db, StatusHistory, Metric
 
@@ -71,7 +71,7 @@ def _combined(space, inodes=None, mounts=None):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(FilesystemsPlugin, BASE_CFG)
+    return make_plugin(FilesystemsCollectorPlugin, BASE_CFG)
 
 
 class TestSanitize:
@@ -213,7 +213,7 @@ class TestReadOnlyDetection:
 
     async def test_readonly_as_warning_when_configured(self, make_plugin):
         cfg = dict(BASE_CFG, readonly_is_failure=False)
-        p = make_plugin(FilesystemsPlugin, cfg)
+        p = make_plugin(FilesystemsCollectorPlugin, cfg)
         p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
             _df(("/data", 100, 20, 20)),
             _df_inodes(("/data", 5)),

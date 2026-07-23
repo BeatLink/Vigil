@@ -1,10 +1,9 @@
 from typing import Dict, Any
 from collections import Counter
 
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
 
 # Linux TCP connection state codes as they appear (hex) in /proc/net/tcp[6].
 _TCP_STATES = {
@@ -49,7 +48,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class ConnectionsPlugin(BasePlugin):
+class ConnectionsCollectorPlugin(CollectorPlugin):
     """
     Monitors the count of TCP connections by state over SSH, reading
     /proc/net/tcp and /proc/net/tcp6 — no netstat/ss required on the target.
@@ -94,10 +93,19 @@ class ConnectionsPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class ConnectionsUIPlugin(UIPlugin):
+    """Dashboard rendering for the connections monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
+
+        total_warning   = int(self.config.get('total_warning',   500))
+        total_threshold = int(self.config.get('total_threshold', 1000))
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -125,7 +133,7 @@ class ConnectionsPlugin(BasePlugin):
             timewait = self.latest_metric('time_wait')
             if total:
                 total_label.text = f'{total.value:.0f}'
-                total_label.style(f'color: {STATUS_COLORS[_level_for(total.value, self.total_warning, self.total_threshold)]}')
+                total_label.style(f'color: {STATUS_COLORS[_level_for(total.value, total_warning, total_threshold)]}')
             if established:
                 established_label.text = f'{established.value:.0f}'
             if listen:

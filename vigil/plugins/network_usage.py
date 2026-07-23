@@ -1,8 +1,7 @@
-import logging
 from typing import Dict, Any, Optional, Tuple
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # Interface prefixes treated as virtual/internal — excluded from auto-detection
 _VIRTUAL_PREFIXES = ('lo', 'veth', 'docker', 'virbr', 'br-', 'tun', 'tap')
@@ -50,7 +49,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class NetworkUsagePlugin(BasePlugin):
+class NetworkUsageCollectorPlugin(CollectorPlugin):
     """
     Monitors network interface throughput over SSH via /proc/net/dev.
 
@@ -116,17 +115,34 @@ class NetworkUsagePlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class NetworkUsageUIPlugin(UIPlugin):
+    """
+    Dashboard rendering for the network_usage monitor.
+
+    The interface card shows the configured `interface` when set. When
+    auto-detection is in play, the collector-side `_active_interface`
+    (populated once on_collect first runs) is not visible to this process —
+    there is no live shared state or persisted metric for "which interface
+    was chosen" — so this falls back to a generic placeholder until the
+    metrics themselves (rx_kbps/tx_kbps) are what actually confirm data is
+    flowing.
+    """
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+
+        configured_interface = self.config.get('interface')
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('iface_card'):
-            iface_label = info_card('INTERFACE', self._active_interface or 'Detecting...')
+            iface_label = info_card('INTERFACE', configured_interface or 'Detecting...')
         with layout.cell('rx_card'):
             rx_label = info_card('DOWNLOAD', '-- KB/s')
         with layout.cell('tx_card'):
@@ -139,8 +155,8 @@ class NetworkUsagePlugin(BasePlugin):
             self.internal_modules['ui']['events_table']()
 
         def update_cards():
-            if self._active_interface:
-                iface_label.text = self._active_interface
+            if configured_interface:
+                iface_label.text = configured_interface
             rx = self.latest_metric('rx_kbps')
             tx = self.latest_metric('tx_kbps')
             if rx:

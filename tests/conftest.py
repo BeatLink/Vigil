@@ -56,9 +56,9 @@ def make_plugin(db_manager):
         if extra_config:
             cfg.update(extra_config)
 
-        with patch("vigil.core.common.base_plugin.SSHConnection") as MockSSH, \
-             patch("vigil.core.common.base_plugin.SSHCollector") as MockCollector, \
-             patch("vigil.core.common.base_plugin.SSHController") as MockController:
+        with patch("vigil.collector.plugin_base.SSHConnection") as MockSSH, \
+             patch("vigil.collector.plugin_base.SSHCollector") as MockCollector, \
+             patch("vigil.collector.plugin_base.SSHController") as MockController:
 
             mock_conn = MagicMock()
             mock_conn.host = cfg.get("ssh_config", {}).get("host", "test.host")
@@ -82,7 +82,7 @@ def make_plugin(db_manager):
         # lifecycle and persistence are genuinely exercised; only the SSH
         # connection under it is mocked. Tests drive it by setting
         # plugin.job_controller.ssh.execute_streaming.
-        from vigil.core.modules.controllers.job_controller import JobController
+        from vigil.collector.controllers.job_controller import JobController
         mock_ssh = MagicMock()
         mock_ssh.execute_streaming = MagicMock(return_value=(0, ""))
         plugin.job_controller = JobController(

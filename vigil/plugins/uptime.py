@@ -2,9 +2,10 @@ import asyncio
 import platform
 import re
 import logging
-from typing import Dict, Any, List
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
+from typing import Dict, Any
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'status_card', 'latency_card'],
@@ -13,19 +14,19 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class UptimePlugin(BasePlugin):
+class UptimeCollectorPlugin(CollectorPlugin):
     """
     A simple uptime plugin that checks host availability via ICMP ping.
     Reports availability status and latency (ms) to the database.
     """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
-        
+
 
     async def on_collect(self):
         """Executes a ping command and records the result."""
         host = self.target
-        
+
         # Determine the correct ping flag based on the operating system
         is_windows = platform.system().lower() == 'windows'
         # -c/-n 1: single packet, -W 2: 2 second timeout
@@ -44,7 +45,7 @@ class UptimePlugin(BasePlugin):
                 self.db_logger.write(f"Host {host} is reachable.", level="INFO")
                 self.db_metrics.metric("up", 1.0)
                 self.set_status('online')
-                
+
                 # Attempt to extract latency from output (e.g., "time=12.3 ms")
                 latency_match = re.search(r'time=([\d.]+)\s*ms', output)
                 if latency_match:
@@ -66,10 +67,15 @@ class UptimePlugin(BasePlugin):
         """Basic uptime monitoring does not currently support remediation actions."""
         return False
 
+
+class UptimeUIPlugin(UIPlugin):
+    """Dashboard rendering for the uptime monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

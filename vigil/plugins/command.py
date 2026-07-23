@@ -1,9 +1,9 @@
 import re
 from typing import Dict, Any, Optional
-from vigil.core.common.base_plugin import BasePlugin
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
 
 _DEFAULT_LAYOUT_METRIC = [
     ['host_card', 'exit_card', 'value_card'],
@@ -17,7 +17,7 @@ _DEFAULT_LAYOUT_PLAIN = [
 ]
 
 
-class CommandPlugin(BasePlugin):
+class CommandCollectorPlugin(CollectorPlugin):
     """
     Runs an arbitrary command over SSH and derives status from it — the generic
     escape hatch for checks that don't have a dedicated plugin.
@@ -126,10 +126,30 @@ class CommandPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
 
-        has_value = self.pattern is not None
+class CommandUIPlugin(UIPlugin):
+    """Dashboard rendering for the command monitor."""
+
+    def render_ui(self, context: str = 'page'):
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
+
+        pattern = self.config.get('pattern')
+        warning = self.config.get('warning')
+        threshold = self.config.get('threshold')
+        invert = bool(self.config.get('invert', False))
+        value_label = self.config.get('value_label', 'VALUE')
+        value_unit = self.config.get('value_unit', '')
+
+        def level_for_value(value: float) -> str:
+            if warning is None or threshold is None:
+                return 'online'
+            if invert:
+                return _level_for(-value, -float(warning), -float(threshold))
+            return _level_for(value, float(warning), float(threshold))
+
+        has_value = pattern is not None
         base = _DEFAULT_LAYOUT_METRIC if has_value else _DEFAULT_LAYOUT_PLAIN
         layout = PluginLayout(self.config, base if context == 'page' else make_inline_layout(base))
 
@@ -139,9 +159,9 @@ class CommandPlugin(BasePlugin):
             exit_label = info_card('EXIT CODE', '--')
         if has_value:
             with layout.cell('value_card'):
-                value_label = info_card(self.value_label, '--')
+                value_label_widget = info_card(value_label, '--')
             with layout.cell('chart'):
-                history_chart(self.value_label, self.id, 'value')
+                history_chart(value_label, self.id, 'value')
         with layout.cell('events'):
             self.internal_modules['ui']['events_table']()
 
@@ -154,8 +174,8 @@ class CommandPlugin(BasePlugin):
             if has_value:
                 val_m = self.latest_metric('value')
                 if val_m is not None:
-                    value_label.text = f'{val_m.value:g}{self.value_unit}'
-                    value_label.style(f"color: {STATUS_COLORS[self._level_for_value(val_m.value)]}")
+                    value_label_widget.text = f'{val_m.value:g}{value_unit}'
+                    value_label_widget.style(f"color: {STATUS_COLORS[level_for_value(val_m.value)]}")
 
         on_data_event('metric', exit_label, update)
 

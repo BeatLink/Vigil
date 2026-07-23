@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional, Tuple
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, on_data_event
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # The link-local metadata endpoint is the same address on every major provider;
 # the paths differ, and AWS IMDSv2 additionally requires a token header.
@@ -45,7 +46,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class CloudPlugin(BasePlugin):
+class CloudCollectorPlugin(CollectorPlugin):
     """
     Detects the cloud provider of the target and surfaces its instance metadata
     (instance id, type, region/zone) over SSH via the link-local metadata
@@ -113,10 +114,15 @@ class CloudPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class CloudUIPlugin(UIPlugin):
+    """Dashboard rendering for the cloud monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         import json
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

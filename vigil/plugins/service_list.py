@@ -2,10 +2,9 @@ import os
 import shlex
 import asyncio
 from typing import Any, Dict, List, Optional
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.common.time_utils import parse_duration
-from vigil.core.ui.components import info_card, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'count_card', 'reload_card'],
@@ -21,7 +20,7 @@ _DEFAULT_UNIT_FILE_WRITE_PATHS = (
 )
 
 
-class ServiceListPlugin(BasePlugin):
+class ServiceListCollectorPlugin(CollectorPlugin):
     """
     Lists all systemd service units on a host and exposes management actions.
 
@@ -195,9 +194,34 @@ class ServiceListPlugin(BasePlugin):
 
         return False
 
+
+class ServiceListUIPlugin(UIPlugin):
+    """
+    Dashboard rendering for the service-list monitor: filterable table with
+    per-row start/stop/restart/enable/disable/status/unit-file actions. See
+    ServiceListCollectorPlugin for collection/action logic.
+
+    Note: like processes.py, the original single-process ServiceListPlugin
+    rendered its table straight from the in-memory `_services` list populated
+    by its own on_collect(). In the split architecture the UI process never
+    runs on_collect, so that snapshot never crosses to it — this class keeps
+    an (always-empty) `_services` list so the table-rendering code below stays
+    structurally unchanged, while the count card updates live from the
+    services_total metric. Per-row actions (start/stop/.../view unit file/edit
+    unit file) still work unchanged: they call self.ssh_controller /
+    self.on_action, both of which UIPlugin proxies to the collector over its
+    internal API with identical method signatures.
+    """
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
+        self._services: List[Dict[str, Any]] = []
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -302,7 +326,8 @@ class ServiceListPlugin(BasePlugin):
                 table.on('edit_file', lambda e: asyncio.create_task(do_row_action(e, 'edit_file')))
 
             def update():
-                self._count_label.text = str(len(self._services))
+                count_metric = self.latest_metric('services_total')
+                self._count_label.text = str(int(count_metric.value)) if count_metric else str(len(self._services))
                 update_table()
 
             search_in.on('update:modelValue', lambda e: update())
@@ -378,3 +403,57 @@ class ServiceListPlugin(BasePlugin):
 
         success = await self.on_action('daemon_reload')
         ui.notify('Daemon reloaded' if success else 'Daemon reload failed', type='positive' if success else 'negative')
+
+    async def _read_unit_file(self, service_name: str) -> tuple[bool, str]:
+        """Same as ServiceListCollectorPlugin._read_unit_file, via the
+        ssh_controller proxy — UIPlugin's RemoteSSHController exposes the same
+        execute_action() method the collector's real SSHController does."""
+        status, stdout, stderr = await self.ssh_controller.execute_action(
+            f'sudo systemctl cat {shlex.quote(service_name)}'
+        )
+        if status != 0:
+            return False, stderr.strip() or 'Unable to read unit file'
+        return True, stdout
+
+    async def _write_unit_file(self, service_name: str, content: str) -> tuple[bool, str]:
+        """Same as ServiceListCollectorPlugin._write_unit_file, via the
+        ssh_controller proxy."""
+        ok, path_or_error = await self._resolve_unit_path(service_name)
+        if not ok:
+            return False, path_or_error
+
+        path = path_or_error
+        if not self._is_write_path_allowed(path):
+            return False, f'Write path not allowed: {path}'
+
+        cmd = (
+            "sudo python3 - <<'PY'\n"
+            "from pathlib import Path\n"
+            f"Path({shlex.quote(path)}).write_text({shlex.quote(content)}, encoding='utf-8')\n"
+            "PY"
+        )
+        status, _, stderr = await self.ssh_controller.execute_action(cmd)
+        if status != 0:
+            return False, stderr.strip() or 'Unable to write unit file'
+        return True, 'Unit file written successfully'
+
+    async def _resolve_unit_path(self, service_name: str) -> tuple[bool, str]:
+        status, stdout, stderr = await self.ssh_controller.execute_action(
+            f'systemctl show -p FragmentPath --value {shlex.quote(service_name)}'
+        )
+        if status != 0:
+            return False, stderr.strip() or 'Unable to resolve unit file path'
+
+        path = stdout.strip()
+        if not path or path == 'n/a':
+            return False, 'Unit file path unavailable'
+        return True, path
+
+    def _is_write_path_allowed(self, path: str) -> bool:
+        allowed_write_paths = tuple(self.config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
+        normalized = os.path.abspath(path)
+        return any(
+            normalized == os.path.abspath(allowed) or
+            normalized.startswith(os.path.abspath(allowed) + os.sep)
+            for allowed in allowed_write_paths
+        )

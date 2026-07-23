@@ -30,9 +30,8 @@ from typing import Any, Dict, List, Optional
 import dns.exception
 import dns.resolver
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
     ['status_card', 'type_card', 'ttl_card'],
@@ -51,7 +50,7 @@ def _answer_to_str(record_type: str, rdata) -> str:
     return str(rdata).rstrip('.')
 
 
-class DnsRecordPlugin(BasePlugin):
+class DnsRecordCollectorPlugin(CollectorPlugin):
     """
     Monitors a DNS record: resolves it on each cycle and reports failed if the
     query errors, times out, or (when `expected` is set) returns none of the
@@ -157,10 +156,24 @@ class DnsRecordPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class DnsRecordUIPlugin(UIPlugin):
+    """Dashboard rendering for the dns_record monitor."""
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.record_type = str(config.get('record_type', 'A')).upper()
+        expected = config.get('expected')
+        self.expected: Optional[List[str]] = (
+            [str(v).rstrip('.') for v in expected] if expected else None
+        )
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         import json
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

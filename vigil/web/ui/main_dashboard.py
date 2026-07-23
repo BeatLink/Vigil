@@ -22,7 +22,23 @@ def navigate_to(plugin_instance: Any):
 
 
 def init_gui(engine: Any, port: int = 8080):
-    engine_run_func = engine.run
+    """
+    Serve the dashboard for a VigilWebEngine.
+
+    Unlike the pre-split single-process design, this no longer starts a
+    polling loop — `engine` here is a VigilWebEngine (core/web_engine.py),
+    which has no run() or scheduler. Monitor polling happens entirely in the
+    separate collector process (VigilEngine.run(), core/main.py); this
+    process only reads the shared database and proxies actions to the
+    collector's internal API.
+    """
+    # No writer thread runs in this process for monitor data (only for UI
+    # preferences — see VigilWebEngine.__init__), so DataBus.emit() here
+    # would never fire for status/metric/event/log_line writes; on_data_event
+    # (components.py) polls instead once this is set. Must happen before any
+    # page is built, since render_ui() calls on_data_event during construction.
+    from vigil.core.data.events import bus
+    bus.polling_mode = True
 
     app.add_static_file(local_file=_ICON, url_path='/icon.svg')
 
@@ -30,18 +46,15 @@ def init_gui(engine: Any, port: int = 8080):
     # middleware wraps the whole app regardless of registration order relative
     # to routes, but registering it early keeps intent obvious: everything
     # that follows is meant to be gated by it.
-    from vigil.core.auth import register_auth
+    from vigil.web.auth import register_auth
     register_auth(app, engine.config_loader.auth_settings)
 
     # Register the REST API + Prometheus /metrics routes on the FastAPI app.
     try:
-        from vigil.core.api import register_api
+        from vigil.web.api import register_api
         register_api(app, engine)
     except Exception as e:
         logging.error(f"Failed to register REST API: {e}")
-
-    if engine_run_func:
-        app.on_startup(engine_run_func)
 
     # Navigation state is created per client inside index_page(): `init_gui`
     # runs once at startup, but each browser connection builds its own element
@@ -488,17 +501,23 @@ def init_gui(engine: Any, port: int = 8080):
                   on_data_event('event', e_table, update_e)
 
       def render_plugin_detail(plugin: Any):
-          info = plugin.present()
-          with ui.row().classes('w-full items-center justify-between mb-6'):
+          # Header (name + action buttons) renders once the collector answers
+          # which actions are available; render_ui() below doesn't wait on
+          # that, so the monitor's own data appears immediately.
+          header = ui.row().classes('w-full items-center justify-between mb-6')
+          with header:
               with ui.column():
-                  ui.label(info['name']).classes('text-3xl font-bold').style(f'color: {TEXT}')
+                  ui.label(plugin.name).classes('text-3xl font-bold').style(f'color: {TEXT}')
+              actions_row = ui.row().classes('gap-2 items-center')
 
-              with ui.row().classes('gap-2 items-center'):
+          async def render_actions():
+              with actions_row:
                   async def poll_now():
                       await plugin.run_cycle()
-                      ui.notify(f'{info["name"]} polled', type='positive')
+                      ui.notify(f'{plugin.name} polled', type='positive')
                   action_chip('Poll Now', on_click=poll_now, icon='refresh')
 
+                  info = await plugin.present()
                   for action in info.get('actions', []):
                       async def do_action(aid=action['action_id']):
                           success = await plugin.on_action(aid)
@@ -508,6 +527,9 @@ def init_gui(engine: Any, port: int = 8080):
                       btn_color = PRIMARY if action.get('variant') != 'danger' else STATUS_COLORS['failed']
                       action_chip(action['name'], on_click=do_action, color=btn_color, icon=action.get('icon', 'play_arrow'))
 
+          import asyncio
+          asyncio.create_task(render_actions())
+
           # Delegate specific UI rendering to the plugin instance
           plugin.render_ui()
 
@@ -516,4 +538,13 @@ def init_gui(engine: Any, port: int = 8080):
 
     # Run the NiceGUI app
     svg = _ICON.read_text()
-    ui.run(title='Vigil', favicon=svg[svg.index('<svg'):], port=port, reload=False, show=False)
+    ui.run(
+        title='Vigil', favicon=svg[svg.index('<svg'):], port=port, reload=False, show=False,
+        # Vigil never uses NiceGUI's reactive .bind_*() — every widget update
+        # goes through on_data_event/safe_timer setting .text/.rows/.options
+        # directly, then calling .update() explicitly. The binding-refresh
+        # loop (default: check every 0.1s) has nothing to do here, so it's
+        # slowed way down rather than disabled outright (None), in case a
+        # future widget does start using bindings.
+        binding_refresh_interval=2.0,
+    )

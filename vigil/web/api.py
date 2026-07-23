@@ -5,6 +5,12 @@ Registers read-only JSON endpoints (plus a Prometheus /metrics endpoint) on the
 NiceGUI FastAPI app so external tools can consume Vigil's state without scraping
 the dashboard HTML. Mounted from init_gui() via register_api(app, engine).
 
+Runs in the web process. Everything here is a plain read against the shared
+database (`engine.db`) — the one exception, /api/push, proxies to the
+collector's internal API (see modules/internal_api.py) because recording a
+heartbeat means calling a live PushCollectorPlugin instance, which only
+exists there.
+
 Endpoints:
   GET /api/health                 -> {"status": "ok"}
   GET /api/monitors               -> [{id, name, type, target, status}, ...]
@@ -16,14 +22,11 @@ Endpoints:
   GET/POST /api/push/{id}/{token} -> record a heartbeat for a push monitor
                                       (?status=up|down&msg=&value=)
 """
-import hmac
 from typing import Any, Optional
 
-from fastapi import Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from vigil.core.modules.exporters import prometheus
-from vigil.plugins.push import PushPlugin
+from vigil.collector.exporters import prometheus
 
 
 def _flatten(plugins):
@@ -31,11 +34,6 @@ def _flatten(plugins):
     for p in plugins:
         yield p
         yield from _flatten(p.children)
-
-
-def _tokens_match(given: str, expected: str) -> bool:
-    """Constant-time token comparison, so a wrong guess can't be timed."""
-    return hmac.compare_digest(given, expected)
 
 
 def register_api(app: Any, engine: Any) -> None:
@@ -96,31 +94,22 @@ def register_api(app: Any, engine: Any) -> None:
         return PlainTextResponse(prometheus.render(db),
                                  media_type='text/plain; version=0.0.4; charset=utf-8')
 
-    def _handle_push(monitor_id: str, token: str, status: str, msg: Optional[str],
-                     value: Optional[float]):
+    async def _handle_push(monitor_id: str, token: str, status: str, msg: Optional[str],
+                           value: Optional[float]):
         # Deliberately bypasses Basic Auth (see register_auth): a push monitor
         # is checked in by external scripts/cron jobs that have no reason to
         # hold the dashboard's admin credentials. The per-monitor token is
-        # this endpoint's own credential instead.
-        target = next(
-            (p for p in _flatten(engine.plugins)
-             if p.id == monitor_id and isinstance(p, PushPlugin)),
-            None
+        # this endpoint's own credential instead — verified collector-side
+        # (see CollectorClient.push), since the real token lives on the
+        # collector's PushCollectorPlugin instance, not anything this
+        # process holds.
+        http_status, body = await engine.collector_client.push(
+            monitor_id, token, status=status, msg=msg, value=value,
         )
-        if target is None:
-            return JSONResponse({'error': 'not found'}, status_code=404)
-
-        if not target.token or not _tokens_match(token, target.token):
-            return JSONResponse({'error': 'invalid token'}, status_code=401)
-
-        if status not in ('up', 'down'):
-            return JSONResponse({'error': "status must be 'up' or 'down'"}, status_code=400)
-
-        target.record_push(status=status, msg=msg, value=value)
-        return JSONResponse({'status': 'ok'})
+        return JSONResponse(body, status_code=http_status)
 
     @app.get('/api/push/{monitor_id}/{token}')
     @app.post('/api/push/{monitor_id}/{token}')
-    def push(monitor_id: str, token: str, status: str = 'up',
-             msg: Optional[str] = None, value: Optional[float] = None):
-        return _handle_push(monitor_id, token, status, msg, value)
+    async def push(monitor_id: str, token: str, status: str = 'up',
+                   msg: Optional[str] = None, value: Optional[float] = None):
+        return await _handle_push(monitor_id, token, status, msg, value)

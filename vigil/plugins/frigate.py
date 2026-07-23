@@ -38,9 +38,8 @@ Config options:
 import json
 from typing import Any, Dict, List, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # Frigate's own precomputed verdict, ordered worst-to-best is the reverse of
 # this — used to find the single worst camera to headline the log line.
@@ -70,7 +69,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class FrigatePlugin(BasePlugin):
+class FrigateCollectorPlugin(CollectorPlugin):
     """Monitors Frigate camera health via the internal /api/stats endpoint."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -174,8 +173,14 @@ class FrigatePlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class FrigateUIPlugin(UIPlugin):
+    """Dashboard rendering for the frigate monitor."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,

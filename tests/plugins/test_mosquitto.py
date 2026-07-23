@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.mosquitto import (
-    MosquittoPlugin,
+    MosquittoCollectorPlugin,
     _TIMED_OUT,
     _MISMATCH,
     _auth_flags,
@@ -27,7 +27,7 @@ BASE_CFG = {
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(MosquittoPlugin, BASE_CFG)
+    return make_plugin(MosquittoCollectorPlugin, BASE_CFG)
 
 
 def _respond_ok(plugin, nonce="vigil-probe-abc123"):

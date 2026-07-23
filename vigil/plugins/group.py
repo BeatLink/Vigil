@@ -1,10 +1,10 @@
 import json
 import logging
 from typing import Dict, Any, List
-from vigil.core.common.base_plugin import BasePlugin
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.data.database import Setting
-from vigil.core.ui.theme import STATUS_COLORS, TEXT, TEXT_MUTED
-from vigil.core.ui.components import card
 
 SEVERITY_ORDER = {
     'online': 0,
@@ -14,13 +14,47 @@ SEVERITY_ORDER = {
 }
 
 
-class GroupPlugin(BasePlugin):
+class GroupCollectorPlugin(CollectorPlugin):
     """
     A container plugin that groups other monitors.
     Provides an aggregated view of the status of its children.
     """
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+
+    async def on_collect(self):
+        aggregated_status = self._get_aggregated_status()
+        self.set_status(aggregated_status)
+        logging.debug(f"Group '{self.name}' aggregated status: {aggregated_status}")
+
+    def _get_aggregated_status(self) -> str:
+        statuses = self.db.latest_statuses()
+        current_max_severity = SEVERITY_ORDER['online']
+
+        for child in self.children:
+            child_status = statuses.get(child.id, 'offline')
+            child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['offline'])
+
+            if child_severity > current_max_severity:
+                current_max_severity = child_severity
+
+        for status, severity in SEVERITY_ORDER.items():
+            if severity == current_max_severity:
+                return status
+        return 'offline'
+
+    async def on_action(self, action_id: str, **kwargs) -> bool:
+        return False
+
+
+class GroupUIPlugin(UIPlugin):
+    """
+    Dashboard rendering for the group monitor: an expand/collapse grid of its
+    children's panels. See GroupCollectorPlugin for status aggregation logic
+    (on_collect/on_action) — this class holds only the expand/collapse UI
+    state (persisted per-child open/closed) and the grid layout.
+    """
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
         self._expanded: Dict[str, bool] = self._load_expanded()
         self.grid_columns: int = int(config.get('grid_columns', 1))
 
@@ -47,39 +81,13 @@ class GroupPlugin(BasePlugin):
             ).on_conflict_replace().execute()
 
     # -------------------------------------------------------------------------
-    # Collection
-    # -------------------------------------------------------------------------
-
-    async def on_collect(self):
-        aggregated_status = self._get_aggregated_status()
-        self.set_status(aggregated_status)
-        logging.debug(f"Group '{self.name}' aggregated status: {aggregated_status}")
-
-    def _get_aggregated_status(self) -> str:
-        statuses = self.db.latest_statuses()
-        current_max_severity = SEVERITY_ORDER['online']
-
-        for child in self.children:
-            child_status = statuses.get(child.id, 'offline')
-            child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['offline'])
-
-            if child_severity > current_max_severity:
-                current_max_severity = child_severity
-
-        for status, severity in SEVERITY_ORDER.items():
-            if severity == current_max_severity:
-                return status
-        return 'offline'
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
-
-    # -------------------------------------------------------------------------
     # UI
     # -------------------------------------------------------------------------
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
+        from vigil.web.ui.theme import STATUS_COLORS, TEXT, TEXT_MUTED
+        from vigil.web.ui.components import card
 
         grid_cls = f'group-grid-{self.id}'
         ui.add_css(f'''

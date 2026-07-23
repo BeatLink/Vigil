@@ -40,9 +40,8 @@ import json
 import shlex
 from typing import Any, Dict, Optional, Tuple
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # OpenBooks' own message type/appearance enums (server/messages.go).
 _MSG_TYPE_STATUS = 0
@@ -88,7 +87,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class OpenbooksPlugin(BasePlugin):
+class OpenbooksCollectorPlugin(CollectorPlugin):
     """Monitors OpenBooks' IRC bridge connectivity via a WebSocket connect probe."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -135,8 +134,14 @@ class OpenbooksPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class OpenbooksUIPlugin(UIPlugin):
+    """Dashboard rendering for the openbooks monitor."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,

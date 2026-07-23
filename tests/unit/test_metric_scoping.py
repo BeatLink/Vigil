@@ -12,19 +12,16 @@ colliding monitors explicitly.
 import pytest
 from unittest.mock import AsyncMock
 
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
 from vigil.core.data.database import db, Event, Metric
 
 
-class _Probe(BasePlugin):
+class _Probe(CollectorPlugin):
     async def on_collect(self):
         pass
 
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
-
-    def render_ui(self, context: str = 'page'):
-        pass
 
 
 @pytest.fixture
@@ -90,10 +87,10 @@ class TestLogLineScoping:
 class TestDuplicateIdDetection:
     def _engine(self, tmp_path, plugins):
         from unittest.mock import patch
-        from vigil.core.main import VigilEngine
+        from vigil.collector.main import VigilEngine
         cfg = tmp_path / "c.yaml"
         cfg.write_text("plugins: []\n")
-        with patch("vigil.core.main.VigilEngine._connect", create=True):
+        with patch("vigil.collector.main.VigilEngine._connect", create=True):
             engine = VigilEngine(str(cfg), db_path_override=str(tmp_path / "e.db"))
         engine.plugins = plugins
         return engine

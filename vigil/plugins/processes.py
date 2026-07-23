@@ -1,7 +1,8 @@
-from typing import Dict, Any, List, Optional
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from typing import Dict, Any, List
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
+from vigil.core.common.plugin_utils import level_for as _level_for
 
 _SEVERITY = {'online': 0, 'warning': 1, 'failed': 2}
 
@@ -29,9 +30,6 @@ def _parse_ps_output(stdout: str) -> List[Dict]:
     return processes
 
 
-from vigil.core.common.plugin_utils import level_for as _level_for
-
-
 _DEFAULT_LAYOUT = [
     ['host_card', 'count_card', 'top_cpu_card'],
     ['table'],
@@ -39,7 +37,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class ProcessesPlugin(BasePlugin):
+class ProcessesCollectorPlugin(CollectorPlugin):
     """
     Monitors running processes over SSH via `ps`.
 
@@ -130,10 +128,36 @@ class ProcessesPlugin(BasePlugin):
         self.db_logger.write(f"Sent SIG{signal} to PID {pid}", level="INFO")
         return True
 
+
+class ProcessesUIPlugin(UIPlugin):
+    """
+    Dashboard rendering for the processes monitor. See ProcessesCollectorPlugin
+    for collection/action logic.
+
+    Note: the original single-process ProcessesPlugin rendered its process
+    table straight from the in-memory `_processes` list populated by its own
+    on_collect(). In the split architecture the UI process never runs
+    on_collect, so per-process detail never crosses to it — only the
+    aggregate process_count/top_cpu_pct metrics do, via latest_metric(). This
+    class keeps an (always-empty) `_processes` list so the table-rendering
+    code below stays structurally unchanged; the count/top-CPU cards still
+    update live from metrics, and kill actions still work by proxying to
+    on_action() as before.
+    """
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self._processes: List[Dict] = []
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         import asyncio
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
+
+        cpu_warning   = float(self.config['cpu_warning'])   if 'cpu_warning'   in self.config else None
+        cpu_threshold = float(self.config['cpu_threshold']) if 'cpu_threshold' in self.config else None
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -187,19 +211,22 @@ class ProcessesPlugin(BasePlugin):
         table.on('kill_kill', lambda e: asyncio.create_task(_do_kill(e, 'KILL')))
 
         def update():
-            count_label.text = str(len(self._processes))
-            if self._processes:
-                top_cpu = self._processes[0]['cpu']
+            count_metric = self.latest_metric('process_count')
+            top_cpu_metric = self.latest_metric('top_cpu_pct')
+            if count_metric is not None:
+                count_label.text = str(int(count_metric.value))
+            if top_cpu_metric is not None:
+                top_cpu = top_cpu_metric.value
                 top_cpu_label.text = f'{top_cpu:.1f}%'
-                if self.cpu_warning is not None and self.cpu_threshold is not None:
+                if cpu_warning is not None and cpu_threshold is not None:
                     top_cpu_label.style(
-                        f'color: {STATUS_COLORS[_level_for(top_cpu, self.cpu_warning, self.cpu_threshold)]}'
+                        f'color: {STATUS_COLORS[_level_for(top_cpu, cpu_warning, cpu_threshold)]}'
                     )
             rows = []
             for p in self._processes:
                 cpu_color = STATUS_COLORS['online']
-                if self.cpu_warning is not None and self.cpu_threshold is not None:
-                    cpu_color = STATUS_COLORS[_level_for(p['cpu'], self.cpu_warning, self.cpu_threshold)]
+                if cpu_warning is not None and cpu_threshold is not None:
+                    cpu_color = STATUS_COLORS[_level_for(p['cpu'], cpu_warning, cpu_threshold)]
                 rows.append({**p, '_cpu_color': cpu_color})
             table.rows[:] = rows
             table.update()

@@ -9,7 +9,7 @@ import asyncio
 import pytest
 from unittest.mock import MagicMock
 
-from vigil.core.modules.controllers.job_controller import JobController, JobRejected
+from vigil.collector.controllers.job_controller import JobController, JobRejected
 
 
 @pytest.fixture

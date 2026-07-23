@@ -2,30 +2,45 @@ import asyncio
 import logging
 import importlib
 import inspect
+import random
 import sys
 import time
 from typing import List, Optional, Dict
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
 from vigil.core.data.config_file import ConfigFileManager as VigilConfig
 from vigil.core.data.database import DatabaseManager as VigilDatabase
 from peewee import OperationalError
 
-# How often the engine wakes to check which monitors are due.
-#
-# This is the scheduler's resolution, not a polling interval: each monitor
-# collects only once its own `interval` has elapsed (BasePlugin.run_cycle).
-# It must therefore be no larger than the shortest interval in use, or that
-# interval is silently rounded up to the tick — a 60s tick made every
-# `interval: 30s` monitor poll at 60s instead. 10s keeps the common 30s
-# setting honest while leaving the loop nearly idle when nothing is due.
-TICK_SECONDS = 10
+# Default bind address/port for the collector's internal API (see
+# vigil.collector.internal_api). Loopback-only: this endpoint lets a
+# caller run arbitrary pre-built commands on any monitored host via
+# ssh_controller, so it must never be reachable from anywhere but the web
+# process on the same machine. Configurable via `internal_api.host`/`port` in
+# config.yaml for deployments where the two processes are not on one host
+# (e.g. separate containers on a private network) — in that case the operator
+# is responsible for firewalling the port themselves.
+DEFAULT_INTERNAL_API_HOST = '127.0.0.1'
+DEFAULT_INTERNAL_API_PORT = 8081
+
+# Upper bound on the random startup stagger applied to each monitor's first
+# poll (see _monitor_loop). Spreads the initial burst — every monitor would
+# otherwise fire in the same event-loop iteration at process start — across a
+# few seconds so they don't all queue on the SSH semaphore at once. Capped low
+# so it never meaningfully delays a monitor's first reading.
+STARTUP_JITTER_SECONDS = 3.0
+
+# How often the engine checks whether a log-retention prune is due. Pruning
+# has its own hourly throttle (_maybe_prune_logs), so this only needs to be
+# frequent enough that the hourly check doesn't drift noticeably; it is no
+# longer tied to monitor polling at all (see run()).
+_PRUNE_CHECK_SECONDS = 60
 
 
 class VigilEngine:
     def __init__(self, config_path: str, db_path_override: Optional[str] = None):
         self.config_loader = VigilConfig(config_path)
         self.config = self.config_loader.data
-        self.plugins: List[BasePlugin] = []
+        self.plugins: List[CollectorPlugin] = []
         self.log_retention_days = self.config_loader.log_retention_days
         self._last_prune = 0.0  # monotonic time of the last retention prune
         if db_path_override:
@@ -63,10 +78,19 @@ class VigilEngine:
         merged['ssh_config'] = {**defaults, **plugin_cfg['ssh_config']}
         return merged
 
-    def setup_modules(self, plugins_cfg: Optional[List[Dict]] = None) -> List[BasePlugin]:
+    def setup_modules(self, plugins_cfg: Optional[List[Dict]] = None) -> List[CollectorPlugin]:
         """
         Dynamically instantiates plugins and injects internal modules.
         Supports recursive loading for nested group structures.
+
+        Only the collector process calls this — it is the only place a
+        plugin module's *CollectorPlugin class is instantiated with a real
+        SSHConnection. Each plugin module also defines a *UIPlugin sibling
+        class (constructed instead by the web process; see
+        vigil.web.engine.VigilWebEngine.setup_ui_modules), which this loader
+        skips: matching CollectorPlugin specifically, not the shared
+        UIPlugin also importable from the same module, is what keeps a
+        misconfigured web process from ever holding a live SSH connection.
         """
         current_level_plugins = []
         target_cfg = plugins_cfg if plugins_cfg is not None else self.config_loader.plugins
@@ -81,10 +105,11 @@ class VigilEngine:
             try:
                 module_path = f"vigil.plugins.{p_type}"
                 module = importlib.import_module(module_path)
-                
-                # Find class inheriting from BasePlugin
+
+                # Find the class inheriting from CollectorPlugin (not UIPlugin
+                # — see this method's docstring).
                 for _, obj in inspect.getmembers(module, inspect.isclass):
-                    if issubclass(obj, BasePlugin) and obj is not BasePlugin:
+                    if issubclass(obj, CollectorPlugin) and obj is not CollectorPlugin:
                         plugin_instance = obj(name, plugin_cfg, self.db)
                         
                         # Recursively setup children if they exist
@@ -156,11 +181,11 @@ class VigilEngine:
         configured; a config without a `vigil_self` monitor pays nothing.
         """
         try:
-            from vigil.plugins.vigil_self import VigilSelfPlugin
+            from vigil.plugins.vigil_self import VigilSelfCollectorPlugin
         except ImportError as e:
             logging.debug(f"Self-monitoring plugin unavailable: {e}")
             return
-        VigilSelfPlugin.engine = self
+        VigilSelfCollectorPlugin.engine = self
 
     def _start_exporters(self):
         """Launch configured push exporters (e.g. InfluxDB) as background tasks.
@@ -172,12 +197,57 @@ class VigilEngine:
         influx_cfg = exporters_cfg.get('influxdb')
         if influx_cfg and influx_cfg.get('url'):
             try:
-                from vigil.core.modules.exporters.influxdb import InfluxDBExporter
+                from vigil.collector.exporters.influxdb import InfluxDBExporter
                 exporter = InfluxDBExporter(self.db, influx_cfg)
                 asyncio.create_task(exporter.run())
                 logging.info("InfluxDB exporter task started.")
             except Exception as e:
                 logging.error(f"Failed to start InfluxDB exporter: {e}")
+
+    @staticmethod
+    def _flatten(plugins: List[CollectorPlugin]):
+        """Yield every plugin instance in the tree (groups and leaves)."""
+        for p in plugins:
+            yield p
+            yield from VigilEngine._flatten(p.children)
+
+    async def _monitor_loop(self, plugin: CollectorPlugin):
+        """
+        Drive one monitor's polling forever, entirely independent of every
+        other monitor.
+
+        There is no shared tick: each monitor sleeps its own `interval`
+        between calls, so a 30s monitor is never rounded up to a slower
+        monitor's schedule and a 6h monitor never wakes early. Group plugins
+        get a loop too — they re-read live child status from the DB on each
+        collection (GroupPlugin.on_collect), so they need no ordering
+        relative to their children; a group's aggregated status can lag a
+        child's by at most one of the group's own intervals, which is
+        indistinguishable from the group simply not having polled yet.
+
+        A random startup stagger spreads the first poll of every monitor so
+        they don't all fire in the same event-loop iteration when Vigil
+        starts. Exceptions are caught per-iteration (mirroring the previous
+        `gather(..., return_exceptions=True)`) so one crashing monitor never
+        stops its own future polls, let alone anyone else's.
+        """
+        await asyncio.sleep(random.uniform(0, STARTUP_JITTER_SECONDS))
+        while True:
+            try:
+                await plugin.run_cycle()
+            except Exception as e:
+                logging.error(f"Plugin execution error ({plugin.name}): {e}")
+            await asyncio.sleep(plugin.interval)
+
+    async def _prune_loop(self):
+        """Periodically check whether a log-retention prune is due.
+
+        Independent of monitor polling now that there is no shared tick to
+        piggyback on; _maybe_prune_logs keeps its own hourly throttle.
+        """
+        while True:
+            self._maybe_prune_logs()
+            await asyncio.sleep(_PRUNE_CHECK_SECONDS)
 
     async def run(self):
         logging.info("Vigil Engine started...")
@@ -193,37 +263,30 @@ class VigilEngine:
 
         self._start_exporters()
 
-        while True:
-            # Build levels via BFS, then run bottom-up so group plugins always
-            # aggregate after their children have written fresh status to the DB.
-            levels = []
-            current_level = list(self.plugins)
-            while current_level:
-                levels.append(current_level)
-                next_level = []
-                for p in current_level:
-                    next_level.extend(p.children)
-                current_level = next_level
+        monitors = list(self._flatten(self.plugins))
+        logging.info(f"Starting {len(monitors)} independent monitor schedule(s).")
+        for plugin in monitors:
+            asyncio.create_task(self._monitor_loop(plugin))
 
-            total = 0
-            for level in reversed(levels):
-                tasks = [p.run_cycle() for p in level]
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for res in results:
-                    if isinstance(res, Exception):
-                        logging.error(f"Plugin execution error: {res}")
-                # run_cycle returns True only when it actually collected; the
-                # rest were skipped because their interval had not elapsed.
-                total += sum(1 for r in results if r is True)
+        asyncio.create_task(self._run_internal_api())
 
-            if total:
-                logging.info(f"Engine Cycle: Collected {total} monitors.")
-            else:
-                logging.debug("Engine Cycle: nothing due.")
+        await self._prune_loop()
 
-            self._maybe_prune_logs()
-
-            await asyncio.sleep(TICK_SECONDS)
+    async def _run_internal_api(self):
+        """
+        Serve the internal API (action/poll/push/ssh/job proxying — see
+        vigil.collector.internal_api) on the collector's own event loop,
+        so the web process can reach live plugin instances that only exist
+        here. Bound to loopback by default; see DEFAULT_INTERNAL_API_HOST.
+        """
+        from vigil.collector.internal_api import run_internal_api
+        api_cfg = self.config_loader.data.get('internal_api', {}) or {}
+        host = api_cfg.get('host', DEFAULT_INTERNAL_API_HOST)
+        port = int(api_cfg.get('port', DEFAULT_INTERNAL_API_PORT))
+        try:
+            await run_internal_api(self, host=host, port=port)
+        except Exception as e:
+            logging.critical(f"Collector internal API failed to start: {e}")
 
     def _maybe_prune_logs(self, interval: float = 3600.0):
         """

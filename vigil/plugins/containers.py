@@ -1,7 +1,7 @@
 from typing import Dict, Any, List
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # List every container (running and stopped) as tab-separated Name<TAB>State.
 # {{.State}} is "running", "exited", "created", "paused", etc.
@@ -18,7 +18,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class ContainersPlugin(BasePlugin):
+class ContainersCollectorPlugin(CollectorPlugin):
     """
     Monitors Docker or Podman containers over SSH.
 
@@ -141,9 +141,16 @@ class ContainersPlugin(BasePlugin):
             return status == 0
         return False
 
+
+class ContainersUIPlugin(UIPlugin):
+    """Dashboard rendering for the containers monitor. get_actions()/on_action()
+    are inherited from UIPlugin, which proxies to the collector's live instance."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

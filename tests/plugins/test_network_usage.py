@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.network_usage import NetworkUsagePlugin, _parse_net_dev, _auto_detect_interface, _format_rate
+from vigil.plugins.network_usage import NetworkUsageCollectorPlugin, _parse_net_dev, _auto_detect_interface, _format_rate
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -32,12 +32,12 @@ def _two_snapshots(ifaces1: dict, ifaces2: dict) -> str:
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(NetworkUsagePlugin, BASE_CFG)
+    return make_plugin(NetworkUsageCollectorPlugin, BASE_CFG)
 
 
 @pytest.fixture
 def explicit_plugin(make_plugin):
-    return make_plugin(NetworkUsagePlugin, {
+    return make_plugin(NetworkUsageCollectorPlugin, {
         "name": "test-net-explicit",
         "id": "test-net-explicit",
         "interface": "eth0",

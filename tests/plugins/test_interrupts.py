@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.interrupts import InterruptsPlugin, _extract_counter
+from vigil.plugins.interrupts import InterruptsCollectorPlugin, _extract_counter
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -27,7 +27,7 @@ def _two_snaps(s1: str, s2: str) -> str:
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(InterruptsPlugin, BASE_CFG)
+    return make_plugin(InterruptsCollectorPlugin, BASE_CFG)
 
 
 def _latest_status(plugin_id: str = "test-irq"):
@@ -67,14 +67,14 @@ class TestInterruptsCollection:
         assert _latest_metric("test-irq", "ctxt_per_sec") == pytest.approx(2000.0)
 
     async def test_warning_threshold(self, make_plugin):
-        p = make_plugin(InterruptsPlugin, {**BASE_CFG, "irq_warning": 100, "irq_threshold": 10000})
+        p = make_plugin(InterruptsCollectorPlugin, {**BASE_CFG, "irq_warning": 100, "irq_threshold": 10000})
         stdout = _two_snaps(_make_stat(0, 0), _make_stat(500, 0))
         p.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
         await p.on_collect()
         assert _latest_status() == "warning"
 
     async def test_failed_threshold(self, make_plugin):
-        p = make_plugin(InterruptsPlugin, {**BASE_CFG, "irq_warning": 100, "irq_threshold": 1000})
+        p = make_plugin(InterruptsCollectorPlugin, {**BASE_CFG, "irq_warning": 100, "irq_threshold": 1000})
         stdout = _two_snaps(_make_stat(0, 0), _make_stat(5000, 0))
         p.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
         await p.on_collect()

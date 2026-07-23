@@ -1,8 +1,7 @@
 from typing import Dict, Any, List
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import format_bytes as _format_gb
-from vigil.core.ui.components import info_card, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
 
 
 def _sanitize(path: str) -> str:
@@ -23,7 +22,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class FoldersPlugin(BasePlugin):
+class FoldersCollectorPlugin(CollectorPlugin):
     """
     Monitors the size of arbitrary directories over SSH via `du`. Useful for
     watching things a filesystem check can't see — a growing log directory, a
@@ -110,10 +109,29 @@ class FoldersPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class FoldersUIPlugin(UIPlugin):
+    """Dashboard rendering for the folders monitor."""
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.folders = config.get('folders', []) or []
+
+    def _level_for(self, gb: float, folder: Dict[str, Any]) -> str:
+        threshold = folder.get('threshold')
+        warning = folder.get('warning')
+        if threshold is not None and gb >= float(threshold):
+            return 'failed'
+        if warning is not None and gb >= float(warning):
+            return 'warning'
+        return 'online'
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

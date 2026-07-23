@@ -48,10 +48,9 @@ import dns.exception
 import dns.resolver
 import requests
 
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.time_utils import format_age
-from vigil.core.ui.components import info_card, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
 
 # Plain-text IP echo services, tried in order. Each returns the caller's
 # public IP as the entire response body — no JSON parsing, no API key. Several
@@ -70,7 +69,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class DdnsUpdaterPlugin(BasePlugin):
+class DdnsUpdaterCollectorPlugin(CollectorPlugin):
     """
     Detects public-IP drift against a DNS record and pushes an update to the
     provider (FreeDNS-style update URL) when they differ.
@@ -279,8 +278,14 @@ class DdnsUpdaterPlugin(BasePlugin):
             self.db_metrics.metric('last_update_epoch', time.time())
         return ok
 
+
+class DdnsUpdaterUIPlugin(UIPlugin):
+    """Dashboard rendering for the ddns_updater monitor."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

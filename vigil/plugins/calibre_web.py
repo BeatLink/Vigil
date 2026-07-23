@@ -32,9 +32,8 @@ Config options:
 import shlex
 from typing import Any, Dict, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
 
@@ -85,7 +84,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class CalibreWebPlugin(BasePlugin):
+class CalibreWebCollectorPlugin(CollectorPlugin):
     """Monitors Calibre-Web library health via a live OPDS feed request."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -148,8 +147,14 @@ class CalibreWebPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class CalibreWebUIPlugin(UIPlugin):
+    """Dashboard rendering for the calibre_web monitor."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,

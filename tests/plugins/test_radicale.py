@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from vigil.plugins.radicale import RadicalePlugin, _SEP, _build_probe_script, _parse_response
+from vigil.plugins.radicale import RadicaleCollectorPlugin, _SEP, _build_probe_script, _parse_response
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -17,7 +17,7 @@ BASE_CFG = {
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(RadicalePlugin, BASE_CFG)
+    return make_plugin(RadicaleCollectorPlugin, BASE_CFG)
 
 
 def _respond(plugin, status=207, body="<multistatus/>"):

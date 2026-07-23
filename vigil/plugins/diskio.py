@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional, Tuple
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # Sectors are a fixed 512 bytes in /proc/diskstats regardless of physical
 # sector size — this is a kernel ABI constant, not the device geometry.
@@ -74,7 +74,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class DiskIoPlugin(BasePlugin):
+class DiskIoCollectorPlugin(CollectorPlugin):
     """
     Monitors per-disk read/write throughput over SSH via /proc/diskstats.
 
@@ -124,6 +124,7 @@ class DiskIoPlugin(BasePlugin):
         write_kbps = max(0.0, (s2[device][1] - s1[device][1]) * _SECTOR_BYTES / 1024)
 
         self._active_device = device
+        self.db.set_setting(f"diskio:{self.id}:active_device", device)
         self.db_metrics.metric('read_kbps', read_kbps)
         self.db_metrics.metric('write_kbps', write_kbps)
         self.db_logger.write(
@@ -135,17 +136,24 @@ class DiskIoPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class DiskIoUIPlugin(UIPlugin):
+    """Dashboard rendering for the diskio monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+
+        active_device = self.db.get_setting(f"diskio:{self.id}:active_device") or self.config.get('device')
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('device_card'):
-            device_label = info_card('DEVICE', self._active_device or 'Detecting...')
+            device_label = info_card('DEVICE', active_device or 'Detecting...')
         with layout.cell('read_card'):
             read_label = info_card('READ', '-- KB/s')
         with layout.cell('write_card'):
@@ -158,8 +166,9 @@ class DiskIoPlugin(BasePlugin):
             self.internal_modules['ui']['events_table']()
 
         def update_cards():
-            if self._active_device:
-                device_label.text = self._active_device
+            device = self.db.get_setting(f"diskio:{self.id}:active_device")
+            if device:
+                device_label.text = device
             read = self.latest_metric('read_kbps')
             write = self.latest_metric('write_kbps')
             if read:
@@ -167,4 +176,4 @@ class DiskIoPlugin(BasePlugin):
             if write:
                 write_label.text = _format_rate(write.value)
 
-        on_data_event('metric', read_label, update_cards)
+        on_data_event(('metric', 'setting'), read_label, update_cards)

@@ -25,15 +25,13 @@ Config options:
   stale_threshold   Multiple of a monitor's interval before it counts as stalled
                     (default: 10)
 """
-import logging
 import os
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
 
 # Ticks per second for /proc/self/stat's utime+stime fields. This is a kernel
 # build constant (USER_HZ), fixed at 100 on every Linux platform Vigil targets,
@@ -81,7 +79,7 @@ def _read_cpu_seconds() -> Optional[float]:
         return None
 
 
-class VigilSelfPlugin(BasePlugin):
+class VigilSelfCollectorPlugin(CollectorPlugin):
     """Monitors Vigil's own process health and collection liveness."""
 
     # Set by VigilEngine at startup so this plugin can inspect the monitor
@@ -213,13 +211,26 @@ class VigilSelfPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class VigilSelfUIPlugin(UIPlugin):
+    """Dashboard rendering for Vigil's self-monitor. See
+    VigilSelfCollectorPlugin for collection logic."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+
+        # UIPlugin has no memory_warning/memory_threshold attributes (that's
+        # collector-side state) — re-derived here from config the same way
+        # VigilSelfCollectorPlugin.__init__ does.
+        memory_warning   = float(self.config.get('memory_warning',   256))
+        memory_threshold = float(self.config.get('memory_threshold', 512))
 
         with layout.cell('uptime_card'):
             uptime_label = info_card('VIGIL UPTIME', '--')
@@ -244,7 +255,7 @@ class VigilSelfPlugin(BasePlugin):
             if memory:
                 memory_label.text = f'{memory.value:.0f} MB'
                 memory_label.style(
-                    f'color: {STATUS_COLORS[_level_for(memory.value, self.memory_warning, self.memory_threshold)]}'
+                    f'color: {STATUS_COLORS[_level_for(memory.value, memory_warning, memory_threshold)]}'
                 )
             if total:
                 n_late    = int(late.value)    if late    else 0

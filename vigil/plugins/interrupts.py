@@ -1,9 +1,8 @@
 from typing import Dict, Any, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
 
 
 def _extract_counter(block: str, key: str) -> Optional[int]:
@@ -30,7 +29,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class InterruptsPlugin(BasePlugin):
+class InterruptsCollectorPlugin(CollectorPlugin):
     """
     Monitors hardware interrupt and context-switch rates over SSH via
     /proc/stat — no extra tools required on the target.
@@ -93,10 +92,16 @@ class InterruptsPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class InterruptsUIPlugin(UIPlugin):
+    """Dashboard rendering for the interrupts monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -113,12 +118,15 @@ class InterruptsPlugin(BasePlugin):
         with layout.cell('events'):
             self.internal_modules['ui']['events_table']()
 
+        irq_warning   = int(self.config.get('irq_warning',   20000))
+        irq_threshold = int(self.config.get('irq_threshold', 50000))
+
         def update_cards():
             irq = self.latest_metric('irq_per_sec')
             ctxt = self.latest_metric('ctxt_per_sec')
             if irq:
                 irq_label.text = f'{irq.value:,.0f}'
-                irq_label.style(f'color: {STATUS_COLORS[_level_for(irq.value, self.irq_warning, self.irq_threshold)]}')
+                irq_label.style(f'color: {STATUS_COLORS[_level_for(irq.value, irq_warning, irq_threshold)]}')
             if ctxt:
                 ctxt_label.text = f'{ctxt.value:,.0f}'
 

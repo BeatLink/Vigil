@@ -1,8 +1,7 @@
 from typing import Dict, Any, List, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # Sentinel emitted by the remote probe script when a check fails. Kept distinct
 # from any real millisecond value so parsing is unambiguous.
@@ -66,6 +65,24 @@ def _try_float(value: str) -> Optional[float]:
         return None
 
 
+def _named_checks(checks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return checks with stable 'name'/'metric' fields, without mutating input.
+
+    Mirrors the precompute PortsCollectorPlugin.__init__ does in place on its
+    own config-derived list; the UI process re-derives the same values from
+    config on each render rather than sharing that mutated list, since it
+    never runs the collector's __init__.
+    """
+    named = []
+    for check in checks:
+        c = dict(check)
+        if 'name' not in c:
+            c['name'] = c['url'] if c.get('url') else f"{c.get('host', 'localhost')}:{c.get('port')}"
+        c['metric'] = _safe_metric_name(c['name'])
+        named.append(c)
+    return named
+
+
 _DEFAULT_LAYOUT = [
     ['host_card', 'up_card', 'down_card'],
     ['charts'],
@@ -73,7 +90,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class PortsPlugin(BasePlugin):
+class PortsCollectorPlugin(CollectorPlugin):
     """
     Monitors TCP port and HTTP(S) URL reachability, probing from the remote
     host over SSH. TCP checks use bash's /dev/tcp; URL checks use curl. Each
@@ -138,10 +155,16 @@ class PortsPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class PortsUIPlugin(UIPlugin):
+    """Dashboard rendering for the ports monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -151,18 +174,31 @@ class PortsPlugin(BasePlugin):
             up_label = info_card('REACHABLE', '--')
         with layout.cell('down_card'):
             down_label = info_card('DOWN', '--')
+        checks = _named_checks(self.config.get('checks', []))
+
         with layout.cell('charts'):
-            for check in self.checks:
+            for check in checks:
                 history_chart(f"{check['name']} LATENCY (ms)", self.id, f"{check['metric']}_latency_ms")
         with layout.cell('events'):
             self.internal_modules['ui']['events_table']()
 
         def update_cards():
-            if not self._states:
+            if not checks:
                 return
-            up = sum(1 for u, _ in self._states.values() if u)
-            down = len(self._states) - up
-            up_label.text = f'{up}/{len(self._states)}'
+            up = 0
+            down = 0
+            for check in checks:
+                m = self.latest_metric(f"{check['metric']}_up")
+                if m is None:
+                    continue
+                if m.value >= 1.0:
+                    up += 1
+                else:
+                    down += 1
+            total = up + down
+            if total == 0:
+                return
+            up_label.text = f'{up}/{total}'
             down_label.text = f'{down}'
             down_label.style(f'color: {STATUS_COLORS["failed" if down else "online"]}')
 

@@ -37,9 +37,8 @@ import json
 import shlex
 from typing import Any, Dict, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 
 def _build_fetch_script(api_url: str, timeout: int, api_key_command: Optional[str],
@@ -75,7 +74,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class BlockurlPlugin(BasePlugin):
+class BlockurlCollectorPlugin(CollectorPlugin):
     """Monitors BlockURL's blocklist database health via its REST API."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -125,8 +124,14 @@ class BlockurlPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class BlockurlUIPlugin(UIPlugin):
+    """Dashboard rendering for the blockurl monitor."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
@@ -144,6 +149,8 @@ class BlockurlPlugin(BasePlugin):
         with layout.cell('events'):
             self.internal_modules['ui']['events_table']()
 
+        min_domains = int(self.config.get('min_domains', 1))
+
         def update_cards():
             domains = self.latest_metric('domains_total')
             urls    = self.latest_metric('urls_total')
@@ -152,7 +159,7 @@ class BlockurlPlugin(BasePlugin):
                 count = int(domains.value)
                 domains_label.text = f'{count}'
                 domains_label.style(
-                    f'color: {STATUS_COLORS["warning" if count < self.min_domains else "online"]}')
+                    f'color: {STATUS_COLORS["warning" if count < min_domains else "online"]}')
             if urls:
                 urls_label.text = f'{int(urls.value):,}'
 

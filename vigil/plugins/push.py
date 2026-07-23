@@ -26,9 +26,9 @@ Config options:
 import time
 from typing import Any, Dict, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.time_utils import format_age, format_duration
-from vigil.core.ui.components import info_card, on_data_event
 
 _DEFAULT_LAYOUT = [
     ['status_card', 'lastbeat_card', 'maxage_card'],
@@ -38,7 +38,7 @@ _DEFAULT_LAYOUT = [
 _VALID_PUSH_STATUSES = {'up', 'down'}
 
 
-class PushPlugin(BasePlugin):
+class PushCollectorPlugin(CollectorPlugin):
     """
     Monitors an external heartbeat pushed to Vigil's REST API rather than
     collected from a target. Reports failed once max_age elapses with no
@@ -116,14 +116,21 @@ class PushPlugin(BasePlugin):
         """Push monitors report what they're told; there is nothing to remediate."""
         return False
 
-    # -------------------------------------------------------------------------
-    # UI
-    # -------------------------------------------------------------------------
+
+class PushUIPlugin(UIPlugin):
+    """Dashboard rendering for the push monitor. See PushCollectorPlugin for
+    collection/heartbeat logic."""
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+
+        # UIPlugin has no max_age attribute (that's collector-side state) — the
+        # same default as PushCollectorPlugin.__init__ is re-derived here from
+        # config, matching what the collector actually configured itself with.
+        max_age = int(self.config.get('max_age', self.interval * 2))
 
         with layout.cell('status_card'):
             self.internal_modules['ui']['status_card'](
@@ -135,7 +142,7 @@ class PushPlugin(BasePlugin):
         with layout.cell('lastbeat_card'):
             lastbeat_label = info_card('LAST HEARTBEAT', 'Never')
         with layout.cell('maxage_card'):
-            info_card('MAX AGE', format_duration(self.max_age))
+            info_card('MAX AGE', format_duration(max_age))
         with layout.cell('events'):
             self.internal_modules['ui']['events_table']()
 

@@ -1,7 +1,7 @@
 import time
 import pytest
 from unittest.mock import AsyncMock
-from vigil.plugins.systemd_service import SystemdPlugin
+from vigil.plugins.systemd_service import SystemdCollectorPlugin
 from vigil.core.data.database import db, StatusHistory, Metric, LogLine, flush_writes
 
 
@@ -55,7 +55,7 @@ def _oneshot_output(result="success", exit_code="0", epoch=None,
 class TestContinuousMode:
     @pytest.fixture
     def plugin(self, make_plugin):
-        return make_plugin(SystemdPlugin, CONTINUOUS_CFG)
+        return make_plugin(SystemdCollectorPlugin, CONTINUOUS_CFG)
 
     async def test_active_service_is_online(self, plugin):
         plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
@@ -143,7 +143,7 @@ class TestContinuousMode:
 class TestOneshotMode:
     @pytest.fixture
     def plugin(self, make_plugin):
-        return make_plugin(SystemdPlugin, ONESHOT_CFG)
+        return make_plugin(SystemdCollectorPlugin, ONESHOT_CFG)
 
     async def test_successful_recent_run_is_online(self, plugin):
         plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
@@ -263,15 +263,15 @@ class TestOneshotMode:
 
 class TestMaxAgeParsing:
     def test_max_age_parsed_from_human_string(self, make_plugin):
-        plugin = make_plugin(SystemdPlugin, {**ONESHOT_CFG, "max_age": "1w"})
+        plugin = make_plugin(SystemdCollectorPlugin, {**ONESHOT_CFG, "max_age": "1w"})
         assert plugin.max_age == 604800
 
     def test_max_age_parsed_from_int(self, make_plugin):
-        plugin = make_plugin(SystemdPlugin, {**ONESHOT_CFG, "max_age": 3600})
+        plugin = make_plugin(SystemdCollectorPlugin, {**ONESHOT_CFG, "max_age": 3600})
         assert plugin.max_age == 3600
 
     def test_no_max_age_means_continuous_mode(self, make_plugin):
-        plugin = make_plugin(SystemdPlugin, CONTINUOUS_CFG)
+        plugin = make_plugin(SystemdCollectorPlugin, CONTINUOUS_CFG)
         assert plugin.max_age is None
 
 
@@ -282,7 +282,7 @@ class TestMaxAgeParsing:
 class TestActions:
     @pytest.fixture
     def plugin(self, make_plugin):
-        return make_plugin(SystemdPlugin, CONTINUOUS_CFG)
+        return make_plugin(SystemdCollectorPlugin, CONTINUOUS_CFG)
 
     async def test_restart_success(self, plugin):
         plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))

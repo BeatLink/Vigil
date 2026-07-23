@@ -39,9 +39,8 @@ Config options:
 import shlex
 from typing import Any, Dict, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 _PROPFIND_BODY = (
     '<?xml version="1.0"?>'
@@ -101,7 +100,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class RadicalePlugin(BasePlugin):
+class RadicaleCollectorPlugin(CollectorPlugin):
     """Monitors Radicale CalDAV/CardDAV health via a live PROPFIND request."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -163,8 +162,14 @@ class RadicalePlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class RadicaleUIPlugin(UIPlugin):
+    """Dashboard rendering for the radicale monitor."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,

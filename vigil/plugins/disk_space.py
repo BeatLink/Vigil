@@ -1,8 +1,6 @@
 from typing import Dict, Any
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
-
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 from vigil.core.common.plugin_utils import format_bytes as _format_gb
 
@@ -15,7 +13,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class DiskSpacePlugin(BasePlugin):
+class DiskSpaceCollectorPlugin(CollectorPlugin):
     """
     Monitors disk space usage for a path or mountpoint over SSH via `df`.
     Works on any mounted filesystem — no ZFS or other tools required.
@@ -69,10 +67,21 @@ class DiskSpacePlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class DiskSpaceUIPlugin(UIPlugin):
+    """Dashboard rendering for the disk_space monitor."""
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.path = config.get('path', '/')
+        self.threshold = int(config.get('threshold', 90))
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

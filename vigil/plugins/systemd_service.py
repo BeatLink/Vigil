@@ -2,9 +2,10 @@ import os
 import shlex
 import time
 from typing import Dict, Any, List
-from vigil.core.common.base_plugin import BasePlugin
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.time_utils import parse_duration, format_duration, format_age
-from vigil.core.ui.components import info_card, on_data_event
 
 _DEFAULT_UNIT_FILE_WRITE_PATHS = (
     '/etc/systemd/system',
@@ -28,7 +29,7 @@ _ONESHOT_LAYOUT = [
 ]
 
 
-class SystemdPlugin(BasePlugin):
+class SystemdCollectorPlugin(CollectorPlugin):
     """
     Monitors systemd services over SSH.
 
@@ -102,54 +103,6 @@ class SystemdPlugin(BasePlugin):
         else:
             await self._collect_continuous()
 
-    async def _resolve_unit_path(self) -> tuple[bool, str]:
-        status, stdout, stderr = await self.ssh_controller.execute_action(
-            f"systemctl show -p FragmentPath --value {shlex.quote(self.service_name)}"
-        )
-        if status != 0:
-            return False, stderr.strip() or 'Unable to resolve unit file path'
-
-        path = stdout.strip()
-        if not path or path == 'n/a':
-            return False, 'Unit file path unavailable'
-        return True, path
-
-    def _is_write_path_allowed(self, path: str) -> bool:
-        normalized = os.path.abspath(path)
-        return any(
-            normalized == os.path.abspath(allowed) or
-            normalized.startswith(os.path.abspath(allowed) + os.sep)
-            for allowed in self.allowed_write_paths
-        )
-
-    async def _read_unit_file(self) -> tuple[bool, str]:
-        status, stdout, stderr = await self.ssh_controller.execute_action(
-            f"sudo systemctl cat {shlex.quote(self.service_name)}"
-        )
-        if status != 0:
-            return False, stderr.strip() or 'Unable to read unit file'
-        return True, stdout
-
-    async def _write_unit_file(self, content: str) -> tuple[bool, str]:
-        ok, path_or_error = await self._resolve_unit_path()
-        if not ok:
-            return False, path_or_error
-
-        path = path_or_error
-        if not self._is_write_path_allowed(path):
-            return False, f'Write path not allowed: {path}'
-
-        cmd = (
-            "sudo python3 - <<'PY'\n"
-            "from pathlib import Path\n"
-            f"Path({shlex.quote(path)}).write_text({shlex.quote(content)}, encoding='utf-8')\n"
-            "PY"
-        )
-        status, _, stderr = await self.ssh_controller.execute_action(cmd)
-        if status != 0:
-            return False, stderr.strip() or 'Unable to write unit file'
-        return True, 'Unit file written successfully'
-
     async def _run_systemctl_command(self, command: str) -> bool:
         status, _, stderr = await self.ssh_controller.execute_action(
             f"sudo systemctl {command} {self.service_name if command != 'daemon-reload' else ''}".strip()
@@ -157,62 +110,6 @@ class SystemdPlugin(BasePlugin):
         if status != 0:
             self.db_logger.write(f"systemctl {command} failed: {stderr}", level='ERROR')
         return status == 0
-
-    def _render_unit_file_controls(self):
-        from nicegui import ui
-
-        with ui.card().classes('p-4 h-full'):
-            ui.label('Unit File').classes('font-bold mb-2')
-            with ui.row().classes('gap-2 mb-2'):
-                ui.button('View Unit File', on_click=self._show_unit_file, color='primary').props('flat')
-                ui.button('Reload Daemon', on_click=self._reload_daemon, color='secondary').props('flat')
-                if self.allow_unit_file_edit:
-                    ui.button('Edit Unit File', on_click=self._edit_unit_file, color='secondary').props('flat')
-
-    async def _show_unit_file(self):
-        from nicegui import ui
-
-        ui.spinner().style('display: block')
-        ok, content = await self._read_unit_file()
-        ui.spinner().delete()
-        if not ok:
-            ui.notify(content, type='negative')
-            return
-
-        with ui.dialog() as dialog:
-            ui.dialog_title('Unit File')
-            ui.label(self.service_name).classes('text-sm text-slate-500 mb-2')
-            ui.textarea(content, readonly=True, auto_grow=True).classes('w-full')
-            ui.button('Close', on_click=dialog.close).props('flat')
-        dialog.open()
-
-    async def _edit_unit_file(self):
-        from nicegui import ui
-
-        ok, content = await self._read_unit_file()
-        if not ok:
-            ui.notify(content, type='negative')
-            return
-
-        with ui.dialog() as dialog:
-            ui.dialog_title('Edit Unit File')
-            ui.label(self.service_name).classes('text-sm text-slate-500 mb-2')
-            editor = ui.textarea(content, auto_grow=True).classes('w-full h-96')
-            with ui.row().classes('justify-end gap-2 mt-4'):
-                ui.button('Cancel', on_click=dialog.close).props('flat')
-                async def save():
-                    new_content = editor.value
-                    save_ok, message = await self._write_unit_file(new_content)
-                    ui.notify(message, type='positive' if save_ok else 'negative')
-                    if save_ok:
-                        dialog.close()
-                ui.button('Save', on_click=save).props('flat primary')
-        dialog.open()
-
-    async def _reload_daemon(self):
-        success = await self._run_systemctl_command('daemon-reload')
-        ui.notify('Daemon reloaded' if success else 'Daemon reload failed',
-                  type='positive' if success else 'negative')
 
     async def _collect_continuous(self):
         """Standard check: is the service currently active?"""
@@ -311,6 +208,171 @@ class SystemdPlugin(BasePlugin):
         await self._collect_journal()
 
     # -------------------------------------------------------------------------
+    # Actions
+    # -------------------------------------------------------------------------
+
+    def get_actions(self) -> List[Dict[str, str]]:
+        return [
+            {'name': 'Restart Service', 'action_id': 'restart_service', 'variant': 'primary', 'icon': 'play_arrow'},
+            {'name': 'Stop Service',    'action_id': 'stop_service',    'variant': 'danger',  'icon': 'stop'},
+            {'name': 'Enable on Boot',  'action_id': 'enable_service', 'variant': 'secondary', 'icon': 'toggle_on'},
+            {'name': 'Disable on Boot', 'action_id': 'disable_service','variant': 'secondary', 'icon': 'toggle_off'},
+        ]
+
+    async def on_action(self, action_id: str, **kwargs) -> bool:
+        if action_id == 'restart_service':
+            return await self._run_systemctl_command('restart')
+
+        if action_id == 'stop_service':
+            return await self._run_systemctl_command('stop')
+
+        if action_id == 'enable_service':
+            return await self._run_systemctl_command('enable')
+
+        if action_id == 'disable_service':
+            return await self._run_systemctl_command('disable')
+
+        return False
+
+
+class SystemdUIPlugin(UIPlugin):
+    """
+    Dashboard rendering for the systemd_service monitor, including the unit
+    file view/edit/reload controls. Those controls talk to the target over
+    self.ssh_controller (a RemoteSSHController proxy here, a real
+    SSHController collector-side) — the same call signatures as
+    SystemdCollectorPlugin, so this logic is unchanged from before the split.
+    """
+
+    @property
+    def service_name(self):
+        return self.config.get('service_name')
+
+    @property
+    def max_age(self):
+        return parse_duration(self.config['max_age']) if 'max_age' in self.config else None
+
+    @property
+    def allow_unit_file_edit(self):
+        return bool(self.config.get('allow_unit_file_edit', False))
+
+    @property
+    def allowed_write_paths(self):
+        return tuple(self.config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
+
+    async def _resolve_unit_path(self) -> tuple[bool, str]:
+        status, stdout, stderr = await self.ssh_controller.execute_action(
+            f"systemctl show -p FragmentPath --value {shlex.quote(self.service_name)}"
+        )
+        if status != 0:
+            return False, stderr.strip() or 'Unable to resolve unit file path'
+
+        path = stdout.strip()
+        if not path or path == 'n/a':
+            return False, 'Unit file path unavailable'
+        return True, path
+
+    def _is_write_path_allowed(self, path: str) -> bool:
+        normalized = os.path.abspath(path)
+        return any(
+            normalized == os.path.abspath(allowed) or
+            normalized.startswith(os.path.abspath(allowed) + os.sep)
+            for allowed in self.allowed_write_paths
+        )
+
+    async def _read_unit_file(self) -> tuple[bool, str]:
+        status, stdout, stderr = await self.ssh_controller.execute_action(
+            f"sudo systemctl cat {shlex.quote(self.service_name)}"
+        )
+        if status != 0:
+            return False, stderr.strip() or 'Unable to read unit file'
+        return True, stdout
+
+    async def _write_unit_file(self, content: str) -> tuple[bool, str]:
+        ok, path_or_error = await self._resolve_unit_path()
+        if not ok:
+            return False, path_or_error
+
+        path = path_or_error
+        if not self._is_write_path_allowed(path):
+            return False, f'Write path not allowed: {path}'
+
+        cmd = (
+            "sudo python3 - <<'PY'\n"
+            "from pathlib import Path\n"
+            f"Path({shlex.quote(path)}).write_text({shlex.quote(content)}, encoding='utf-8')\n"
+            "PY"
+        )
+        status, _, stderr = await self.ssh_controller.execute_action(cmd)
+        if status != 0:
+            return False, stderr.strip() or 'Unable to write unit file'
+        return True, 'Unit file written successfully'
+
+    async def _run_systemctl_command(self, command: str) -> bool:
+        status, _, stderr = await self.ssh_controller.execute_action(
+            f"sudo systemctl {command} {self.service_name if command != 'daemon-reload' else ''}".strip()
+        )
+        return status == 0
+
+    def _render_unit_file_controls(self):
+        from nicegui import ui
+
+        with ui.card().classes('p-4 h-full'):
+            ui.label('Unit File').classes('font-bold mb-2')
+            with ui.row().classes('gap-2 mb-2'):
+                ui.button('View Unit File', on_click=self._show_unit_file, color='primary').props('flat')
+                ui.button('Reload Daemon', on_click=self._reload_daemon, color='secondary').props('flat')
+                if self.allow_unit_file_edit:
+                    ui.button('Edit Unit File', on_click=self._edit_unit_file, color='secondary').props('flat')
+
+    async def _show_unit_file(self):
+        from nicegui import ui
+
+        ui.spinner().style('display: block')
+        ok, content = await self._read_unit_file()
+        ui.spinner().delete()
+        if not ok:
+            ui.notify(content, type='negative')
+            return
+
+        with ui.dialog() as dialog:
+            ui.dialog_title('Unit File')
+            ui.label(self.service_name).classes('text-sm text-slate-500 mb-2')
+            ui.textarea(content, readonly=True, auto_grow=True).classes('w-full')
+            ui.button('Close', on_click=dialog.close).props('flat')
+        dialog.open()
+
+    async def _edit_unit_file(self):
+        from nicegui import ui
+
+        ok, content = await self._read_unit_file()
+        if not ok:
+            ui.notify(content, type='negative')
+            return
+
+        with ui.dialog() as dialog:
+            ui.dialog_title('Edit Unit File')
+            ui.label(self.service_name).classes('text-sm text-slate-500 mb-2')
+            editor = ui.textarea(content, auto_grow=True).classes('w-full h-96')
+            with ui.row().classes('justify-end gap-2 mt-4'):
+                ui.button('Cancel', on_click=dialog.close).props('flat')
+                async def save():
+                    new_content = editor.value
+                    save_ok, message = await self._write_unit_file(new_content)
+                    ui.notify(message, type='positive' if save_ok else 'negative')
+                    if save_ok:
+                        dialog.close()
+                ui.button('Save', on_click=save).props('flat primary')
+        dialog.open()
+
+    async def _reload_daemon(self):
+        from nicegui import ui
+
+        success = await self._run_systemctl_command('daemon-reload')
+        ui.notify('Daemon reloaded' if success else 'Daemon reload failed',
+                  type='positive' if success else 'negative')
+
+    # -------------------------------------------------------------------------
     # UI
     # -------------------------------------------------------------------------
 
@@ -323,7 +385,8 @@ class SystemdPlugin(BasePlugin):
     def _render_continuous_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import StatusHistory
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
 
         layout = PluginLayout(self.config, _CONTINUOUS_LAYOUT if context == 'page' else make_inline_layout(_CONTINUOUS_LAYOUT))
 
@@ -357,8 +420,9 @@ class SystemdPlugin(BasePlugin):
     def _render_oneshot_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
-        from vigil.core.ui.theme import STATUS_COLORS
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.theme import STATUS_COLORS
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
 
         layout = PluginLayout(self.config, _ONESHOT_LAYOUT if context == 'page' else make_inline_layout(_ONESHOT_LAYOUT))
 
@@ -425,30 +489,3 @@ class SystemdPlugin(BasePlugin):
                     age_label.style(f"color: {color}")
 
         on_data_event('metric', state_label, update)
-
-    # -------------------------------------------------------------------------
-    # Actions
-    # -------------------------------------------------------------------------
-
-    def get_actions(self) -> List[Dict[str, str]]:
-        return [
-            {'name': 'Restart Service', 'action_id': 'restart_service', 'variant': 'primary', 'icon': 'play_arrow'},
-            {'name': 'Stop Service',    'action_id': 'stop_service',    'variant': 'danger',  'icon': 'stop'},
-            {'name': 'Enable on Boot',  'action_id': 'enable_service', 'variant': 'secondary', 'icon': 'toggle_on'},
-            {'name': 'Disable on Boot', 'action_id': 'disable_service','variant': 'secondary', 'icon': 'toggle_off'},
-        ]
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        if action_id == 'restart_service':
-            return await self._run_systemctl_command('restart')
-
-        if action_id == 'stop_service':
-            return await self._run_systemctl_command('stop')
-
-        if action_id == 'enable_service':
-            return await self._run_systemctl_command('enable')
-
-        if action_id == 'disable_service':
-            return await self._run_systemctl_command('disable')
-
-        return False

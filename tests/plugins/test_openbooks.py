@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.openbooks import (
-    OpenbooksPlugin,
+    OpenbooksCollectorPlugin,
     _build_probe_script,
     _parse_response,
     _MSG_TYPE_CONNECT,
@@ -32,7 +32,7 @@ def _connect_fail():
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(OpenbooksPlugin, BASE_CFG)
+    return make_plugin(OpenbooksCollectorPlugin, BASE_CFG)
 
 
 def _respond(plugin, message):

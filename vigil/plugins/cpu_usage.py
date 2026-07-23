@@ -1,7 +1,8 @@
-from typing import Dict, Any, Optional, Tuple
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from typing import Dict, Any, Tuple
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
+from vigil.core.common.plugin_utils import level_for as _level_for
 
 _COLLECT_CMD = (
     "{ head -1 /proc/stat; sleep 1; head -1 /proc/stat; }"
@@ -32,9 +33,6 @@ def _cpu_pct(line1: str, line2: str) -> float:
     return max(0.0, min(100.0, 100.0 * (1.0 - delta_idle / delta_total)))
 
 
-from vigil.core.common.plugin_utils import level_for as _level_for
-
-
 _DEFAULT_LAYOUT = [
     ['host_card', 'cpu_card'],
     ['chart'],
@@ -42,7 +40,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class CpuUsagePlugin(BasePlugin):
+class CpuUsageCollectorPlugin(CollectorPlugin):
     """
     Monitors CPU utilization over SSH.
 
@@ -94,10 +92,19 @@ class CpuUsagePlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class CpuUsageUIPlugin(UIPlugin):
+    """Dashboard rendering for the cpu_usage monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
+
+        cpu_warning   = int(self.config.get('cpu_warning',   70))
+        cpu_threshold = int(self.config.get('cpu_threshold', 85))
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -114,6 +121,6 @@ class CpuUsagePlugin(BasePlugin):
             cpu = self.latest_metric('cpu_pct')
             if cpu:
                 cpu_label.text = f'{cpu.value:.1f}%'
-                cpu_label.style(f'color: {STATUS_COLORS[_level_for(cpu.value, self.cpu_warning, self.cpu_threshold)]}')
+                cpu_label.style(f'color: {STATUS_COLORS[_level_for(cpu.value, cpu_warning, cpu_threshold)]}')
 
         on_data_event('metric', cpu_label, update_cards)

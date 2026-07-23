@@ -73,6 +73,15 @@ def safe_timer(interval: float, callback, defer_first: bool = False):
     return timer
 
 
+# In the web process, DataBus never emits (writes happen only in the
+# collector — see DataBus.polling_mode). Widgets instead poll on this
+# interval, chosen to match the collector's own write-batch window
+# (ConfigFileManager.DEFAULT_WRITE_BATCH_SECONDS): polling faster couldn't
+# see fresher data anyway, since that's the floor on when a write actually
+# lands, and polling much slower would add its own visible lag on top.
+POLL_FALLBACK_SECONDS = 1.0
+
+
 def on_data_event(event, element, callback, run_now: bool = True):
     """
     Re-run `callback` whenever DataBus fires `event`, instead of polling it
@@ -93,7 +102,14 @@ def on_data_event(event, element, callback, run_now: bool = True):
     `run_now=True` (default) calls it once immediately for the widget's
     initial paint, same as safe_timer(..., defer_first=False) does today.
 
-    Unlike safe_timer, a stale subscription has no natural next tick to
+    In the web process (`bus.polling_mode`), there is no writer thread in
+    this process to ever call `bus.emit()` — writes happen only in the
+    collector. Falls back to a `safe_timer` polling `callback` every
+    `POLL_FALLBACK_SECONDS`; every call site (all 48 plugins' render_ui()
+    methods) is unchanged, since this is the only place the distinction is
+    made.
+
+    Unlike safe_timer, a DataBus subscription has no natural next tick to
     detect its own detachment on and cancel itself — DataBus may not fire
     `event` again for a long time (or ever) after the widget is gone, and
     until it does, the callback (and everything its closure holds) stays
@@ -103,7 +119,13 @@ def on_data_event(event, element, callback, run_now: bool = True):
         (main_container.clear()), but only runs when another event fires;
       - client.on_disconnect() unsubscribes immediately on a full browser
         disconnect, which otherwise might never trigger another event.
+    (safe_timer's own teardown logic already covers the polling-mode path,
+    so only the DataBus path needs this handling.)
     """
+    if bus.polling_mode:
+        safe_timer(POLL_FALLBACK_SECONDS, callback, defer_first=not run_now)
+        return
+
     events = [event] if isinstance(event, str) else list(event)
 
     def _detached() -> bool:

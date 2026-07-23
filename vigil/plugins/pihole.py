@@ -64,10 +64,9 @@ import json
 import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
-from vigil.core.common.base_plugin import BasePlugin
 from vigil.core.common.time_utils import parse_duration
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 
 # Marks the end of the summary payload so both API responses can be fetched in
 # one SSH round trip and split apart again. A newline-free sentinel that cannot
@@ -224,7 +223,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class PiholePlugin(BasePlugin):
+class PiholeCollectorPlugin(CollectorPlugin):
     """Monitors Pi-hole DNS filtering health via the v6 REST API."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -402,13 +401,23 @@ class PiholePlugin(BasePlugin):
 
         return False
 
+
+class PiholeUIPlugin(UIPlugin):
+    """Dashboard rendering for the pihole monitor."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+
+        block_rate_warning = float(self.config.get('block_rate_warning', 5))
+        block_rate_threshold = float(self.config.get('block_rate_threshold', 1))
+        gravity_max_age = parse_duration(self.config.get('gravity_max_age', '8d'))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -437,9 +446,9 @@ class PiholePlugin(BasePlugin):
 
             if block_rate:
                 block_rate_label.text = f'{block_rate.value:.1f}%'
-                if block_rate.value < self.block_rate_threshold:
+                if block_rate.value < block_rate_threshold:
                     colour = STATUS_COLORS['failed']
-                elif block_rate.value < self.block_rate_warning:
+                elif block_rate.value < block_rate_warning:
                     colour = STATUS_COLORS['warning']
                 else:
                     colour = STATUS_COLORS['online']
@@ -451,7 +460,7 @@ class PiholePlugin(BasePlugin):
                 if age:
                     gravity_label.text += f' ({_format_age(age.value)} old)'
                     gravity_label.style(
-                        f'color: {STATUS_COLORS["warning" if age.value > self.gravity_max_age else "online"]}'
+                        f'color: {STATUS_COLORS["warning" if age.value > gravity_max_age else "online"]}'
                     )
             if active:
                 clients_label.text = f'{int(active.value)}'

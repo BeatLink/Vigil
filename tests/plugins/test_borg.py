@@ -357,7 +357,7 @@ class TestCommand:
     def test_borg_defaults_to_a_longer_timeout(self, make_plugin):
         # An ssh:// repo adds a second SSH hop and a busy repo answers slowly;
         # the framework default (tuned for quick reads) times these out.
-        from vigil.core.modules.collectors.ssh_collector import TIMEOUT
+        from vigil.collector.collectors.ssh_collector import TIMEOUT
         p = make_plugin(BorgPlugin, BASE_CFG)
         assert p.timeout == BorgPlugin.DEFAULT_TIMEOUT
         assert p.timeout > TIMEOUT

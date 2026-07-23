@@ -4,7 +4,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from vigil.core.auth import register_auth
+from vigil.web.auth import register_auth
 
 
 def _basic(username: str, password: str) -> dict:

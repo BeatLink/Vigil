@@ -1,4 +1,6 @@
-from vigil.core.main import VigilEngine
-
 __version__ = "0.1.0"
-__all__ = ["VigilEngine"]
+
+# No top-level convenience import: Vigil runs as two separate processes
+# (see vigil.collector.main.VigilEngine, vigil.web.engine.VigilWebEngine),
+# and importing either here would always pull in one process's dependencies
+# (real SSH machinery, or NiceGUI) even for callers that only need the other.

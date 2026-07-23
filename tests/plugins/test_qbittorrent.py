@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.qbittorrent import (
-    QbittorrentPlugin,
+    QbittorrentCollectorPlugin,
     _AUTH_FAILED,
     _SEP,
     _build_action_script,
@@ -64,7 +64,7 @@ def _response(transfer=None, torrents=None):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(QbittorrentPlugin, BASE_CFG)
+    return make_plugin(QbittorrentCollectorPlugin, BASE_CFG)
 
 
 def _respond(plugin, transfer=None, torrents=None):
@@ -308,7 +308,7 @@ class TestCollect:
 
     @pytest.mark.asyncio
     async def test_firewalled_ignored_when_disabled(self, make_plugin):
-        p = make_plugin(QbittorrentPlugin, {**BASE_CFG, "firewalled_warning": False})
+        p = make_plugin(QbittorrentCollectorPlugin, {**BASE_CFG, "firewalled_warning": False})
         _respond(p, transfer=_transfer(connection="firewalled"))
         await p.on_collect()
         assert _latest_status() == "online"

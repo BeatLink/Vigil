@@ -1,8 +1,7 @@
 from typing import Dict, Any, List
-from vigil.core.common.base_plugin import BasePlugin
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import format_bytes as _format_gb
-from vigil.core.ui.components import info_card, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
 
 # List every mounted filesystem in one shot: mountpoint, total, used, use%.
 # -B1 = bytes; -x excludes pseudo/virtual filesystems that just add noise.
@@ -86,7 +85,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class FilesystemsPlugin(BasePlugin):
+class FilesystemsCollectorPlugin(CollectorPlugin):
     """
     Auto-discovers and monitors every mounted filesystem on the target over SSH
     via a single `df` call — no per-path configuration required. This is the
@@ -239,10 +238,37 @@ class FilesystemsPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class FilesystemsUIPlugin(UIPlugin):
+    """Dashboard rendering for the filesystems monitor."""
+
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.warning   = int(config.get('warning',   80))
+        self.threshold = int(config.get('threshold', 90))
+        self.inode_warning   = int(config.get('inode_warning',   85))
+        self.inode_threshold = int(config.get('inode_threshold', 95))
+
+    def _inode_level_for(self, pct: float) -> str:
+        if pct >= self.inode_threshold:
+            return 'failed'
+        if pct >= self.inode_warning:
+            return 'warning'
+        return 'online'
+
+    def _level_for(self, pct: float) -> str:
+        if pct >= self.threshold:
+            return 'failed'
+        if pct >= self.warning:
+            return 'warning'
+        return 'online'
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 

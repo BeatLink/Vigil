@@ -1,12 +1,10 @@
 from typing import Dict, Any
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
+from vigil.core.common.plugin_utils import level_for as _level_for, format_bytes as _fmt_gb
 
 _COLLECT_CMD = "grep -E 'MemTotal:|MemAvailable:' /proc/meminfo"
-
-
-from vigil.core.common.plugin_utils import level_for as _level_for, format_bytes as _fmt_gb
 
 
 _DEFAULT_LAYOUT = [
@@ -16,7 +14,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class MemoryUsagePlugin(BasePlugin):
+class MemoryUsageCollectorPlugin(CollectorPlugin):
     """
     Monitors memory usage over SSH via /proc/meminfo.
 
@@ -77,10 +75,16 @@ class MemoryUsagePlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class MemoryUsageUIPlugin(UIPlugin):
+    """Dashboard rendering for the memory_usage monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -95,13 +99,16 @@ class MemoryUsagePlugin(BasePlugin):
         with layout.cell('events'):
             self.internal_modules['ui']['events_table']()
 
+        memory_warning   = int(self.config.get('memory_warning',   75))
+        memory_threshold = int(self.config.get('memory_threshold', 90))
+
         def update_cards():
             mem_pct   = self.latest_metric('memory_pct')
             mem_used  = self.latest_metric('memory_used_gb')
             mem_total = self.latest_metric('memory_total_gb')
             if mem_pct:
                 mem_pct_label.text = f'{mem_pct.value:.1f}%'
-                mem_pct_label.style(f'color: {STATUS_COLORS[_level_for(mem_pct.value, self.memory_warning, self.memory_threshold)]}')
+                mem_pct_label.style(f'color: {STATUS_COLORS[_level_for(mem_pct.value, memory_warning, memory_threshold)]}')
             if mem_used and mem_total:
                 mem_used_label.text = f'{_fmt_gb(mem_used.value)} / {_fmt_gb(mem_total.value)}'
 

@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.connections import ConnectionsPlugin, _parse_states
+from vigil.plugins.connections import ConnectionsCollectorPlugin, _parse_states
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -25,7 +25,7 @@ def _make_tcp(states: list) -> str:
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(ConnectionsPlugin, BASE_CFG)
+    return make_plugin(ConnectionsCollectorPlugin, BASE_CFG)
 
 
 def _latest_status(plugin_id: str = "test-conn"):
@@ -79,14 +79,14 @@ class TestConnectionsCollection:
         assert _latest_metric("test-conn", "time_wait") == pytest.approx(1.0)
 
     async def test_warning_on_high_total(self, make_plugin):
-        p = make_plugin(ConnectionsPlugin, {**BASE_CFG, "total_warning": 2, "total_threshold": 10})
+        p = make_plugin(ConnectionsCollectorPlugin, {**BASE_CFG, "total_warning": 2, "total_threshold": 10})
         stdout = _make_tcp(["01", "01", "01"])
         p.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
         await p.on_collect()
         assert _latest_status() == "warning"
 
     async def test_failed_on_flood(self, make_plugin):
-        p = make_plugin(ConnectionsPlugin, {**BASE_CFG, "total_warning": 2, "total_threshold": 3})
+        p = make_plugin(ConnectionsCollectorPlugin, {**BASE_CFG, "total_warning": 2, "total_threshold": 3})
         stdout = _make_tcp(["01", "01", "01", "01"])
         p.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
         await p.on_collect()

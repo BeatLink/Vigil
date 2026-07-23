@@ -13,7 +13,7 @@ hook that can.
 import pytest
 from nicegui import ui, Client
 
-from vigil.core.ui.components import safe_timer, _SafeTimer
+from vigil.web.ui.components import safe_timer, _SafeTimer
 
 
 @pytest.fixture

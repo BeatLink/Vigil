@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from vigil.plugins.calibre_web import CalibreWebPlugin, _SEP, _looks_like_opds, _parse_response
+from vigil.plugins.calibre_web import CalibreWebCollectorPlugin, _SEP, _looks_like_opds, _parse_response
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -19,7 +19,7 @@ _OPDS_BODY = '<feed xmlns="http://www.w3.org/2005/Atom"><title>Calibre-Web</titl
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(CalibreWebPlugin, BASE_CFG)
+    return make_plugin(CalibreWebCollectorPlugin, BASE_CFG)
 
 
 def _respond(plugin, status=200, body=_OPDS_BODY):

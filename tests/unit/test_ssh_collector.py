@@ -3,7 +3,7 @@ import pytest
 from unittest.mock import MagicMock, patch
 
 pytestmark = pytest.mark.asyncio
-from vigil.core.modules.collectors.ssh_collector import SSHCollector
+from vigil.collector.collectors.ssh_collector import SSHCollector
 
 
 @pytest.fixture
@@ -31,7 +31,7 @@ class TestFetchOutput:
 
     async def test_timeout_returns_minus_one(self, mock_conn):
         # Patch asyncio.wait_for to simulate a timeout without actually waiting
-        with patch("vigil.core.modules.collectors.ssh_collector.asyncio.wait_for",
+        with patch("vigil.collector.collectors.ssh_collector.asyncio.wait_for",
                    side_effect=asyncio.TimeoutError):
             collector = SSHCollector(mock_conn)
             rc, out, err = await collector.fetch_output("slow_cmd")
@@ -46,7 +46,7 @@ class TestFetchOutput:
         assert "connection reset" in err
 
     async def test_passes_command_to_ssh_execute(self, mock_conn):
-        from vigil.core.modules.collectors.ssh_collector import TIMEOUT
+        from vigil.collector.collectors.ssh_collector import TIMEOUT
         collector = SSHCollector(mock_conn)
         await collector.fetch_output("df -h")
         # The deadline goes down to execute(), which is what actually kills the

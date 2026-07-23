@@ -1,6 +1,6 @@
 import pytest
 from vigil.core.data.database import DatabaseManager, db
-from vigil.core.modules.exporters import prometheus, influxdb
+from vigil.collector.exporters import prometheus, influxdb
 
 
 @pytest.fixture

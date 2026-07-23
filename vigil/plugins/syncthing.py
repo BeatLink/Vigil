@@ -60,9 +60,9 @@ import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
+
 
 def _folder_status_script(api_url: str, timeout: int, api_key_command: Optional[str],
                           api_key: Optional[str], folder_id: str) -> str:
@@ -83,7 +83,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class SyncthingPlugin(BasePlugin):
+class SyncthingCollectorPlugin(CollectorPlugin):
     """Monitors Syncthing folder sync state and device connectivity via the REST API."""
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
@@ -261,8 +261,14 @@ class SyncthingPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class SyncthingUIPlugin(UIPlugin):
+    """Dashboard rendering for the syncthing monitor."""
+
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,

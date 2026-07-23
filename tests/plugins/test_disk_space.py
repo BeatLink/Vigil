@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.disk_space import DiskSpacePlugin, _format_gb
+from vigil.plugins.disk_space import DiskSpaceCollectorPlugin, _format_gb
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -22,12 +22,12 @@ def _df_line(size: int, used: int, avail: int, pct: int) -> str:
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(DiskSpacePlugin, BASE_CFG)
+    return make_plugin(DiskSpaceCollectorPlugin, BASE_CFG)
 
 
 @pytest.fixture
 def storage_plugin(make_plugin):
-    return make_plugin(DiskSpacePlugin, {
+    return make_plugin(DiskSpaceCollectorPlugin, {
         "name": "test-disk-storage",
         "id":   "test-disk-storage",
         "path": "/Storage",

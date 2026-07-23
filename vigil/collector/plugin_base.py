@@ -1,27 +1,47 @@
+"""
+CollectorPlugin: the collector-process half of Vigil's plugin split.
+
+Vigil runs as two OS processes sharing one SQLite database: a collector that
+polls targets and writes state, and a web process (vigil.web.plugin_base.UIPlugin)
+that serves the dashboard by reading that state. CollectorPlugin holds a real
+SSHConnection and is the only thing in Vigil that talks to a monitored host —
+only the collector process ever constructs one (see
+vigil.collector.main.VigilEngine.setup_modules).
+
+Deliberately a separate class (and module) from UIPlugin rather than one
+BasePlugin with a mode flag: a plugin author calling self.ssh_controller from
+inside render_ui() should be calling a real, local SSHController here, and a
+genuinely different (network-proxying) object in the web process — making
+that a different class, not a runtime branch inside one class, means the
+process boundary is visible in the type system. It also means importing this
+module (module-level ssh_collector/ssh_controller/job_controller imports)
+never happens in the web process, which has no business constructing any of
+that collector-only machinery.
+"""
 import logging
 import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
+
+from vigil.core.common.plugin_config import PluginConfigMixin
 from vigil.core.common.ssh_connector import SSHConnection
 from vigil.core.common.time_utils import parse_duration
-from functools import partial
-from vigil.core.ui.components import (render_host_card, render_status_card, metric_table,
-                                      log_table, event_table)
-from vigil.core.modules.collectors.ssh_collector import SSHCollector, TIMEOUT as SSH_TIMEOUT
-from vigil.core.modules.controllers.ssh_controller import SSHController
-from vigil.core.modules.controllers.job_controller import JobController
+from vigil.collector.collectors.ssh_collector import SSHCollector, TIMEOUT as SSH_TIMEOUT
+from vigil.collector.controllers.ssh_controller import SSHController
+from vigil.collector.controllers.job_controller import JobController
 
-class BasePlugin(ABC):
+
+class CollectorPlugin(PluginConfigMixin, ABC):
     """
-    Standardized base class for all Vigil plugins.
-    Encapsulates collection, alerting, presentation, and control logic for a specific domain.
+    Collector-side plugin: gathers data from a target and can act on it.
+
+    Encapsulates collection, alerting, and control logic for a specific
+    domain. Only the collector process ever constructs these — they hold a
+    real SSHConnection and are the only thing in Vigil that talks to a
+    monitored host.
     """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        self.name = name
-        self.id = config.get('id', name)  # Unique identifier for the tree
-        self.config = config
-        self.interval = parse_duration(config.get('interval', 60))
-        self.children: List['BasePlugin'] = []
+        self._init_config(name, config)
         self.db = db
         # True while on_collect is in flight; guards against overlapping polls
         # of the same monitor (see run_cycle).
@@ -34,7 +54,6 @@ class BasePlugin(ABC):
         self.ssh_conn = SSHConnection.from_config(config)
         self.target = getattr(self.ssh_conn, 'host', config.get('target_host', 'localhost'))
 
-        # Build the internal modules registry for use by subclasses
         # Per-monitor command deadline. Defaults to the collector's own, which
         # suits quick reads; monitors whose commands are legitimately slow
         # (e.g. borg against a busy repository) raise it in config rather than
@@ -59,18 +78,6 @@ class BasePlugin(ABC):
                 'db_logs': db.get_logger(self.target, self.name, self.id),
                 'db_metrics': db.get_logger(self.target, self.name, self.id)
             },
-            'ui': {
-                'host_card': partial(render_host_card, self.target),
-                # Metric-backed widgets take the unique id, matching how
-                # db_metrics writes them.
-                'metrics_table': partial(metric_table, self.id),
-                'logs_table': partial(log_table, self.target, filter_prefix=self.id),
-                # For plugins that write their own commentary rather than
-                # collecting logs off a target — those have no LogLine rows,
-                # so logs_table would render empty for them.
-                'events_table': partial(event_table, self.name, self.id, self.target),
-                'status_card': partial(render_status_card, self.id)
-            }
         }
 
         # Convenience aliases — available in every plugin without repetitive __init__ boilerplate
@@ -111,8 +118,10 @@ class BasePlugin(ABC):
         Main execution entry point for the plugin's polling interval.
 
         Returns True if this call actually collected, False if it was skipped —
-        the engine ticks far more often than most monitors poll, so the return
-        value is what distinguishes "collected" from "not due yet".
+        the engine's per-monitor scheduler sleeps this plugin's own interval
+        between calls, so this is mainly a safety net (e.g. a caller invoking
+        run_cycle early, like the web process's "Poll Now" proxy calling in
+        over the internal API).
 
         Skips this tick when the previous collection for this monitor has not
         finished. A poll against a busy target can outlast its own interval; if
@@ -128,9 +137,6 @@ class BasePlugin(ABC):
             )
             return False
 
-        # The engine tick is only the scheduler's resolution; honouring the
-        # configured interval is this method's job. Without it, `interval: 1h`
-        # polled hourly targets once per tick.
         now = time.monotonic()
         if self._last_collected and (now - self._last_collected) < self.interval:
             return False
@@ -159,13 +165,3 @@ class BasePlugin(ABC):
             .order_by(Metric.timestamp.desc())
             .first()
         )
-
-    @abstractmethod
-    def render_ui(self, context: str = 'page'):
-        """Render the plugin UI.
-
-        context:
-          'page'   — standalone full-page view (all widgets visible).
-          'inline' — embedded inside a group panel (host_card and logs hidden).
-        """
-        pass

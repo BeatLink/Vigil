@@ -25,10 +25,20 @@ class DataBus:
     Before `bind_loop()` — e.g. early in tests, or before the UI has started —
     emit() is a no-op rather than raising, since there's nothing subscribed
     yet anyway.
+
+    In the web process (see the collector/web process split), no writer
+    thread ever runs here — writes happen only in the collector process, so
+    this bus never emits. `polling_mode` is set there instead, and
+    `on_data_event` (components.py) checks it to fall back to a short timer
+    per widget rather than subscribing to an emit() that will never come.
     """
     def __init__(self):
         self._subscribers: Dict[str, List[Callable[[], None]]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # True in the web process: writes (and therefore emit()) happen only
+        # in the collector process, so widgets must poll instead of
+        # subscribing. See on_data_event in components.py.
+        self.polling_mode: bool = False
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop

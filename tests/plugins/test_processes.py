@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.processes import ProcessesPlugin, _parse_ps_output, _level_for
+from vigil.plugins.processes import ProcessesCollectorPlugin, _parse_ps_output, _level_for
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -46,12 +46,12 @@ _PS_OUTPUT_WARN_CPU = "\n".join([
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(ProcessesPlugin, BASE_CFG)
+    return make_plugin(ProcessesCollectorPlugin, BASE_CFG)
 
 
 @pytest.fixture
 def thresh_plugin(make_plugin):
-    return make_plugin(ProcessesPlugin, CFG_WITH_THRESHOLDS)
+    return make_plugin(ProcessesCollectorPlugin, CFG_WITH_THRESHOLDS)
 
 
 def _latest_status(plugin_id: str = "test-procs") -> str | None:
@@ -214,14 +214,14 @@ class TestProcessesKillAction:
 
     async def test_kill_with_sudo(self, make_plugin):
         cfg = {**BASE_CFG, "name": "test-sudo", "id": "test-sudo", "require_sudo": True}
-        p = make_plugin(ProcessesPlugin, cfg)
+        p = make_plugin(ProcessesCollectorPlugin, cfg)
         p.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
         await p.on_action('kill', pid=99, signal='TERM')
         p.ssh_controller.execute_action.assert_called_once_with("sudo kill -TERM 99")
 
     async def test_kill_uses_default_signal_from_config(self, make_plugin):
         cfg = {**BASE_CFG, "name": "test-sig", "id": "test-sig", "kill_signal": "KILL"}
-        p = make_plugin(ProcessesPlugin, cfg)
+        p = make_plugin(ProcessesCollectorPlugin, cfg)
         p.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
         await p.on_action('kill', pid=77)  # no signal kwarg → uses config default
         p.ssh_controller.execute_action.assert_called_once_with("kill -KILL 77")

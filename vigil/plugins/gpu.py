@@ -1,8 +1,8 @@
 from typing import Dict, Any
-from vigil.core.common.base_plugin import BasePlugin
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
 
 # Query utilization, memory, and temperature for every GPU in one call.
 # --format=csv,noheader,nounits yields bare numbers, one line per GPU:
@@ -20,7 +20,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class GpuPlugin(BasePlugin):
+class GpuCollectorPlugin(CollectorPlugin):
     """
     Monitors NVIDIA GPU utilization, memory, and temperature over SSH via nvidia-smi.
 
@@ -117,10 +117,16 @@ class GpuPlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class GpuUIPlugin(UIPlugin):
+    """Dashboard rendering for the gpu monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
@@ -144,6 +150,13 @@ class GpuPlugin(BasePlugin):
         with layout.cell('events'):
             self.internal_modules['ui']['events_table']()
 
+        util_warning   = int(self.config.get('util_warning',   85))
+        util_threshold = int(self.config.get('util_threshold', 95))
+        mem_warning    = int(self.config.get('mem_warning',    85))
+        mem_threshold  = int(self.config.get('mem_threshold',  95))
+        temp_warning   = int(self.config.get('temp_warning',   80))
+        temp_threshold = int(self.config.get('temp_threshold', 90))
+
         def update():
             def _val(name):
                 m = self.latest_metric(name)
@@ -154,13 +167,13 @@ class GpuPlugin(BasePlugin):
             temp = _val('gpu_temp')
             if util is not None:
                 util_label.text = f'{util:.0f}%'
-                util_label.style(f"color: {STATUS_COLORS[_level_for(util, self.util_warning, self.util_threshold)]}")
+                util_label.style(f"color: {STATUS_COLORS[_level_for(util, util_warning, util_threshold)]}")
             if mem is not None:
                 mem_label.text = f'{mem:.0f}%'
-                mem_label.style(f"color: {STATUS_COLORS[_level_for(mem, self.mem_warning, self.mem_threshold)]}")
+                mem_label.style(f"color: {STATUS_COLORS[_level_for(mem, mem_warning, mem_threshold)]}")
             if temp is not None:
                 temp_label.text = f'{temp:.0f}°C'
-                temp_label.style(f"color: {STATUS_COLORS[_level_for(temp, self.temp_warning, self.temp_threshold)]}")
+                temp_label.style(f"color: {STATUS_COLORS[_level_for(temp, temp_warning, temp_threshold)]}")
 
             # Per-GPU cards: latest util for each gpu<idx>_util metric
             gpu_util: Dict[str, float] = {}
@@ -184,6 +197,6 @@ class GpuPlugin(BasePlugin):
                     val = gpu_util[metric_name]
                     idx = metric_name.removeprefix('gpu').removesuffix('_util')
                     lbl = info_card(f'GPU {idx}', f'{val:.0f}%')
-                    lbl.style(f'color: {STATUS_COLORS[_level_for(val, self.util_warning, self.util_threshold)]}')
+                    lbl.style(f'color: {STATUS_COLORS[_level_for(val, util_warning, util_threshold)]}')
 
         on_data_event('metric', util_label, update)

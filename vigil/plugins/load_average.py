@@ -1,13 +1,11 @@
-from typing import Dict, Any, Optional
-from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.ui.components import info_card, history_chart, on_data_event
-from vigil.core.ui.theme import STATUS_COLORS
+from typing import Dict, Any
+
+from vigil.collector.plugin_base import CollectorPlugin
+from vigil.web.plugin_base import UIPlugin
+from vigil.core.common.plugin_utils import level_for as _level_for
 
 # Single SSH read — no sleep needed for load averages.
 _COLLECT_CMD = 'echo "LOAD:$(cat /proc/loadavg)"; echo "CPUS:$(nproc)"'
-
-
-from vigil.core.common.plugin_utils import level_for as _level_for
 
 
 _DEFAULT_LAYOUT = [
@@ -17,7 +15,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class LoadAveragePlugin(BasePlugin):
+class LoadAverageCollectorPlugin(CollectorPlugin):
     """
     Monitors system load averages over SSH via /proc/loadavg.
 
@@ -85,10 +83,16 @@ class LoadAveragePlugin(BasePlugin):
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
 
+
+class LoadAverageUIPlugin(UIPlugin):
+    """Dashboard rendering for the load_average monitor."""
+
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.layout import PluginLayout, make_inline_layout
+        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -105,14 +109,17 @@ class LoadAveragePlugin(BasePlugin):
         with layout.cell('events'):
             self.internal_modules['ui']['events_table']()
 
+        load_warning   = float(self.config['load_warning'])   if 'load_warning'   in self.config else None
+        load_threshold = float(self.config['load_threshold']) if 'load_threshold' in self.config else None
+
         def update_cards():
             load_1m  = self.latest_metric('load_pct_1m')
             load_5m  = self.latest_metric('load_pct_5m')
             load_15m = self.latest_metric('load_pct_15m')
             if load_1m:
                 load_1m_label.text = f'{load_1m.value:.0f}%'
-                if self.load_warning is not None and self.load_threshold is not None:
-                    load_1m_label.style(f'color: {STATUS_COLORS[_level_for(load_1m.value, self.load_warning, self.load_threshold)]}')
+                if load_warning is not None and load_threshold is not None:
+                    load_1m_label.style(f'color: {STATUS_COLORS[_level_for(load_1m.value, load_warning, load_threshold)]}')
             if load_5m:
                 load_5m_label.text = f'{load_5m.value:.0f}%'
             if load_15m:

@@ -25,7 +25,7 @@ STATUS_COLORS = {
 
 def configure(cfg: dict) -> None:
     """Apply theme overrides from the config file's 'theme:' section."""
-    import vigil.core.ui.theme as _m
+    import vigil.web.ui.theme as _m
     if 'primary'          in cfg: _m.PRIMARY          = cfg['primary']
     if 'accent'           in cfg: _m.ACCENT            = cfg['accent']
     if 'background'       in cfg: _m.BACKGROUND        = cfg['background']

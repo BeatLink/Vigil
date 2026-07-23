@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.pihole import (
-    PiholePlugin,
+    PiholeCollectorPlugin,
     _SEP,
     _build_blocking_script,
     _build_fetch_script,
@@ -55,7 +55,7 @@ def _response(summary=None, blocking="enabled"):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(PiholePlugin, BASE_CFG)
+    return make_plugin(PiholeCollectorPlugin, BASE_CFG)
 
 
 def _respond(plugin, summary=None, blocking="enabled"):
