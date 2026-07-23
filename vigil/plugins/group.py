@@ -85,12 +85,29 @@ class GroupPlugin(BasePlugin):
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
-        grid_style = (
-            f'display: grid; '
-            f'grid-template-columns: repeat({self.grid_columns}, 1fr); '
-            f'gap: 0.75rem; width: 100%;'
-        )
-        with ui.element('div').style(grid_style):
+        grid_cls = f'group-grid-{self.id}'
+        ui.add_css(f'''
+            .{grid_cls} {{
+                display: grid;
+                grid-template-columns: repeat({self.grid_columns}, 1fr);
+                gap: 0.75rem;
+                width: 100%;
+            }}
+            @media (max-width: 900px) {{
+                .{grid_cls} {{
+                    grid-template-columns: repeat({min(self.grid_columns, 2)}, 1fr);
+                }}
+            }}
+            @media (max-width: 600px) {{
+                .{grid_cls} {{
+                    grid-template-columns: 1fr;
+                }}
+                .{grid_cls} > div {{
+                    grid-column: span 1 !important;
+                }}
+            }}
+        ''')
+        with ui.element('div').classes(grid_cls):
             for child in self.children:
                 with StatusHistory._meta.database.connection_context():
                     latest = StatusHistory.select(StatusHistory.state).where(

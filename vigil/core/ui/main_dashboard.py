@@ -89,7 +89,49 @@ def init_gui(engine: Any, port: int = 8080):
           ui.image('/icon.svg').style('width: 2rem; height: 2rem;')
           ui.label('Vigil').classes('text-2xl font-bold ml-2')
 
-      with ui.left_drawer(value=True).classes('p-0 shadow-lg').props('width=350').style(f'background-color: {BACKGROUND}') as left_drawer:
+      def _load_drawer_width() -> int:
+          with Setting._meta.database.connection_context():
+              try:
+                  return int(Setting.get(Setting.key == 'drawer_width').value)
+              except Exception:
+                  return 350
+
+      def _save_drawer_width(width: int):
+          with Setting._meta.database.connection_context():
+              Setting.insert(
+                  key='drawer_width', value=str(width)
+              ).on_conflict_replace().execute()
+
+      drawer_width = _load_drawer_width()
+
+      with ui.left_drawer(value=True).classes('p-0 shadow-lg').props(f'width={drawer_width}').style(f'background-color: {BACKGROUND}') as left_drawer:
+          # Drag handle on the drawer's right edge — Quasar's q-drawer has no
+          # built-in resize, so width is adjusted by hand and persisted like
+          # the tree's expanded state, restoring on the next page load.
+          resize_handle = ui.element('div').style(
+              'position: absolute; top: 0; right: 0; width: 6px; height: 100%; '
+              'cursor: ew-resize; z-index: 2000;'
+          )
+          resize_handle.on('mousedown', js_handler=f'''
+              (e) => {{
+                  e.preventDefault();
+                  const drawerEl = e.target.closest('.q-drawer');
+                  const startX = e.clientX;
+                  const startWidth = drawerEl.offsetWidth;
+                  const onMove = (moveEvent) => {{
+                      const newWidth = Math.min(600, Math.max(200, startWidth + (moveEvent.clientX - startX)));
+                      drawerEl.style.width = newWidth + 'px';
+                  }};
+                  const onUp = () => {{
+                      document.removeEventListener('mousemove', onMove);
+                      document.removeEventListener('mouseup', onUp);
+                      emitEvent('drawer_resized', drawerEl.offsetWidth);
+                  }};
+                  document.addEventListener('mousemove', onMove);
+                  document.addEventListener('mouseup', onUp);
+              }}
+          ''')
+          ui.on('drawer_resized', lambda e: _save_drawer_width(int(e.args)))
           with ui.list().classes('w-full').props('dense'):
               ui.item('All Monitors', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {TEXT}')
               ui.item('Events', on_click=lambda: switch_view('events')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {TEXT}')

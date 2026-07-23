@@ -233,10 +233,11 @@ def event_table(plugin_name: str, plugin_id: str = '', target: str = '',
 def history_chart(title: str, collector: str, metric_name: str, limit: int = 30):
     """A standardized EChart for displaying metric history over time."""
     from vigil.core.data.database import Metric
-    with card('w-full h-80 mb-4'):
-        ui.label(title.upper()).classes(f'{LABEL_CLASS} mb-2')
+    with card('w-full h-80 mb-4 p-2', padding=False):
+        ui.label(title.upper()).classes(f'{LABEL_CLASS} mb-1')
         chart = ui.echart({
             'tooltip': {'trigger': 'axis'},
+            'grid': {'left': 4, 'right': 8, 'top': 8, 'bottom': 4, 'containLabel': True},
             'xAxis': {'type': 'category', 'data': []},
             'yAxis': {'type': 'value', 'splitLine': {'show': False}},
             'series': [{
@@ -246,7 +247,7 @@ def history_chart(title: str, collector: str, metric_name: str, limit: int = 30)
                 'color': PRIMARY,
                 'areaStyle': {'opacity': 0.1}
             }]
-        }).classes('w-full h-64')
+        }).classes('w-full h-72')
 
         def update():
             history = Metric.select().where(
