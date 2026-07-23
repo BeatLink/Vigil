@@ -124,3 +124,15 @@ class TestAlertAndControlProperties:
         path = write_yaml({"plugins": []})
         cfg = ConfigFileManager(path)
         assert cfg.controllers == []
+
+
+class TestAuthSettings:
+    def test_empty_when_missing(self, write_yaml):
+        path = write_yaml({"plugins": []})
+        cfg = ConfigFileManager(path)
+        assert cfg.auth_settings == {}
+
+    def test_returns_configured_auth(self, write_yaml):
+        path = write_yaml({"plugins": [], "auth": {"username": "admin", "password": "secret"}})
+        cfg = ConfigFileManager(path)
+        assert cfg.auth_settings == {"username": "admin", "password": "secret"}

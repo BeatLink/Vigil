@@ -918,6 +918,18 @@ plugins:
           user: "vigil"
 ```
 
+### Authentication
+
+By default the dashboard and REST API are unauthenticated — anyone who can reach the port has full read access and can trigger control actions. Set `auth.username` and `auth.password` (or `auth.password_file`, to keep the secret out of the YAML config) to require HTTP Basic Auth on every route:
+
+```yaml
+auth:
+  username: "admin"
+  password_file: "/run/secrets/vigil_dashboard_password"
+```
+
+`password_file` is read once at startup. If only one of `username`/`password` is set, auth stays disabled and a warning is logged.
+
 ---
 
 ## Usage
@@ -1042,7 +1054,8 @@ exporters:
 - [x] Prometheus `/metrics` export endpoint (pull)
 - [x] InfluxDB export (push, 1.x and 2.x)
 - [ ] Basic alerting (Email, Slack, or Webhook)
-- [ ] Authentication + HTTPS for the dashboard and REST API
+- [x] Authentication for the dashboard and REST API (HTTP Basic Auth)
+- [ ] HTTPS for the dashboard and REST API
 - [ ] Boot-uptime monitor (`uptime -p` — how long the host has been up, distinct from ping reachability)
 - [ ] Public IP / geolocation monitor
 - [ ] CSV / JSON file export (flat-file dump alongside the Prometheus/InfluxDB exporters)

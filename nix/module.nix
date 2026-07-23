@@ -33,11 +33,27 @@ let
         withChildren
     ) plugins;
 
-  finalSettings =
+  withBorgPassphrase =
     if cfg.settings != null && cfg.borgPassphraseFile != null && cfg.settings ? plugins then
       cfg.settings // { plugins = injectBorgPassphrase cfg.settings.plugins; }
     else
       cfg.settings;
+
+  # Merge in dashboard/API auth when both authUsername and authPasswordFile
+  # are set. Only the password *path* is written to the generated YAML (which
+  # lands in the Nix store) — Vigil reads the file itself at runtime, so the
+  # password never enters the store.
+  finalSettings =
+    if withBorgPassphrase != null && cfg.authUsername != null && cfg.authPasswordFile != null then
+      withBorgPassphrase
+      // {
+        auth = {
+          username = cfg.authUsername;
+          password_file = cfg.authPasswordFile;
+        };
+      }
+    else
+      withBorgPassphrase;
 
   configFile =
     if cfg.configFile != null then
@@ -135,6 +151,30 @@ in
         the monitored hosts need no copy. Point this at a
         sops-nix/agenix-managed secret readable by the Vigil service user; the
         value never enters the Nix store.
+      '';
+    };
+
+    authUsername = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "admin";
+      description = ''
+        Username required for HTTP Basic Auth on the dashboard and REST API.
+        Must be set together with <option>authPasswordFile</option> to enable
+        auth; if only one is set, Vigil logs a warning and leaves the
+        dashboard/API unauthenticated.
+      '';
+    };
+
+    authPasswordFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = "/run/secrets/vigil_dashboard_password";
+      description = ''
+        Path to a file on this host containing the HTTP Basic Auth password.
+        Vigil reads it at runtime, so the password never enters the Nix
+        store — point this at a sops-nix/agenix-managed secret readable by
+        the Vigil service user (<option>user</option>).
       '';
     };
   };

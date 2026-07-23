@@ -93,3 +93,15 @@ class ConfigFileManager:
     def controllers(self) -> List[Dict[str, Any]]:
         """Returns the list of control/remediation configurations."""
         return self.data.get('control', [])
+
+    @property
+    def auth_settings(self) -> Dict[str, Any]:
+        """
+        Returns the auth section (may be empty).
+
+        Expected keys: `username`, and either `password` or `password_file`
+        (a path read at startup, so the secret need not enter the YAML
+        config or the Nix store). When neither is set, auth is disabled and
+        the dashboard/API are unauthenticated — as they always were.
+        """
+        return self.data.get('auth', {})

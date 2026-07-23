@@ -34,6 +34,13 @@ def init_gui(engine: Any, port: int = 8080):
 
     app.add_static_file(local_file=_ICON, url_path='/icon.svg')
 
+    # Register HTTP Basic Auth before the routes below are defined — Starlette
+    # middleware wraps the whole app regardless of registration order relative
+    # to routes, but registering it early keeps intent obvious: everything
+    # that follows is meant to be gated by it.
+    from vigil.core.auth import register_auth
+    register_auth(app, engine.config_loader.auth_settings)
+
     # Register the REST API + Prometheus /metrics routes on the FastAPI app.
     try:
         from vigil.core.api import register_api
