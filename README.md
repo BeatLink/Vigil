@@ -99,6 +99,7 @@ theme:
 | Type | Monitors | Collection | Key metrics | Actions |
 |------|----------|------------|-------------|---------|
 | [`uptime`](#uptime)                     | Host reachability                     | ICMP ping                                        | `up`, `latency_ms`                              | — |
+| [`push`](#push)                         | External heartbeat (dead man's switch) | REST API (caller pushes in)                     | `last_push_epoch`, `reported_up`, `value`       | — |
 | [`systemd_service`](#systemd_service)   | systemd unit state / last run         | SSH (`systemctl`)                                | `active` *or* `last_run_epoch`, `last_run_success` | Restart, Stop, Enable, Disable |
 | [`service_list`](#service_list)         | Systemd unit browser and control      | SSH (`systemctl`)                                | `services_total`, `services_active`, `services_failed` | Start, Stop, Restart, Enable, Disable, View Status |
 | [`smart_disk`](#smart_disk)             | Physical disk SMART health            | SSH (`smartctl`)                                 | `disks_total`, `disks_ok`, `disks_failed`       | — |
@@ -133,7 +134,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `systemd_service`, `service_list`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `interrupts`, `connections`, `wifi`, `ports`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `borg`, `gpu`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `systemd_service`, `service_list`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `interrupts`, `connections`, `wifi`, `ports`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `borg`, `gpu`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -154,6 +155,40 @@ Checks host availability using ICMP ping.
   type: "uptime"
   target_host: "192.168.1.1"
   interval: 30
+```
+
+---
+
+### `push`
+The inverse of every other monitor: instead of Vigil reaching out to a target, an external script, cron job, or task with no fixed host calls Vigil's REST API to say "I'm alive." Vigil reports `failed` once a heartbeat hasn't arrived within `max_age` — a dead man's switch, not a poll.
+
+`interval` controls how often Vigil *checks* for staleness, not how often heartbeats are expected — that's `max_age`'s job. A missing `max_age` defaults to twice the interval, tolerating one missed beat before alarming.
+
+| Option      | Description                                                                 |
+|-------------|------------------------------------------------------------------------------|
+| `max_age`   | Seconds since the last heartbeat before reporting `failed` (default: `interval * 2`) |
+| `token`     | Shared secret the caller must present when pushing. **Required** — without one, anyone who can reach the API could mark this monitor healthy. Generate with `openssl rand -hex 20`. |
+| `interval`  | How often the staleness check itself runs (default: `60`)                    |
+
+**Metrics**: `last_push_epoch` (Unix timestamp of the last heartbeat), `reported_up` (1/0, the caller's own status), `value` (optional, if the caller supplies one)
+
+To push a heartbeat, hit `GET` or `POST /api/push/{id}/{token}`, optionally with `status` (`up` or `down`, default `up`), `msg`, and `value` query parameters. This endpoint is not covered by the dashboard's HTTP Basic Auth (see [Authentication](#authentication)) — the per-monitor token is its credential instead.
+
+```yaml
+- name: "Nightly Backup Job"
+  id: "nightly-backup"
+  type: "push"
+  interval: 1h
+  max_age: 26h   # daily job, tolerate one slipped run
+  token: "a1b2c3d4e5f6..."   # openssl rand -hex 20
+```
+
+```bash
+# At the end of the cron job:
+curl "https://vigil.example.com/api/push/nightly-backup/a1b2c3d4e5f6...?status=up"
+
+# Or report a failure the job detected itself, while still checking in on time:
+curl "https://vigil.example.com/api/push/nightly-backup/a1b2c3d4e5f6...?status=down&msg=disk+full"
 ```
 
 ---
@@ -1049,6 +1084,7 @@ exporters:
 - [x] Folder size monitor (arbitrary directories via `du`)
 - [x] VM monitor (libvirt/KVM via `virsh`, with start/shutdown)
 - [x] Cloud instance metadata monitor (AWS/GCP/Azure)
+- [x] Push monitor (dead man's switch — external heartbeat via REST API, per-monitor token)
 - [x] Unified, filterable events feed
 - [x] REST API for monitors, metrics, and events
 - [x] Prometheus `/metrics` export endpoint (pull)

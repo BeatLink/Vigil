@@ -42,6 +42,13 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         self._password = password
 
     async def dispatch(self, request: Request, call_next):
+        # Push monitors are checked in by external scripts/cron jobs with no
+        # reason to hold the dashboard's shared admin credentials — they
+        # authenticate with their own per-monitor token instead (checked in
+        # the route itself, see api.py's push handler).
+        if request.url.path.startswith('/api/push/'):
+            return await call_next(request)
+
         credentials = request.headers.get('authorization')
         if credentials and self._is_valid(credentials):
             return await call_next(request)

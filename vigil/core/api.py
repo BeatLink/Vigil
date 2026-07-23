@@ -12,13 +12,18 @@ Endpoints:
   GET /api/metrics                -> latest value of every metric
   GET /api/events                 -> recent events (?level=&target=&search=&limit=)
   GET /metrics                    -> Prometheus exposition format (text/plain)
+
+  GET/POST /api/push/{id}/{token} -> record a heartbeat for a push monitor
+                                      (?status=up|down&msg=&value=)
 """
+import hmac
 from typing import Any, Optional
 
 from fastapi import Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from vigil.core.modules.exporters import prometheus
+from vigil.plugins.push import PushPlugin
 
 
 def _flatten(plugins):
@@ -26,6 +31,11 @@ def _flatten(plugins):
     for p in plugins:
         yield p
         yield from _flatten(p.children)
+
+
+def _tokens_match(given: str, expected: str) -> bool:
+    """Constant-time token comparison, so a wrong guess can't be timed."""
+    return hmac.compare_digest(given, expected)
 
 
 def register_api(app: Any, engine: Any) -> None:
@@ -85,3 +95,32 @@ def register_api(app: Any, engine: Any) -> None:
     def prometheus_metrics():
         return PlainTextResponse(prometheus.render(db),
                                  media_type='text/plain; version=0.0.4; charset=utf-8')
+
+    def _handle_push(monitor_id: str, token: str, status: str, msg: Optional[str],
+                     value: Optional[float]):
+        # Deliberately bypasses Basic Auth (see register_auth): a push monitor
+        # is checked in by external scripts/cron jobs that have no reason to
+        # hold the dashboard's admin credentials. The per-monitor token is
+        # this endpoint's own credential instead.
+        target = next(
+            (p for p in _flatten(engine.plugins)
+             if p.id == monitor_id and isinstance(p, PushPlugin)),
+            None
+        )
+        if target is None:
+            return JSONResponse({'error': 'not found'}, status_code=404)
+
+        if not target.token or not _tokens_match(token, target.token):
+            return JSONResponse({'error': 'invalid token'}, status_code=401)
+
+        if status not in ('up', 'down'):
+            return JSONResponse({'error': "status must be 'up' or 'down'"}, status_code=400)
+
+        target.record_push(status=status, msg=msg, value=value)
+        return JSONResponse({'status': 'ok'})
+
+    @app.get('/api/push/{monitor_id}/{token}')
+    @app.post('/api/push/{monitor_id}/{token}')
+    def push(monitor_id: str, token: str, status: str = 'up',
+             msg: Optional[str] = None, value: Optional[float] = None):
+        return _handle_push(monitor_id, token, status, msg, value)
