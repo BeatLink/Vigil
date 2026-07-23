@@ -123,7 +123,7 @@ class PushUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
 
@@ -132,8 +132,11 @@ class PushUIPlugin(UIPlugin):
         # config, matching what the collector actually configured itself with.
         max_age = int(self.config.get('max_age', self.interval * 2))
 
+        page = self.page()
+
         with layout.cell('status_card'):
             self.internal_modules['ui']['status_card'](
+                page,
                 metric_name='reported_up',
                 title='LAST REPORTED STATUS',
                 on_text='UP',
@@ -144,7 +147,7 @@ class PushUIPlugin(UIPlugin):
         with layout.cell('maxage_card'):
             info_card('MAX AGE', format_duration(max_age))
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
         def update():
             last = self.latest_metric('last_push_epoch')
@@ -152,4 +155,6 @@ class PushUIPlugin(UIPlugin):
                 age = int(time.time() - last.value)
                 lastbeat_label.text = format_age(age)
 
-        on_data_event('metric', lastbeat_label, update)
+        page.on_refresh(update)
+        update()
+        page.start()

@@ -38,13 +38,19 @@ class UIPlugin(PluginConfigMixin, ABC):
         self.ssh_controller = RemoteSSHController(collector_client, self.id)
         self.job_controller = RemoteJobController(collector_client, self.id, db)
 
+        # host_card takes no `page` — it's a static label, not something
+        # that refreshes. The other four all take `page` as their first
+        # argument at call time (`internal_modules['ui']['logs_table'](page)`)
+        # rather than being pre-bound partials: each needs the specific
+        # PluginPage instance render_ui() built for the current call, which
+        # doesn't exist yet at __init__ time (see UIPlugin.page()).
         self.internal_modules = {
             'ui': {
                 'host_card': partial(render_host_card, self.target),
-                'metrics_table': partial(metric_table, self.id),
-                'logs_table': partial(log_table, self.target, filter_prefix=self.id),
-                'events_table': partial(event_table, self.name, self.id, self.target),
-                'status_card': partial(render_status_card, self.id)
+                'metrics_table': partial(metric_table, collector=self.id),
+                'logs_table': partial(log_table, target=self.target, filter_prefix=self.id),
+                'events_table': partial(event_table, plugin_name=self.name, plugin_id=self.id, target=self.target),
+                'status_card': partial(render_status_card, collector=self.id),
             }
         }
 
@@ -91,6 +97,26 @@ class UIPlugin(PluginConfigMixin, ABC):
             .order_by(Metric.timestamp.desc())
             .first()
         )
+
+    def page(self, metric_names: List[str] = (), interval: float = 1.0) -> "PluginPage":
+        """
+        Build this plugin's PluginPage for the current render_ui() call —
+        one bindable model + one shared refresh timer for the whole page,
+        replacing what used to be a separate on_data_event timer per widget.
+        See vigil.web.ui.model for the binding-vs-explicit-refresh split and
+        why it exists.
+
+        `metric_names` are fetched into `model.metrics` every tick — pass
+        the metric names this page's own widgets bind to directly (via
+        `label.bind_text_from(page.model, ('metrics', name))`); shared
+        widgets built through `internal_modules['ui']` (logs_table,
+        events_table, status_card) register their own refresh via
+        `page.on_refresh(...)` and need no entry here.
+
+        Call `page.start()` once render_ui() has finished building widgets.
+        """
+        from vigil.web.ui.model import PluginPage
+        return PluginPage(self, metric_names=metric_names, interval=interval)
 
     def latest_snapshot(self, default: Any = None) -> Any:
         """

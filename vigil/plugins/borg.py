@@ -984,7 +984,7 @@ class BorgUIPlugin(UIPlugin):
         from nicegui import ui
         from vigil.web.ui.theme import STATUS_COLORS
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event, safe_timer
+        from vigil.web.ui.components import info_card, safe_timer
 
         # UIPlugin has no repo/max_age/source_paths attributes (collector-side
         # state) — re-derived here from config the same way
@@ -997,6 +997,7 @@ class BorgUIPlugin(UIPlugin):
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
         )
+        page = self.page()
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -1023,7 +1024,7 @@ class BorgUIPlugin(UIPlugin):
             # via db_logger.write (the Event table) rather than collecting log
             # lines off the target, so a LogLine-backed table would always be
             # empty here.
-            self.internal_modules['ui']['events_table'](title='EVENTS', limit=100,
+            self.internal_modules['ui']['events_table'](page, title='EVENTS', limit=100,
                                                         full_height=True)
 
         # Job state (running/progress/finished) isn't covered by any DataBus
@@ -1062,7 +1063,9 @@ class BorgUIPlugin(UIPlugin):
             age_label.text = format_age(age)
             age_label.style(f"color: {STATUS_COLORS['online' if is_fresh else 'failed']}")
 
-        on_data_event('metric', state_label, update)
+        page.on_refresh(update)
+        update()
+        page.start()
 
     def _update_stat_cards(self, size_label, dedup_label, count_label) -> None:
         """Refresh the repository statistics cards from the latest metrics."""
@@ -1157,8 +1160,8 @@ class BorgUIPlugin(UIPlugin):
 
         Returns an update callable. Job state isn't covered by any DataBus
         event (jobs stay synchronous/DB-backed by design), so the caller
-        drives this on its own short safe_timer rather than the metric-driven
-        on_data_event the rest of the page now uses.
+        drives this on its own short safe_timer rather than the shared
+        page.on_refresh() tick the rest of the page now uses.
         """
         from nicegui import ui
         from vigil.web.ui.components import card

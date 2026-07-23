@@ -81,35 +81,34 @@ class SmartDiskUIPlugin(UIPlugin):
 
         from vigil.web.ui.theme import STATUS_COLORS
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['disks_total', 'disks_ok', 'disks_failed'])
+
+        def _int_or_dash(v):
+            return '--' if v is None else str(int(v))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('total_card'):
-            total_label = info_card('DISKS', '--')
+            info_card('DISKS', '--').bind_text_from(
+                page.model, ('metrics', 'disks_total'), backward=_int_or_dash)
         with layout.cell('ok_card'):
-            ok_label = info_card('HEALTHY', '--')
+            info_card('HEALTHY', '--').bind_text_from(
+                page.model, ('metrics', 'disks_ok'), backward=_int_or_dash
+            ).style(f"color: {STATUS_COLORS['online']}")
         with layout.cell('failed_card'):
-            failed_label = info_card('FAILED', '--')
+            failed_label = info_card('FAILED', '--').bind_text_from(
+                page.model, ('metrics', 'disks_failed'), backward=_int_or_dash)
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            def _ival(name):
-                m = self.latest_metric(name)
-                return int(m.value) if m else None
-
-            total = _ival('disks_total')
-            ok = _ival('disks_ok')
-            failed = _ival('disks_failed')
-            if total is not None:
-                total_label.text = str(total)
-                ok_label.text = str(ok)
-                ok_label.style(f"color: {STATUS_COLORS['online']}")
-                failed_label.text = str(failed)
+        def update_color():
+            failed = page.model.metrics.get('disks_failed')
+            if failed is not None:
                 color = STATUS_COLORS['failed'] if failed else STATUS_COLORS['online']
                 failed_label.style(f"color: {color}")
 
-        on_data_event('metric', total_label, update_cards)
+        page.on_refresh(update_color)
+        page.start()

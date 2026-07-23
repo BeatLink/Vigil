@@ -61,34 +61,36 @@ class ZFSPoolUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.data.database import Metric
         from vigil.web.ui.theme import STATUS_COLORS
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['usage_pct'])
+
+        def _pct_or_dash(v):
+            return '-- %' if v is None else f'{v:.1f}%'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('pool_card'):
             info_card('POOL', self.pool)
         with layout.cell('usage_card'):
-            usage_label = info_card('USAGE', '-- %')
+            usage_label = info_card('USAGE', '-- %').bind_text_from(
+                page.model, ('metrics', 'usage_pct'), backward=_pct_or_dash)
         with layout.cell('threshold_card'):
             info_card('THRESHOLD', f'{self.threshold}%')
         with layout.cell('chart'):
-            history_chart(f'CAPACITY HISTORY — {self.pool} (%)', self.id, 'usage_pct')
+            history_chart(page, f'CAPACITY HISTORY — {self.pool} (%)', self.id, 'usage_pct')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_usage():
-            last = Metric.select().where(
-                (Metric.collector == self.id) & (Metric.metric_name == 'usage_pct')
-            ).order_by(Metric.timestamp.desc()).first()
-            if last:
-                pct = last.value
-                usage_label.text = f'{pct:.1f}%'
+        def update_usage_color():
+            pct = page.model.metrics.get('usage_pct')
+            if pct is not None:
                 color = STATUS_COLORS['failed'] if pct >= self.threshold else STATUS_COLORS['online']
                 usage_label.style(f'color: {color}')
 
-        on_data_event('metric', usage_label, update_usage)
+        page.on_refresh(update_usage_color)
+
+        page.start()

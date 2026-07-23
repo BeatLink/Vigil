@@ -216,35 +216,37 @@ class TraccarUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+        page = self.page(metric_names=['devices_stale', 'devices_total'])
+
+        def _int_or_dash(v):
+            return '--' if v is None else str(int(v))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('stale_card'):
-            stale_label = info_card('STALE DEVICES', '--')
+            stale_label = info_card('STALE DEVICES', '--').bind_text_from(
+                page.model, ('metrics', 'devices_stale'), backward=_int_or_dash)
         with layout.cell('devices_card'):
-            devices_label = info_card('DEVICES', '--')
+            info_card('DEVICES', '--').bind_text_from(
+                page.model, ('metrics', 'devices_total'), backward=_int_or_dash)
         with layout.cell('chart'):
-            history_chart('OLDEST UPDATE (HOURS)', self.id, 'oldest_update_hours')
+            history_chart(page, 'OLDEST UPDATE (HOURS)', self.id, 'oldest_update_hours')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            stale = self.latest_metric('devices_stale')
-            total = self.latest_metric('devices_total')
-
-            if stale:
-                count = int(stale.value)
-                stale_label.text = str(count)
+        def update_stale_color():
+            stale = page.model.metrics.get('devices_stale')
+            if stale is not None:
                 stale_label.style(
-                    f'color: {STATUS_COLORS["failed" if count else "online"]}')
-            if total:
-                devices_label.text = f'{int(total.value)}'
+                    f'color: {STATUS_COLORS["failed" if stale else "online"]}')
 
-        on_data_event('metric', stale_label, update_cards)
+        page.on_refresh(update_stale_color)
+
+        page.start()

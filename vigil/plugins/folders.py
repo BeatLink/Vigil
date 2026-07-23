@@ -130,26 +130,31 @@ class FoldersUIPlugin(UIPlugin):
         from nicegui import ui
         from vigil.core.data.database import Metric
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['worst_folder_gb'])
 
         # Map sanitized metric suffix -> folder config for threshold coloring.
         by_key = {_sanitize(f.get('path', '')): f for f in self.folders if f.get('path')}
 
+        def _gb_or_dash(v):
+            return '--' if v is None else _format_gb(v)
+
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('count_card'):
-            count_label = info_card('FOLDERS', str(len(self.folders)))
+            info_card('FOLDERS', str(len(self.folders)))
         with layout.cell('worst_card'):
-            worst_label = info_card('LARGEST', '--')
+            info_card('LARGEST', '--').bind_text_from(
+                page.model, ('metrics', 'worst_folder_gb'), backward=_gb_or_dash)
         with layout.cell('folders'):
             folder_container = ui.element('div').style(
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
         def update():
             folder_gb: Dict[str, float] = {}
@@ -176,8 +181,6 @@ class FoldersUIPlugin(UIPlugin):
                     lbl = info_card(key.replace('_', '/'), _format_gb(val))
                     lbl.style(f'color: {STATUS_COLORS[self._level_for(val, folder)]}')
 
-            worst_m = self.latest_metric('worst_folder_gb')
-            if worst_m is not None:
-                worst_label.text = _format_gb(worst_m.value)
-
-        on_data_event('metric', worst_label, update)
+        page.on_refresh(update)
+        update()
+        page.start()

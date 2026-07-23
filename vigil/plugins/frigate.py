@@ -179,58 +179,69 @@ class FrigateUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+        page = self.page(metric_names=[
+            'worst_quality_rank', 'camera_fps_total', 'detector_inference_ms',
+            'stalls_last_hour', 'reconnects_last_hour',
+        ])
+
+        _rank_to_label = {0: 'UNUSABLE', 1: 'POOR', 2: 'FAIR', 3: 'EXCELLENT'}
+
+        def _quality_text(v):
+            return '--' if v is None else _rank_to_label.get(int(v), 'UNKNOWN')
+
+        def _fps_or_dash(v):
+            return '--' if v is None else f'{v:.1f}'
+
+        def _ms_or_dash(v):
+            return '--' if v is None else f'{v:.1f} ms'
+
+        def _int_or_dash(v):
+            return '--' if v is None else str(int(v))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('quality_card'):
-            quality_label = info_card('WORST QUALITY', '--')
+            quality_label = info_card('WORST QUALITY', '--').bind_text_from(
+                page.model, ('metrics', 'worst_quality_rank'), backward=_quality_text)
         with layout.cell('fps_card'):
-            fps_label = info_card('CAMERA FPS', '--')
+            info_card('CAMERA FPS', '--').bind_text_from(
+                page.model, ('metrics', 'camera_fps_total'), backward=_fps_or_dash)
         with layout.cell('detector_card'):
-            detector_label = info_card('INFERENCE', '--')
+            info_card('INFERENCE', '--').bind_text_from(
+                page.model, ('metrics', 'detector_inference_ms'), backward=_ms_or_dash)
         with layout.cell('stalls_card'):
-            stalls_label = info_card('STALLS/H', '--')
+            stalls_label = info_card('STALLS/H', '--').bind_text_from(
+                page.model, ('metrics', 'stalls_last_hour'), backward=_int_or_dash)
         with layout.cell('reconnects_card'):
-            reconnects_label = info_card('RECONNECTS/H', '--')
+            reconnects_label = info_card('RECONNECTS/H', '--').bind_text_from(
+                page.model, ('metrics', 'reconnects_last_hour'), backward=_int_or_dash)
         with layout.cell('chart'):
-            history_chart('CAMERA FPS', self.id, 'camera_fps_total')
+            history_chart(page, 'CAMERA FPS', self.id, 'camera_fps_total')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        _rank_to_label = {0: 'UNUSABLE', 1: 'POOR', 2: 'FAIR', 3: 'EXCELLENT'}
-
-        def update_cards():
-            rank    = self.latest_metric('worst_quality_rank')
-            fps     = self.latest_metric('camera_fps_total')
-            infer   = self.latest_metric('detector_inference_ms')
-            stalls  = self.latest_metric('stalls_last_hour')
-            reconn  = self.latest_metric('reconnects_last_hour')
-
+        def update_colors():
+            rank = page.model.metrics.get('worst_quality_rank')
             if rank is not None:
-                label = _rank_to_label.get(int(rank.value), 'UNKNOWN')
-                quality_label.text = label
-                colour = (STATUS_COLORS['failed'] if rank.value == 0
-                          else STATUS_COLORS['warning'] if rank.value == 1
+                colour = (STATUS_COLORS['failed'] if rank == 0
+                          else STATUS_COLORS['warning'] if rank == 1
                           else STATUS_COLORS['online'])
                 quality_label.style(f'color: {colour}')
-            if fps:
-                fps_label.text = f'{fps.value:.1f}'
-            if infer:
-                detector_label.text = f'{infer.value:.1f} ms'
-            if stalls:
-                stalls_label.text = f'{int(stalls.value)}'
+            stalls = page.model.metrics.get('stalls_last_hour')
+            if stalls is not None:
                 stalls_label.style(
-                    f'color: {STATUS_COLORS["warning" if stalls.value > 0 else "online"]}')
-            if reconn:
-                reconnects_label.text = f'{int(reconn.value)}'
+                    f'color: {STATUS_COLORS["warning" if stalls > 0 else "online"]}')
+            reconn = page.model.metrics.get('reconnects_last_hour')
+            if reconn is not None:
                 reconnects_label.style(
-                    f'color: {STATUS_COLORS["warning" if reconn.value > 0 else "online"]}')
+                    f'color: {STATUS_COLORS["warning" if reconn > 0 else "online"]}')
 
-        on_data_event('metric', quality_label, update_cards)
+        page.on_refresh(update_colors)
+        page.start()

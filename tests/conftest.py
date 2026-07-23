@@ -84,7 +84,9 @@ def make_plugin(db_manager):
         # plugin.job_controller.ssh.execute_streaming.
         from vigil.collector.controllers.job_controller import JobController
         mock_ssh = MagicMock()
-        mock_ssh.execute_streaming = MagicMock(return_value=(0, ""))
+        # execute_streaming() is a coroutine on the real SSHConnection
+        # (asyncssh-based — see ssh_connector.py).
+        mock_ssh.execute_streaming = AsyncMock(return_value=(0, ""))
         plugin.job_controller = JobController(
             mock_ssh, db_manager, cfg["id"], mock_conn.host
         )

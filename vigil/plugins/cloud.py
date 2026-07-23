@@ -122,9 +122,10 @@ class CloudUIPlugin(UIPlugin):
         from nicegui import ui
         import json
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page()
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -137,7 +138,7 @@ class CloudUIPlugin(UIPlugin):
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
         def update():
             raw = self.db.get_setting(f"cloud:{self.id}")
@@ -156,7 +157,9 @@ class CloudUIPlugin(UIPlugin):
                     if fields.get(key):
                         info_card(key.replace('_', ' ').upper(), str(fields[key]))
 
-        on_data_event('setting', provider_label, update)
+        page.on_refresh(update)
+        update()
+        page.start()
 
 
 def _parse_kv(text: str) -> Dict[str, str]:

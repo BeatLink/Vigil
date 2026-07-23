@@ -133,35 +133,34 @@ class NetworkUsageUIPlugin(UIPlugin):
         from nicegui import ui
 
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['rx_kbps', 'tx_kbps'])
 
         configured_interface = self.config.get('interface')
+
+        def _rate_or_dash(v):
+            return '-- KB/s' if v is None else _format_rate(v)
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('iface_card'):
-            iface_label = info_card('INTERFACE', configured_interface or 'Detecting...')
+            # Static: the configured interface name, or a placeholder when
+            # auto-detecting (see class docstring — the active interface
+            # chosen by auto-detect isn't visible to this process).
+            info_card('INTERFACE', configured_interface or 'Detecting...')
         with layout.cell('rx_card'):
-            rx_label = info_card('DOWNLOAD', '-- KB/s')
+            info_card('DOWNLOAD', '-- KB/s').bind_text_from(
+                page.model, ('metrics', 'rx_kbps'), backward=_rate_or_dash)
         with layout.cell('tx_card'):
-            tx_label = info_card('UPLOAD', '-- KB/s')
+            info_card('UPLOAD', '-- KB/s').bind_text_from(
+                page.model, ('metrics', 'tx_kbps'), backward=_rate_or_dash)
         with layout.cell('rx_chart'):
-            history_chart('DOWNLOAD HISTORY (KB/s)', self.id, 'rx_kbps')
+            history_chart(page, 'DOWNLOAD HISTORY (KB/s)', self.id, 'rx_kbps')
         with layout.cell('tx_chart'):
-            history_chart('UPLOAD HISTORY (KB/s)', self.id, 'tx_kbps')
+            history_chart(page, 'UPLOAD HISTORY (KB/s)', self.id, 'tx_kbps')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            if configured_interface:
-                iface_label.text = configured_interface
-            rx = self.latest_metric('rx_kbps')
-            tx = self.latest_metric('tx_kbps')
-            if rx:
-                rx_label.text = _format_rate(rx.value)
-            if tx:
-                tx_label.text = _format_rate(tx.value)
-
-        on_data_event('metric', rx_label, update_cards)
+        page.start()

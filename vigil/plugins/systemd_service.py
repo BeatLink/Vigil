@@ -386,9 +386,10 @@ class SystemdUIPlugin(UIPlugin):
         from nicegui import ui
         from vigil.core.data.database import StatusHistory
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _CONTINUOUS_LAYOUT if context == 'page' else make_inline_layout(_CONTINUOUS_LAYOUT))
+        page = self.page()
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -396,6 +397,7 @@ class SystemdUIPlugin(UIPlugin):
             info_card('SERVICE', self.service_name)
         with layout.cell('status_card'):
             self.internal_modules['ui']['status_card'](
+                page,
                 metric_name='active',
                 title='SERVICE STATUS',
                 on_text='ACTIVE',
@@ -406,7 +408,7 @@ class SystemdUIPlugin(UIPlugin):
         with layout.cell('unit_file_card'):
             self._render_unit_file_controls()
         with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table'](title='LOGS', limit=100, full_height=True)
+            self.internal_modules['ui']['logs_table'](page, title='LOGS', limit=100, full_height=True)
 
         def update_time():
             last = StatusHistory.select().where(
@@ -415,16 +417,19 @@ class SystemdUIPlugin(UIPlugin):
             if last:
                 time_label.text = last.timestamp.strftime('%H:%M:%S')
 
-        on_data_event('status', time_label, update_time)
+        page.on_refresh(update_time)
+        update_time()
+        page.start()
 
     def _render_oneshot_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
         from vigil.web.ui.theme import STATUS_COLORS
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _ONESHOT_LAYOUT if context == 'page' else make_inline_layout(_ONESHOT_LAYOUT))
+        page = self.page(metric_names=['is_running', 'last_run_epoch', 'last_run_success'])
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -441,12 +446,11 @@ class SystemdUIPlugin(UIPlugin):
                 result_label = info_card('LAST RESULT', '--')
                 age_label = info_card('LAST RUN', '--')
         with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table'](title='LOGS', limit=100, full_height=True)
+            self.internal_modules['ui']['logs_table'](page, title='LOGS', limit=100, full_height=True)
 
         def update():
             def _val(name):
-                m = self.latest_metric(name)
-                return m.value if m else None
+                return page.model.metrics.get(name)
 
             run_val     = _val('is_running')
             epoch_val   = _val('last_run_epoch')
@@ -488,4 +492,6 @@ class SystemdUIPlugin(UIPlugin):
                     color = STATUS_COLORS['failed'] if age > self.max_age else STATUS_COLORS['online']
                     age_label.style(f"color: {color}")
 
-        on_data_event('metric', state_label, update)
+        page.on_refresh(update)
+        update()
+        page.start()

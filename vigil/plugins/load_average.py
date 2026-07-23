@@ -91,38 +91,41 @@ class LoadAverageUIPlugin(UIPlugin):
         from nicegui import ui
 
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('load_1m_card'):
-            load_1m_label = info_card('LOAD 1M', '-- %')
-        with layout.cell('load_5m_card'):
-            load_5m_label = info_card('LOAD 5M', '-- %')
-        with layout.cell('load_15m_card'):
-            load_15m_label = info_card('LOAD 15M', '-- %')
-        with layout.cell('chart'):
-            history_chart('LOAD AVERAGE (%)', self.id, 'load_pct_1m')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+        page = self.page(metric_names=['load_pct_1m', 'load_pct_5m', 'load_pct_15m'])
 
         load_warning   = float(self.config['load_warning'])   if 'load_warning'   in self.config else None
         load_threshold = float(self.config['load_threshold']) if 'load_threshold' in self.config else None
 
-        def update_cards():
-            load_1m  = self.latest_metric('load_pct_1m')
-            load_5m  = self.latest_metric('load_pct_5m')
-            load_15m = self.latest_metric('load_pct_15m')
-            if load_1m:
-                load_1m_label.text = f'{load_1m.value:.0f}%'
-                if load_warning is not None and load_threshold is not None:
-                    load_1m_label.style(f'color: {STATUS_COLORS[_level_for(load_1m.value, load_warning, load_threshold)]}')
-            if load_5m:
-                load_5m_label.text = f'{load_5m.value:.0f}%'
-            if load_15m:
-                load_15m_label.text = f'{load_15m.value:.0f}%'
+        def _pct_or_dash(v):
+            return '--' if v is None else f'{v:.0f}%'
 
-        on_data_event('metric', load_1m_label, update_cards)
+        with layout.cell('host_card'):
+            self.internal_modules['ui']['host_card']()
+        with layout.cell('load_1m_card'):
+            load_1m_label = info_card('LOAD 1M', '-- %').bind_text_from(
+                page.model, ('metrics', 'load_pct_1m'), backward=_pct_or_dash)
+        with layout.cell('load_5m_card'):
+            info_card('LOAD 5M', '-- %').bind_text_from(
+                page.model, ('metrics', 'load_pct_5m'), backward=_pct_or_dash)
+        with layout.cell('load_15m_card'):
+            info_card('LOAD 15M', '-- %').bind_text_from(
+                page.model, ('metrics', 'load_pct_15m'), backward=_pct_or_dash)
+        with layout.cell('chart'):
+            history_chart(page, 'LOAD AVERAGE (%)', self.id, 'load_pct_1m')
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table'](page)
+
+        def update_load_1m_color():
+            if load_warning is None or load_threshold is None:
+                return
+            value = page.model.metrics.get('load_pct_1m')
+            if value is not None:
+                load_1m_label.style(f'color: {STATUS_COLORS[_level_for(value, load_warning, load_threshold)]}')
+
+        page.on_refresh(update_load_1m_color)
+
+        page.start()

@@ -284,13 +284,15 @@ class DdnsUpdaterUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=[])
 
         with layout.cell('status_card'):
             self.internal_modules['ui']['status_card'](
+                page,
                 metric_name='in_sync',
                 title='DDNS STATUS',
                 on_text='IN SYNC',
@@ -303,7 +305,7 @@ class DdnsUpdaterUIPlugin(UIPlugin):
         with layout.cell('lastupdate_card'):
             lastupdate_label = info_card('LAST UPDATE PUSHED', 'Never')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
         def update():
             public_ip = self.db.get_setting(f"ddns:{self.id}:public_ip")
@@ -320,4 +322,6 @@ class DdnsUpdaterUIPlugin(UIPlugin):
                 age = int(time.time() - last_update.value)
                 lastupdate_label.text = format_age(age)
 
-        on_data_event(('setting', 'metric'), public_ip_label, update)
+        page.on_refresh(update)
+        update()
+        page.start()

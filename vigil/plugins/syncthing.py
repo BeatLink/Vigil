@@ -267,58 +267,71 @@ class SyncthingUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+        page = self.page(metric_names=[
+            'folders_total', 'folders_errored', 'folders_stalled',
+            'need_bytes', 'devices_expected', 'devices_disconnected',
+        ])
+
+        def _int_or_dash(v):
+            return '--' if v is None else str(int(v))
+
+        def _need_text(v):
+            if v is None:
+                return '--'
+            return f'{v / (1024 * 1024):.1f} MiB'
+
+        def _devices_text(_):
+            exp_dev = page.model.metrics.get('devices_expected')
+            disc = page.model.metrics.get('devices_disconnected')
+            if exp_dev is None or disc is None:
+                return '--'
+            connected = int(exp_dev) - int(disc)
+            return f'{connected}/{int(exp_dev)}'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('folders_card'):
-            folders_label = info_card('FOLDERS', '--')
+            info_card('FOLDERS', '--').bind_text_from(
+                page.model, ('metrics', 'folders_total'), backward=_int_or_dash)
         with layout.cell('devices_card'):
-            devices_label = info_card('DEVICES', '--')
+            devices_label = info_card('DEVICES', '--').bind_text_from(
+                page.model, ('metrics', 'devices_disconnected'), backward=_devices_text)
         with layout.cell('errors_card'):
-            errors_label = info_card('ERRORED', '--')
+            errors_label = info_card('ERRORED', '--').bind_text_from(
+                page.model, ('metrics', 'folders_errored'), backward=_int_or_dash)
         with layout.cell('need_card'):
-            need_label = info_card('NEED', '--')
+            info_card('NEED', '--').bind_text_from(
+                page.model, ('metrics', 'need_bytes'), backward=_need_text)
         with layout.cell('stalled_card'):
-            stalled_label = info_card('STALLED', '--')
+            stalled_label = info_card('STALLED', '--').bind_text_from(
+                page.model, ('metrics', 'folders_stalled'), backward=_int_or_dash)
         with layout.cell('chart'):
-            history_chart('BYTES NEEDED', self.id, 'need_bytes')
+            history_chart(page, 'BYTES NEEDED', self.id, 'need_bytes')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            total_f = self.latest_metric('folders_total')
-            errored = self.latest_metric('folders_errored')
-            stalled = self.latest_metric('folders_stalled')
-            need    = self.latest_metric('need_bytes')
-            exp_dev = self.latest_metric('devices_expected')
-            disc    = self.latest_metric('devices_disconnected')
-
-            if total_f:
-                folders_label.text = f'{int(total_f.value)}'
-            if exp_dev and disc:
-                connected = int(exp_dev.value) - int(disc.value)
-                devices_label.text = f'{connected}/{int(exp_dev.value)}'
+        def update_colors():
+            disc = page.model.metrics.get('devices_disconnected')
+            if disc is not None:
                 devices_label.style(
-                    f'color: {STATUS_COLORS["online" if disc.value == 0 else "warning"]}')
-            if errored:
-                count = int(errored.value)
-                errors_label.text = str(count)
-                errors_label.style(
-                    f'color: {STATUS_COLORS["failed" if count else "online"]}')
-            if need:
-                mb = need.value / (1024 * 1024)
-                need_label.text = f'{mb:.1f} MiB'
-            if stalled:
-                count = int(stalled.value)
-                stalled_label.text = str(count)
-                stalled_label.style(
-                    f'color: {STATUS_COLORS["warning" if count else "online"]}')
+                    f'color: {STATUS_COLORS["online" if disc == 0 else "warning"]}')
 
-        on_data_event('metric', folders_label, update_cards)
+            errored = page.model.metrics.get('folders_errored')
+            if errored is not None:
+                errors_label.style(
+                    f'color: {STATUS_COLORS["failed" if errored else "online"]}')
+
+            stalled = page.model.metrics.get('folders_stalled')
+            if stalled is not None:
+                stalled_label.style(
+                    f'color: {STATUS_COLORS["warning" if stalled else "online"]}')
+
+        page.on_refresh(update_colors)
+        page.start()

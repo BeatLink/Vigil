@@ -170,35 +170,43 @@ class MosquittoUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+        page = self.page(metric_names=['roundtrip_ok', 'roundtrip_ms'])
+
+        def _ok_text(v):
+            if v is None:
+                return '--'
+            return 'OK' if v >= 1.0 else 'FAILED'
+
+        def _ms_or_dash(v):
+            return '--' if v is None else f'{v:.0f} ms'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('roundtrip_card'):
-            roundtrip_label = info_card('ROUND TRIP', '--')
+            roundtrip_label = info_card('ROUND TRIP', '--').bind_text_from(
+                page.model, ('metrics', 'roundtrip_ok'), backward=_ok_text)
         with layout.cell('latency_card'):
-            latency_label = info_card('LATENCY', '--')
+            info_card('LATENCY', '--').bind_text_from(
+                page.model, ('metrics', 'roundtrip_ms'), backward=_ms_or_dash)
         with layout.cell('chart'):
-            history_chart('ROUND TRIP LATENCY (ms)', self.id, 'roundtrip_ms')
+            history_chart(page, 'ROUND TRIP LATENCY (ms)', self.id, 'roundtrip_ms')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            ok = self.latest_metric('roundtrip_ok')
-            latency = self.latest_metric('roundtrip_ms')
-
-            if ok:
-                passed = ok.value >= 1.0
-                roundtrip_label.text = 'OK' if passed else 'FAILED'
+        def update_roundtrip_color():
+            ok = page.model.metrics.get('roundtrip_ok')
+            if ok is not None:
+                passed = ok >= 1.0
                 roundtrip_label.style(
                     f'color: {STATUS_COLORS["online" if passed else "failed"]}')
-            if latency:
-                latency_label.text = f'{latency.value:.0f} ms'
 
-        on_data_event('metric', roundtrip_label, update_cards)
+        page.on_refresh(update_roundtrip_color)
+
+        page.start()

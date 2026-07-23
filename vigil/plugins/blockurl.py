@@ -130,37 +130,38 @@ class BlockurlUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+        page = self.page(metric_names=['domains_total', 'urls_total'])
+        min_domains = int(self.config.get('min_domains', 1))
+
+        def _urls_or_dash(v):
+            return '--' if v is None else f'{int(v):,}'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('domains_card'):
-            domains_label = info_card('DOMAINS', '--')
+            domains_label = info_card('DOMAINS', '--').bind_text_from(
+                page.model, ('metrics', 'domains_total'),
+                backward=lambda v: '--' if v is None else str(int(v)))
         with layout.cell('urls_card'):
-            urls_label = info_card('BLOCKED URLS', '--')
+            info_card('BLOCKED URLS', '--').bind_text_from(
+                page.model, ('metrics', 'urls_total'), backward=_urls_or_dash)
         with layout.cell('chart'):
-            history_chart('BLOCKED URLS', self.id, 'urls_total')
+            history_chart(page, 'BLOCKED URLS', self.id, 'urls_total')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        min_domains = int(self.config.get('min_domains', 1))
-
-        def update_cards():
-            domains = self.latest_metric('domains_total')
-            urls    = self.latest_metric('urls_total')
-
-            if domains:
-                count = int(domains.value)
-                domains_label.text = f'{count}'
+        def update_color():
+            count = page.model.metrics.get('domains_total')
+            if count is not None:
                 domains_label.style(
                     f'color: {STATUS_COLORS["warning" if count < min_domains else "online"]}')
-            if urls:
-                urls_label.text = f'{int(urls.value):,}'
 
-        on_data_event('metric', domains_label, update_cards)
+        page.on_refresh(update_color)
+        page.start()

@@ -7,7 +7,7 @@ the behaviour under test, not an implementation detail to mock away.
 """
 import asyncio
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, AsyncMock
 
 from vigil.collector.controllers.job_controller import JobController, JobRejected
 
@@ -15,13 +15,16 @@ from vigil.collector.controllers.job_controller import JobController, JobRejecte
 @pytest.fixture
 def controller(db_manager):
     ssh = MagicMock()
-    ssh.execute_streaming = MagicMock(return_value=(0, ""))
+    # execute_streaming() is a coroutine on the real SSHConnection (asyncssh
+    # — see ssh_connector.py); JobController now awaits it directly on the
+    # event loop rather than running it in a worker thread.
+    ssh.execute_streaming = AsyncMock(return_value=(0, ""))
     return JobController(ssh, db_manager, "test-plugin", "test.host")
 
 
 def _streaming(lines, status=0, error=""):
     """Fake execute_streaming that emits `lines` then exits with `status`."""
-    def run(command, on_line=None, timeout=None, should_cancel=None):
+    async def run(command, on_line=None, timeout=None, should_cancel=None):
         for line in lines:
             if on_line:
                 on_line("stdout", line)
@@ -80,7 +83,7 @@ class TestLifecycle:
         assert controller.current_job_id() is None
 
     async def test_crash_marks_job_failed(self, controller, db_manager):
-        def explode(command, on_line=None, timeout=None, should_cancel=None):
+        async def explode(command, on_line=None, timeout=None, should_cancel=None):
             raise OSError("ssh binary missing")
         controller.ssh.execute_streaming = explode
 
@@ -100,15 +103,14 @@ class TestConcurrency:
         started = asyncio.Event()
         release = asyncio.Event()
 
-        def slow(command, on_line=None, timeout=None, should_cancel=None):
+        async def slow(command, on_line=None, timeout=None, should_cancel=None):
             started.set()
-            # Block the worker thread until the test lets it finish.
-            asyncio.run_coroutine_threadsafe(
-                release.wait(), loop
-            ).result(timeout=5)
+            # JobController now awaits execute_streaming directly on the
+            # event loop (no worker thread) — a plain await is enough to
+            # hold the job "in flight" until the test releases it.
+            await release.wait()
             return 0, ""
 
-        loop = asyncio.get_running_loop()
         controller.ssh.execute_streaming = slow
 
         task = asyncio.create_task(controller.run_job("backup", "cmd"))
@@ -119,7 +121,7 @@ class TestConcurrency:
         with pytest.raises(JobRejected):
             await controller.run_job("backup", "cmd2")
 
-        loop.call_soon_threadsafe(release.set)
+        release.set()
         await task
 
     async def test_job_runs_after_previous_finishes(self, controller):
@@ -140,7 +142,7 @@ class TestCancellation:
         assert controller.cancel() is False
 
     async def test_cancelled_job_is_marked_cancelled(self, controller, db_manager):
-        def cancellable(command, on_line=None, timeout=None, should_cancel=None):
+        async def cancellable(command, on_line=None, timeout=None, should_cancel=None):
             on_line("stdout", "working")
             controller.cancel()          # user hits cancel mid-stream
             if should_cancel():

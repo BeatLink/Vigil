@@ -83,33 +83,42 @@ class MemoryUsageUIPlugin(UIPlugin):
         from nicegui import ui
 
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('mem_pct_card'):
-            mem_pct_label = info_card('MEMORY', '-- %')
-        with layout.cell('mem_used_card'):
-            mem_used_label = info_card('MEM USED', '--')
-        with layout.cell('chart'):
-            history_chart('MEMORY USAGE (%)', self.id, 'memory_pct')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+        page = self.page(metric_names=['memory_pct', 'memory_used_gb', 'memory_total_gb'])
 
         memory_warning   = int(self.config.get('memory_warning',   75))
         memory_threshold = int(self.config.get('memory_threshold', 90))
 
-        def update_cards():
-            mem_pct   = self.latest_metric('memory_pct')
-            mem_used  = self.latest_metric('memory_used_gb')
-            mem_total = self.latest_metric('memory_total_gb')
-            if mem_pct:
-                mem_pct_label.text = f'{mem_pct.value:.1f}%'
-                mem_pct_label.style(f'color: {STATUS_COLORS[_level_for(mem_pct.value, memory_warning, memory_threshold)]}')
-            if mem_used and mem_total:
-                mem_used_label.text = f'{_fmt_gb(mem_used.value)} / {_fmt_gb(mem_total.value)}'
+        def _pct_or_dash(v):
+            return '--' if v is None else f'{v:.1f}%'
 
-        on_data_event('metric', mem_pct_label, update_cards)
+        with layout.cell('host_card'):
+            self.internal_modules['ui']['host_card']()
+        with layout.cell('mem_pct_card'):
+            mem_pct_label = info_card('MEMORY', '-- %').bind_text_from(
+                page.model, ('metrics', 'memory_pct'), backward=_pct_or_dash)
+        with layout.cell('mem_used_card'):
+            mem_used_label = info_card('MEM USED', '--')
+        with layout.cell('chart'):
+            history_chart(page, 'MEMORY USAGE (%)', self.id, 'memory_pct')
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table'](page)
+
+        def update_mem_pct_color():
+            value = page.model.metrics.get('memory_pct')
+            if value is not None:
+                mem_pct_label.style(f'color: {STATUS_COLORS[_level_for(value, memory_warning, memory_threshold)]}')
+
+        def update_mem_used():
+            mem_used  = page.model.metrics.get('memory_used_gb')
+            mem_total = page.model.metrics.get('memory_total_gb')
+            if mem_used is not None and mem_total is not None:
+                mem_used_label.text = f'{_fmt_gb(mem_used)} / {_fmt_gb(mem_total)}'
+
+        page.on_refresh(update_mem_pct_color)
+        page.on_refresh(update_mem_used)
+
+        page.start()

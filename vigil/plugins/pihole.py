@@ -407,7 +407,7 @@ class PiholeUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
@@ -419,54 +419,70 @@ class PiholeUIPlugin(UIPlugin):
         block_rate_threshold = float(self.config.get('block_rate_threshold', 1))
         gravity_max_age = parse_duration(self.config.get('gravity_max_age', '8d'))
 
+        page = self.page(metric_names=[
+            'block_rate_pct', 'queries_total', 'gravity_domains',
+            'gravity_age_seconds', 'clients_active', 'blocking_enabled',
+        ])
+
+        def _pct_or_dash(v):
+            return '-- %' if v is None else f'{v:.1f}%'
+
+        def _int_or_dash(v):
+            return '--' if v is None else f'{int(v):,}'
+
+        def _enabled_text(v):
+            if v is None:
+                return '--'
+            return 'ENABLED' if v >= 1.0 else 'DISABLED'
+
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('block_rate_card'):
-            block_rate_label = info_card('BLOCK RATE', '-- %')
+            block_rate_label = info_card('BLOCK RATE', '-- %').bind_text_from(
+                page.model, ('metrics', 'block_rate_pct'), backward=_pct_or_dash)
         with layout.cell('queries_card'):
-            queries_label = info_card('QUERIES', '--')
+            info_card('QUERIES', '--').bind_text_from(
+                page.model, ('metrics', 'queries_total'), backward=_int_or_dash)
         with layout.cell('gravity_card'):
             gravity_label = info_card('BLOCKLIST', '--')
         with layout.cell('clients_card'):
-            clients_label = info_card('ACTIVE CLIENTS', '--')
+            info_card('ACTIVE CLIENTS', '--').bind_text_from(
+                page.model, ('metrics', 'clients_active'),
+                backward=lambda v: '--' if v is None else str(int(v)))
         with layout.cell('blocking_card'):
-            blocking_label = info_card('BLOCKING', '--')
+            blocking_label = info_card('BLOCKING', '--').bind_text_from(
+                page.model, ('metrics', 'blocking_enabled'), backward=_enabled_text)
         with layout.cell('chart'):
-            history_chart('BLOCK RATE (%)', self.id, 'block_rate_pct')
+            history_chart(page, 'BLOCK RATE (%)', self.id, 'block_rate_pct')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            block_rate = self.latest_metric('block_rate_pct')
-            total      = self.latest_metric('queries_total')
-            domains    = self.latest_metric('gravity_domains')
-            age        = self.latest_metric('gravity_age_seconds')
-            active     = self.latest_metric('clients_active')
-            enabled    = self.latest_metric('blocking_enabled')
-
-            if block_rate:
-                block_rate_label.text = f'{block_rate.value:.1f}%'
-                if block_rate.value < block_rate_threshold:
+        def update_colors():
+            block_rate = page.model.metrics.get('block_rate_pct')
+            if block_rate is not None:
+                if block_rate < block_rate_threshold:
                     colour = STATUS_COLORS['failed']
-                elif block_rate.value < block_rate_warning:
+                elif block_rate < block_rate_warning:
                     colour = STATUS_COLORS['warning']
                 else:
                     colour = STATUS_COLORS['online']
                 block_rate_label.style(f'color: {colour}')
-            if total:
-                queries_label.text = f'{int(total.value):,}'
-            if domains:
-                gravity_label.text = f'{int(domains.value):,} domains'
-                if age:
-                    gravity_label.text += f' ({_format_age(age.value)} old)'
+
+            domains = page.model.metrics.get('gravity_domains')
+            age = page.model.metrics.get('gravity_age_seconds')
+            if domains is not None:
+                text = f'{int(domains):,} domains'
+                if age is not None:
+                    text += f' ({_format_age(age)} old)'
                     gravity_label.style(
-                        f'color: {STATUS_COLORS["warning" if age.value > gravity_max_age else "online"]}'
+                        f'color: {STATUS_COLORS["warning" if age > gravity_max_age else "online"]}'
                     )
-            if active:
-                clients_label.text = f'{int(active.value)}'
-            if enabled:
-                on = enabled.value >= 1.0
-                blocking_label.text = 'ENABLED' if on else 'DISABLED'
+                gravity_label.text = text
+
+            enabled = page.model.metrics.get('blocking_enabled')
+            if enabled is not None:
+                on = enabled >= 1.0
                 blocking_label.style(f'color: {STATUS_COLORS["online" if on else "failed"]}')
 
-        on_data_event('metric', block_rate_label, update_cards)
+        page.on_refresh(update_colors)
+        page.start()

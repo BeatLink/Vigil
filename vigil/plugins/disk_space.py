@@ -80,10 +80,17 @@ class DiskSpaceUIPlugin(UIPlugin):
         from nicegui import ui
 
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['used_pct', 'avail_gb', 'size_gb'])
+
+        def _pct_or_dash(v):
+            return '-- %' if v is None else f'{v:.1f}%'
+
+        def _gb_or_dash(v):
+            return '--' if v is None else _format_gb(v)
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -92,27 +99,24 @@ class DiskSpaceUIPlugin(UIPlugin):
         with layout.cell('threshold_card'):
             info_card('THRESHOLD', f'{self.threshold}%')
         with layout.cell('usage_card'):
-            usage_label = info_card('USAGE', '-- %')
+            usage_label = info_card('USAGE', '-- %').bind_text_from(
+                page.model, ('metrics', 'used_pct'), backward=_pct_or_dash)
         with layout.cell('avail_card'):
-            avail_label = info_card('AVAILABLE', '--')
+            info_card('AVAILABLE', '--').bind_text_from(
+                page.model, ('metrics', 'avail_gb'), backward=_gb_or_dash)
         with layout.cell('total_card'):
-            total_label = info_card('TOTAL SIZE', '--')
+            info_card('TOTAL SIZE', '--').bind_text_from(
+                page.model, ('metrics', 'size_gb'), backward=_gb_or_dash)
         with layout.cell('chart'):
-            history_chart(f'USAGE HISTORY — {self.path} (%)', self.id, 'used_pct')
+            history_chart(page, f'USAGE HISTORY — {self.path} (%)', self.id, 'used_pct')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            pct   = self.latest_metric('used_pct')
-            avail = self.latest_metric('avail_gb')
-            total = self.latest_metric('size_gb')
-            if pct:
-                usage_label.text = f'{pct.value:.1f}%'
-                color = STATUS_COLORS['failed'] if pct.value >= self.threshold else STATUS_COLORS['online']
+        def update_color():
+            pct = page.model.metrics.get('used_pct')
+            if pct is not None:
+                color = STATUS_COLORS['failed'] if pct >= self.threshold else STATUS_COLORS['online']
                 usage_label.style(f'color: {color}')
-            if avail:
-                avail_label.text = _format_gb(avail.value)
-            if total:
-                total_label.text = _format_gb(total.value)
 
-        on_data_event('metric', usage_label, update_cards)
+        page.on_refresh(update_color)
+        page.start()

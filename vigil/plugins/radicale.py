@@ -168,35 +168,42 @@ class RadicaleUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+        page = self.page(metric_names=['propfind_ok', 'propfind_latency_ms'])
+
+        def _ok_text(v):
+            if v is None:
+                return '--'
+            return 'OK' if v >= 1.0 else 'FAILED'
+
+        def _latency_text(v):
+            return '--' if v is None else f'{v:.0f} ms'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('propfind_card'):
-            propfind_label = info_card('PROPFIND', '--')
+            propfind_label = info_card('PROPFIND', '--').bind_text_from(
+                page.model, ('metrics', 'propfind_ok'), backward=_ok_text)
         with layout.cell('latency_card'):
-            latency_label = info_card('LATENCY', '--')
+            info_card('LATENCY', '--').bind_text_from(
+                page.model, ('metrics', 'propfind_latency_ms'), backward=_latency_text)
         with layout.cell('chart'):
-            history_chart('PROPFIND LATENCY (ms)', self.id, 'propfind_latency_ms')
+            history_chart(page, 'PROPFIND LATENCY (ms)', self.id, 'propfind_latency_ms')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            ok = self.latest_metric('propfind_ok')
-            latency = self.latest_metric('propfind_latency_ms')
-
-            if ok:
-                passed = ok.value >= 1.0
-                propfind_label.text = 'OK' if passed else 'FAILED'
+        def update_color():
+            ok = page.model.metrics.get('propfind_ok')
+            if ok is not None:
+                passed = ok >= 1.0
                 propfind_label.style(
                     f'color: {STATUS_COLORS["online" if passed else "failed"]}')
-            if latency:
-                latency_label.text = f'{latency.value:.0f} ms'
 
-        on_data_event('metric', propfind_label, update_cards)
+        page.on_refresh(update_color)
+        page.start()

@@ -140,29 +140,36 @@ class OpenbooksUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+        page = self.page(metric_names=['bridge_connected'])
+
+        def _on_off_text(value):
+            if value is None:
+                return '--'
+            return 'CONNECTED' if value >= 1.0 else 'DISCONNECTED'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('bridge_card'):
-            bridge_label = info_card('IRC BRIDGE', '--')
+            bridge_label = info_card('IRC BRIDGE', '--').bind_text_from(
+                page.model, ('metrics', 'bridge_connected'), backward=_on_off_text)
         with layout.cell('chart'):
-            history_chart('IRC BRIDGE CONNECTED', self.id, 'bridge_connected')
+            history_chart(page, 'IRC BRIDGE CONNECTED', self.id, 'bridge_connected')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            connected = self.latest_metric('bridge_connected')
-            if connected:
-                ok = connected.value >= 1.0
-                bridge_label.text = 'CONNECTED' if ok else 'DISCONNECTED'
+        def update_color():
+            value = page.model.metrics.get('bridge_connected')
+            if value is not None:
+                ok = value >= 1.0
                 bridge_label.style(
                     f'color: {STATUS_COLORS["online" if ok else "failed"]}')
 
-        on_data_event('metric', bridge_label, update_cards)
+        page.on_refresh(update_color)
+        page.start()

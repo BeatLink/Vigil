@@ -150,13 +150,14 @@ class ProcessesUIPlugin(UIPlugin):
         from nicegui import ui
         import asyncio
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
         from vigil.web.ui.theme import STATUS_COLORS
 
         cpu_warning   = float(self.config['cpu_warning'])   if 'cpu_warning'   in self.config else None
         cpu_threshold = float(self.config['cpu_threshold']) if 'cpu_threshold' in self.config else None
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page()
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -193,7 +194,7 @@ class ProcessesUIPlugin(UIPlugin):
             ''')
 
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
         async def _do_kill(e, signal):
             pid = (e.args or {}).get('pid')
@@ -228,4 +229,6 @@ class ProcessesUIPlugin(UIPlugin):
             table.rows[:] = rows
             table.update()
 
-        on_data_event(('metric', 'snapshot'), table, update)
+        page.on_refresh(update)
+        update()
+        page.start()

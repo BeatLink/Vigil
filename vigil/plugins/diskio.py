@@ -144,36 +144,37 @@ class DiskIoUIPlugin(UIPlugin):
         from nicegui import ui
 
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['read_kbps', 'write_kbps'])
 
         active_device = self.db.get_setting(f"diskio:{self.id}:active_device") or self.config.get('device')
+
+        def _rate_or_dash(v):
+            return '-- KB/s' if v is None else _format_rate(v)
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('device_card'):
             device_label = info_card('DEVICE', active_device or 'Detecting...')
         with layout.cell('read_card'):
-            read_label = info_card('READ', '-- KB/s')
+            info_card('READ', '-- KB/s').bind_text_from(
+                page.model, ('metrics', 'read_kbps'), backward=_rate_or_dash)
         with layout.cell('write_card'):
-            write_label = info_card('WRITE', '-- KB/s')
+            info_card('WRITE', '-- KB/s').bind_text_from(
+                page.model, ('metrics', 'write_kbps'), backward=_rate_or_dash)
         with layout.cell('read_chart'):
-            history_chart('READ THROUGHPUT (KB/s)', self.id, 'read_kbps')
+            history_chart(page, 'READ THROUGHPUT (KB/s)', self.id, 'read_kbps')
         with layout.cell('write_chart'):
-            history_chart('WRITE THROUGHPUT (KB/s)', self.id, 'write_kbps')
+            history_chart(page, 'WRITE THROUGHPUT (KB/s)', self.id, 'write_kbps')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
+        def update_device():
             device = self.db.get_setting(f"diskio:{self.id}:active_device")
             if device:
                 device_label.text = device
-            read = self.latest_metric('read_kbps')
-            write = self.latest_metric('write_kbps')
-            if read:
-                read_label.text = _format_rate(read.value)
-            if write:
-                write_label.text = _format_rate(write.value)
 
-        on_data_event(('metric', 'setting'), read_label, update_cards)
+        page.on_refresh(update_device)
+        page.start()

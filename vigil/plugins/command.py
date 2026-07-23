@@ -132,7 +132,7 @@ class CommandUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         pattern = self.config.get('pattern')
@@ -152,32 +152,40 @@ class CommandUIPlugin(UIPlugin):
         has_value = pattern is not None
         base = _DEFAULT_LAYOUT_METRIC if has_value else _DEFAULT_LAYOUT_PLAIN
         layout = PluginLayout(self.config, base if context == 'page' else make_inline_layout(base))
+        metric_names = ['exit_code'] + (['value'] if has_value else [])
+        page = self.page(metric_names=metric_names)
+
+        def _exit_text(v):
+            return '--' if v is None else str(int(v))
+
+        def _value_text(v):
+            return '--' if v is None else f'{v:g}{value_unit}'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('exit_card'):
-            exit_label = info_card('EXIT CODE', '--')
+            exit_label = info_card('EXIT CODE', '--').bind_text_from(
+                page.model, ('metrics', 'exit_code'), backward=_exit_text)
         if has_value:
             with layout.cell('value_card'):
-                value_label_widget = info_card(value_label, '--')
+                value_label_widget = info_card(value_label, '--').bind_text_from(
+                    page.model, ('metrics', 'value'), backward=_value_text)
             with layout.cell('chart'):
-                history_chart(value_label, self.id, 'value')
+                history_chart(page, value_label, self.id, 'value')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update():
-            exit_m = self.latest_metric('exit_code')
-            if exit_m is not None:
-                code = int(exit_m.value)
-                exit_label.text = str(code)
+        def update_colors():
+            code = page.model.metrics.get('exit_code')
+            if code is not None:
                 exit_label.style(f"color: {STATUS_COLORS['online' if code == 0 else 'failed']}")
             if has_value:
-                val_m = self.latest_metric('value')
-                if val_m is not None:
-                    value_label_widget.text = f'{val_m.value:g}{value_unit}'
-                    value_label_widget.style(f"color: {STATUS_COLORS[level_for_value(val_m.value)]}")
+                val = page.model.metrics.get('value')
+                if val is not None:
+                    value_label_widget.style(f"color: {STATUS_COLORS[level_for_value(val)]}")
 
-        on_data_event('metric', exit_label, update)
+        page.on_refresh(update_colors)
+        page.start()
 
 
 def _shquote(s: str) -> str:

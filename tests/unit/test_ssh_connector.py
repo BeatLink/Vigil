@@ -225,6 +225,75 @@ class TestExecuteStreaming:
         assert ("stdout", "second") in received
 
 
+class TestKillProcess:
+    """
+    _kill_process's terminate()-then-kill() escalation — the direct
+    replacement for the old subprocess implementation's SIGTERM-then-SIGKILL
+    process-group kill (see the deleted test_ssh_process_kill.py). That file
+    drove real process trees because the old defect was in process handling
+    itself (subprocess.run's timeout only killed the direct child); here the
+    equivalent guarantee is that terminate()/kill() are actually called and
+    escalation happens on failure — verified against a real process
+    empirically (module docstring) and against mocked asyncssh objects here.
+    """
+
+    async def test_terminate_succeeds_kill_not_called(self):
+        proc = MagicMock()
+        proc.exit_status = None
+        proc.is_closing.return_value = False
+
+        async def wait_closed():
+            return None
+
+        proc.wait_closed = wait_closed
+
+        await SSHConnection._kill_process(proc)
+
+        assert proc.terminate.called
+        assert not proc.kill.called
+
+    async def test_escalates_to_kill_when_terminate_does_not_close(self):
+        # Mirrors "borg traps SIGTERM" from the old subprocess test: a
+        # process that ignores terminate() must be kill()ed, not left running.
+        proc = MagicMock()
+        proc.exit_status = None
+        proc.is_closing.return_value = False
+
+        call_count = {"n": 0}
+
+        async def wait_closed():
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise asyncio.TimeoutError()  # terminate() didn't close it in time
+            return None  # kill() did
+
+        proc.wait_closed = wait_closed
+
+        await SSHConnection._kill_process(proc)
+
+        assert proc.terminate.called
+        assert proc.kill.called
+
+    async def test_noop_on_already_finished_process(self):
+        proc = MagicMock()
+        proc.exit_status = 0
+        proc.is_closing.return_value = False
+
+        await SSHConnection._kill_process(proc)
+
+        assert not proc.terminate.called
+        assert not proc.kill.called
+
+    async def test_noop_on_already_closing_process(self):
+        proc = MagicMock()
+        proc.exit_status = None
+        proc.is_closing.return_value = True
+
+        await SSHConnection._kill_process(proc)
+
+        assert not proc.terminate.called
+
+
 class TestConcurrencyBound:
     async def test_execute_channels_are_bounded_per_host(self):
         # Verified empirically against a real sshd: exceeding MaxSessions

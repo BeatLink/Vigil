@@ -184,8 +184,18 @@ def section_title(text: str, classes: str = ''):
     """A standardized heading for dashboard sections."""
     return ui.label(text).classes(f'{SECTION_CLASS} mb-4 {classes}').style(f'color: {TEXT}')
 
-def metric_table(collector: str, title: str = 'Monitor Metrics', limit: int = 15):
-    """A standardized table for displaying recent metrics for a specific collector."""
+def metric_table(page, collector: str, title: str = 'Monitor Metrics', limit: int = 15):
+    """
+    A standardized table for displaying recent metrics for a specific collector.
+
+    `page` is the plugin's PluginPage (see ui/model.py) — its rows refresh on
+    the page's single shared timer via page.on_refresh(), rather than this
+    widget running its own independent timer. Table rows can't use real
+    NiceGUI binding: ui.table.rows has no on-change hook to push to the
+    browser (verified against NiceGUI's Table source), so this still needs
+    an explicit `.rows = ...; .update()` step — just driven by the shared
+    tick instead of a per-widget one.
+    """
     from vigil.core.data.database import Metric
     with card():
         ui.label(title).classes('font-bold mb-2').style(f'color: {PRIMARY}')
@@ -197,27 +207,27 @@ def metric_table(collector: str, title: str = 'Monitor Metrics', limit: int = 15
 
         def update():
             query = Metric.select().where(Metric.collector == collector).order_by(Metric.timestamp.desc()).limit(limit)
-            # Assign (not slice-mutate) and call update(): NiceGUI only pushes
-            # _props to the client on an explicit update(), so an in-place edit
-            # of table.rows would never reach the browser.
             table.rows = [m.__data__ for m in query]
             table.update()
 
-        on_data_event('metric', table, update)
+        page.on_refresh(update)
+        update()
         return table
 
-def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', limit: int = 15, full_height: bool = False):
+def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent Logs',
+             limit: int = 15, full_height: bool = False):
     """
     A standardized table for displaying persisted log lines, optionally filling
     available height.
 
     Reads from the LogLine table (deduplicated, retained log storage). When
     `filter_prefix` is given it scopes to that source (the plugin name); with no
-    prefix it shows every source for the target.
+    prefix it shows every source for the target. See metric_table's docstring
+    for why this refreshes via `page` rather than binding table.rows directly.
     """
     from vigil.core.data.database import LogLine
     card_classes = 'w-full overflow-hidden flex-grow' if full_height else ''
-    
+
     with card(card_classes, padding=not full_height):
         if full_height:
             ui.label(title).classes('font-bold p-4 w-full border-b').style(f'background-color: {BACKGROUND_MUTED}; color: {PRIMARY}')
@@ -227,7 +237,7 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
         columns = [
             {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left', 'sortable': True},
             {'name': 'lvl', 'label': 'Level', 'field': 'level', 'align': 'left'},
-            {'name': 'msg', 'label': 'Message', 'field': 'message', 'align': 'left', 
+            {'name': 'msg', 'label': 'Message', 'field': 'message', 'align': 'left',
              'classes': 'text-wrap font-mono text-xs' if full_height else ''},
         ]
 
@@ -247,10 +257,11 @@ def log_table(target: str, filter_prefix: str = '', title: str = 'Recent Logs', 
             table.rows = [e.__data__ for e in query]
             table.update()
 
-        on_data_event('log_line', table, update_logs)
+        page.on_refresh(update_logs)
+        update_logs()
         return table
 
-def event_table(plugin_name: str, plugin_id: str = '', target: str = '',
+def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
                 title: str = 'Recent Events', limit: int = 100,
                 full_height: bool = False):
     """
@@ -266,7 +277,8 @@ def event_table(plugin_name: str, plugin_id: str = '', target: str = '',
     Rows are selected by `plugin_id`, the monitor's unique id, not by the
     "[Display Name] " prefix the logger writes: names repeat across groups
     (several monitors are called "On Disk"), so a prefix match pulls in other
-    monitors' events. The prefix is still stripped for display.
+    monitors' events. The prefix is still stripped for display. See
+    metric_table's docstring for why this refreshes via `page`.
     """
     from vigil.core.data.database import Event
     prefix = f"[{plugin_name}] "
@@ -317,12 +329,17 @@ def event_table(plugin_name: str, plugin_id: str = '', target: str = '',
             ]
             table.update()
 
-        on_data_event('event', table, update)
+        page.on_refresh(update)
+        update()
         return table
 
 
-def history_chart(title: str, collector: str, metric_name: str, limit: int = 30):
-    """A standardized EChart for displaying metric history over time."""
+def history_chart(page, title: str, collector: str, metric_name: str, limit: int = 30):
+    """
+    A standardized EChart for displaying metric history over time. See
+    metric_table's docstring for why this refreshes via `page` — ui.echart's
+    `options` has the same no-on-change-hook limitation as table.rows.
+    """
     from vigil.core.data.database import Metric
     with card('w-full h-80 mb-4 p-2', padding=False):
         ui.label(title.upper()).classes(f'{LABEL_CLASS} mb-1')
@@ -349,28 +366,42 @@ def history_chart(title: str, collector: str, metric_name: str, limit: int = 30)
             chart.options['series'][0]['data'] = [m.value for m in history]
             chart.update()
 
-        on_data_event('metric', chart, update)
+        page.on_refresh(update)
+        update()
         return chart
 
 def render_host_card(target: str):
     """Renders the standard target host information card."""
     return info_card('TARGET HOST', target)
 
-def render_status_card(collector: str, metric_name: str, title: str = 'STATUS', 
-                       on_text: str = 'ACTIVE', off_text: str = 'INACTIVE', 
+def render_status_card(page, collector: str, metric_name: str, title: str = 'STATUS',
+                       on_text: str = 'ACTIVE', off_text: str = 'INACTIVE',
                        value_classes: str = VALUE_CLASS):
-    """A reusable card for monitoring a binary metric state with auto-refresh."""
-    from vigil.core.data.database import Metric
-    
+    """
+    A reusable card for monitoring a binary metric state with auto-refresh.
+
+    Text uses real NiceGUI binding (label.text is itself a BindableProperty
+    with an on_change hook that pushes to the browser — see ui/model.py's
+    docstring) against `page.model.metrics[metric_name]`, transformed
+    on/off by `backward`. Color has no such bindable hook on a plain label,
+    so it's still set via an explicit page.on_refresh() callback, same as
+    the row-based widgets.
+    """
     lbl = info_card(title, 'Checking...', value_classes=value_classes)
-    
-    def update():
-        last = Metric.select().where(
-            (Metric.collector == collector) & (Metric.metric_name == metric_name)
-        ).order_by(Metric.timestamp.desc()).first()
-        if last:
-            is_on = last.value > 0.5
-            lbl.text = on_text if is_on else off_text
+    page.track_metric(metric_name)
+
+    def _on_off_text(value):
+        if value is None:
+            return 'Checking...'
+        return on_text if value > 0.5 else off_text
+
+    lbl.bind_text_from(page.model, ('metrics', metric_name), backward=_on_off_text)
+
+    def update_color():
+        value = page.model.metrics.get(metric_name)
+        if value is not None:
+            is_on = value > 0.5
             lbl.style(f"color: {STATUS_COLORS['online'] if is_on else STATUS_COLORS['failed']}")
-    on_data_event('metric', lbl, update)
+
+    page.on_refresh(update_color)
     return lbl

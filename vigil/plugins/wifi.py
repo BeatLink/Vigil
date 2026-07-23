@@ -142,35 +142,42 @@ class WifiUIPlugin(UIPlugin):
         from nicegui import ui
 
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['link_quality', 'signal_dbm'])
+
+        def _quality_or_dash(v):
+            return '--' if v is None else f'{v:.0f}'
+
+        def _signal_or_dash(v):
+            return '-- dBm' if v is None else f'{v:.0f} dBm'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('iface_card'):
             iface_label = info_card('INTERFACE', self._active_interface or 'Detecting...')
         with layout.cell('quality_card'):
-            quality_label = info_card('LINK QUALITY', '--')
+            quality_label = info_card('LINK QUALITY', '--').bind_text_from(
+                page.model, ('metrics', 'link_quality'), backward=_quality_or_dash)
         with layout.cell('signal_card'):
-            signal_label = info_card('SIGNAL', '-- dBm')
+            info_card('SIGNAL', '-- dBm').bind_text_from(
+                page.model, ('metrics', 'signal_dbm'), backward=_signal_or_dash)
         with layout.cell('quality_chart'):
-            history_chart('LINK QUALITY', self.id, 'link_quality')
+            history_chart(page, 'LINK QUALITY', self.id, 'link_quality')
         with layout.cell('signal_chart'):
-            history_chart('SIGNAL (dBm)', self.id, 'signal_dbm')
+            history_chart(page, 'SIGNAL (dBm)', self.id, 'signal_dbm')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
+        def update_iface_and_color():
             if self._active_interface:
                 iface_label.text = self._active_interface
-            quality = self.latest_metric('link_quality')
-            signal = self.latest_metric('signal_dbm')
-            if quality:
-                quality_label.text = f'{quality.value:.0f}'
-                quality_label.style(f'color: {STATUS_COLORS[self._level_for_quality(quality.value)]}')
-            if signal:
-                signal_label.text = f'{signal.value:.0f} dBm'
+            quality = page.model.metrics.get('link_quality')
+            if quality is not None:
+                quality_label.style(f'color: {STATUS_COLORS[self._level_for_quality(quality)]}')
 
-        on_data_event('metric', quality_label, update_cards)
+        page.on_refresh(update_iface_and_color)
+
+        page.start()

@@ -242,58 +242,74 @@ class UnboundUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+        page = self.page(metric_names=[
+            'resolved_ok', 'servfail_rate_pct', 'queries_total',
+            'cache_hit_rate_pct', 'uptime_seconds',
+        ])
+
+        def _resolution_text(v):
+            if v is None:
+                return '--'
+            return 'OK' if v >= 1.0 else 'FAILED'
+
+        def _pct_or_dash(v):
+            return '--' if v is None else f'{v:.1f}%'
+
+        def _count_or_dash(v):
+            return '--' if v is None else f'{int(v):,}'
+
+        def _uptime_or_dash(v):
+            if v is None:
+                return '--'
+            days = int(v // 86400)
+            hours = int((v % 86400) // 3600)
+            return f'{days}d {hours}h' if days else f'{hours}h'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('resolution_card'):
-            resolution_label = info_card('RESOLUTION', '--')
+            resolution_label = info_card('RESOLUTION', '--').bind_text_from(
+                page.model, ('metrics', 'resolved_ok'), backward=_resolution_text)
         with layout.cell('servfail_card'):
-            servfail_label = info_card('SERVFAIL RATE', '--')
+            servfail_label = info_card('SERVFAIL RATE', '--').bind_text_from(
+                page.model, ('metrics', 'servfail_rate_pct'), backward=_pct_or_dash)
         with layout.cell('queries_card'):
-            queries_label = info_card('QUERIES', '--')
+            info_card('QUERIES', '--').bind_text_from(
+                page.model, ('metrics', 'queries_total'), backward=_count_or_dash)
         with layout.cell('cache_card'):
-            cache_label = info_card('CACHE HIT RATE', '--')
+            info_card('CACHE HIT RATE', '--').bind_text_from(
+                page.model, ('metrics', 'cache_hit_rate_pct'), backward=_pct_or_dash)
         with layout.cell('uptime_card'):
-            uptime_label = info_card('UPTIME', '--')
+            info_card('UPTIME', '--').bind_text_from(
+                page.model, ('metrics', 'uptime_seconds'), backward=_uptime_or_dash)
         with layout.cell('chart'):
-            history_chart('SERVFAIL RATE (%)', self.id, 'servfail_rate_pct')
+            history_chart(page, 'SERVFAIL RATE (%)', self.id, 'servfail_rate_pct')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            resolved  = self.latest_metric('resolved_ok')
-            servfail  = self.latest_metric('servfail_rate_pct')
-            total     = self.latest_metric('queries_total')
-            cache     = self.latest_metric('cache_hit_rate_pct')
-            uptime    = self.latest_metric('uptime_seconds')
-
-            if resolved:
-                ok = resolved.value >= 1.0
-                resolution_label.text = 'OK' if ok else 'FAILED'
+        def update_colors():
+            resolved = page.model.metrics.get('resolved_ok')
+            if resolved is not None:
+                ok = resolved >= 1.0
                 resolution_label.style(f'color: {STATUS_COLORS["online" if ok else "failed"]}')
-            if servfail:
-                servfail_label.text = f'{servfail.value:.1f}%'
-                if servfail.value >= self.servfail_threshold:
+
+            servfail = page.model.metrics.get('servfail_rate_pct')
+            if servfail is not None:
+                if servfail >= self.servfail_threshold:
                     colour = STATUS_COLORS['failed']
-                elif servfail.value >= self.servfail_warning:
+                elif servfail >= self.servfail_warning:
                     colour = STATUS_COLORS['warning']
                 else:
                     colour = STATUS_COLORS['online']
                 servfail_label.style(f'color: {colour}')
-            if total:
-                queries_label.text = f'{int(total.value):,}'
-            if cache:
-                cache_label.text = f'{cache.value:.1f}%'
-            if uptime:
-                days = int(uptime.value // 86400)
-                hours = int((uptime.value % 86400) // 3600)
-                uptime_label.text = f'{days}d {hours}h' if days else f'{hours}h'
 
-        on_data_event('metric', resolution_label, update_cards)
+        page.on_refresh(update_colors)
+
+        page.start()

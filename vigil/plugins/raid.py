@@ -104,38 +104,37 @@ class RaidUIPlugin(UIPlugin):
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['arrays_total', 'arrays_ok', 'arrays_degraded'])
+
+        def _int_or_dash(v):
+            return '--' if v is None else str(int(v))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('total_card'):
-            total_label = info_card('ARRAYS', '--')
+            info_card('ARRAYS', '--').bind_text_from(
+                page.model, ('metrics', 'arrays_total'), backward=_int_or_dash)
         with layout.cell('ok_card'):
-            ok_label = info_card('CLEAN', '--')
+            info_card('CLEAN', '--').bind_text_from(
+                page.model, ('metrics', 'arrays_ok'), backward=_int_or_dash
+            ).style(f"color: {STATUS_COLORS['online']}")
         with layout.cell('degraded_card'):
-            degraded_label = info_card('DEGRADED', '--')
+            degraded_label = info_card('DEGRADED', '--').bind_text_from(
+                page.model, ('metrics', 'arrays_degraded'), backward=_int_or_dash)
         with layout.cell('arrays'):
             ui.element('div')  # reserved for future per-array detail
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            def _ival(name):
-                m = self.latest_metric(name)
-                return int(m.value) if m else None
-
-            total = _ival('arrays_total')
-            ok = _ival('arrays_ok')
-            degraded = _ival('arrays_degraded')
-            if total is not None:
-                total_label.text = str(total)
-                ok_label.text = str(ok)
-                ok_label.style(f"color: {STATUS_COLORS['online']}")
-                degraded_label.text = str(degraded)
+        def update_color():
+            degraded = page.model.metrics.get('arrays_degraded')
+            if degraded is not None:
                 color = STATUS_COLORS['failed'] if degraded else STATUS_COLORS['online']
                 degraded_label.style(f"color: {color}")
 
-        on_data_event('metric', total_label, update_cards)
+        page.on_refresh(update_color)
+        page.start()

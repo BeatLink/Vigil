@@ -102,28 +102,38 @@ class TemperatureUIPlugin(UIPlugin):
         from nicegui import ui
         from vigil.core.data.database import Metric
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
         )
+        page = self.page(metric_names=['temp_c'])
+
+        def _temp_or_dash(v):
+            return '--' if v is None else f'{v:.1f}°C'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('max_card'):
-            max_label = info_card('MAX TEMP', '--')
+            max_label = info_card('MAX TEMP', '--').bind_text_from(
+                page.model, ('metrics', 'temp_c'), backward=_temp_or_dash)
         with layout.cell('sensors'):
             sensor_container = ui.element('div').style(
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
         with layout.cell('chart'):
-            history_chart('TEMPERATURE (°C)', self.id, 'temp_c')
+            history_chart(page, 'TEMPERATURE (°C)', self.id, 'temp_c')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update():
+        def update_max_color():
+            val = page.model.metrics.get('temp_c')
+            if val is not None:
+                max_label.style(f'color: {STATUS_COLORS[_level_for(val, self.temp_warning, self.temp_threshold)]}')
+
+        def update_sensors():
             # Gather latest value per zone (one query, deduplicated in Python)
             zone_values: Dict[str, float] = {}
             for row in (
@@ -147,15 +157,8 @@ class TemperatureUIPlugin(UIPlugin):
                     lbl = info_card(display, f'{val:.1f}°C')
                     lbl.style(f'color: {STATUS_COLORS[_level_for(val, self.temp_warning, self.temp_threshold)]}')
 
-            # Update max card
-            latest_max = (
-                Metric.select()
-                .where((Metric.collector == self.id) & (Metric.metric_name == 'temp_c'))
-                .order_by(Metric.timestamp.desc())
-                .first()
-            )
-            if latest_max:
-                max_label.text = f'{latest_max.value:.1f}°C'
-                max_label.style(f'color: {STATUS_COLORS[_level_for(latest_max.value, self.temp_warning, self.temp_threshold)]}')
+        page.on_refresh(update_max_color)
+        page.on_refresh(update_sensors)
+        update_sensors()
 
-        on_data_event('metric', max_label, update)
+        page.start()

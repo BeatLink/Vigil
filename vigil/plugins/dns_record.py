@@ -172,13 +172,15 @@ class DnsRecordUIPlugin(UIPlugin):
         from nicegui import ui
         import json
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=[])
 
         with layout.cell('status_card'):
             self.internal_modules['ui']['status_card'](
+                page,
                 metric_name='resolved',
                 title='RESOLUTION',
                 on_text='OK',
@@ -193,7 +195,7 @@ class DnsRecordUIPlugin(UIPlugin):
                 'display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%'
             )
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
         def update():
             ttl = self.latest_metric('ttl')
@@ -216,4 +218,6 @@ class DnsRecordUIPlugin(UIPlugin):
                         f'background: {color}22; color: {color}'
                     )
 
-        on_data_event(('metric', 'setting'), ttl_label, update)
+        page.on_refresh(update)
+        update()
+        page.start()

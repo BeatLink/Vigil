@@ -68,35 +68,35 @@ class ZFSHealthUIPlugin(UIPlugin):
 
         from vigil.web.ui.theme import STATUS_COLORS
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['pools_total', 'pools_ok', 'pools_degraded'])
+
+        def _int_or_dash(v):
+            return '--' if v is None else str(int(v))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('total_card'):
-            total_label = info_card('POOLS', '--')
+            info_card('POOLS', '--').bind_text_from(
+                page.model, ('metrics', 'pools_total'), backward=_int_or_dash)
         with layout.cell('ok_card'):
-            ok_label = info_card('HEALTHY', '--')
+            ok_label = info_card('HEALTHY', '--').bind_text_from(
+                page.model, ('metrics', 'pools_ok'), backward=_int_or_dash
+            ).style(f"color: {STATUS_COLORS['online']}")
         with layout.cell('degraded_card'):
-            degraded_label = info_card('DEGRADED', '--')
+            degraded_label = info_card('DEGRADED', '--').bind_text_from(
+                page.model, ('metrics', 'pools_degraded'), backward=_int_or_dash)
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            def _ival(name):
-                m = self.latest_metric(name)
-                return int(m.value) if m else None
-
-            total = _ival('pools_total')
-            ok = _ival('pools_ok')
-            degraded = _ival('pools_degraded')
-            if total is not None:
-                total_label.text = str(total)
-                ok_label.text = str(ok)
-                ok_label.style(f"color: {STATUS_COLORS['online']}")
-                degraded_label.text = str(degraded)
+        def update_degraded_color():
+            degraded = page.model.metrics.get('pools_degraded')
+            if degraded is not None:
                 color = STATUS_COLORS['failed'] if degraded else STATUS_COLORS['online']
                 degraded_label.style(f"color: {color}")
 
-        on_data_event('metric', total_label, update_cards)
+        page.on_refresh(update_degraded_color)
+
+        page.start()

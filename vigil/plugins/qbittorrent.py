@@ -490,7 +490,7 @@ class QbittorrentUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
@@ -501,47 +501,63 @@ class QbittorrentUIPlugin(UIPlugin):
         stalled_warning = int(self.config.get('stalled_warning', 3))
         stalled_threshold = int(self.config.get('stalled_threshold', 10))
 
+        page = self.page(metric_names=[
+            'connected', 'dl_speed_bytes', 'up_speed_bytes', 'torrents_total',
+            'torrents_downloading', 'torrents_stalled', 'torrents_errored',
+        ])
+
+        def _connection_text(v):
+            if v is None:
+                return '--'
+            return 'CONNECTED' if v >= 1.0 else 'DISCONNECTED'
+
+        def _int_or_dash(v):
+            return '--' if v is None else str(int(v))
+
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('connection_card'):
-            connection_label = info_card('CONNECTION', '--')
+            connection_label = info_card('CONNECTION', '--').bind_text_from(
+                page.model, ('metrics', 'connected'), backward=_connection_text)
         with layout.cell('speed_card'):
             speed_label = info_card('TRANSFER', '--')
         with layout.cell('torrents_card'):
             torrents_label = info_card('TORRENTS', '--')
         with layout.cell('stalled_card'):
-            stalled_label = info_card('STALLED', '--')
+            stalled_label = info_card('STALLED', '--').bind_text_from(
+                page.model, ('metrics', 'torrents_stalled'), backward=_int_or_dash)
         with layout.cell('errored_card'):
-            errored_label = info_card('ERRORED', '--')
+            errored_label = info_card('ERRORED', '--').bind_text_from(
+                page.model, ('metrics', 'torrents_errored'), backward=_int_or_dash)
         with layout.cell('chart'):
-            history_chart('DOWNLOAD SPEED (B/s)', self.id, 'dl_speed_bytes')
+            history_chart(page, 'DOWNLOAD SPEED (B/s)', self.id, 'dl_speed_bytes')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
         def update_cards():
-            connected   = self.latest_metric('connected')
-            dl          = self.latest_metric('dl_speed_bytes')
-            up          = self.latest_metric('up_speed_bytes')
-            total       = self.latest_metric('torrents_total')
-            downloading = self.latest_metric('torrents_downloading')
-            stalled     = self.latest_metric('torrents_stalled')
-            errored     = self.latest_metric('torrents_errored')
+            metrics = page.model.metrics
+            connected   = metrics.get('connected')
+            dl          = metrics.get('dl_speed_bytes')
+            up          = metrics.get('up_speed_bytes')
+            total       = metrics.get('torrents_total')
+            downloading = metrics.get('torrents_downloading')
+            stalled     = metrics.get('torrents_stalled')
+            errored     = metrics.get('torrents_errored')
 
-            if connected:
-                on = connected.value >= 1.0
-                connection_label.text = 'CONNECTED' if on else 'DISCONNECTED'
+            if connected is not None:
+                on = connected >= 1.0
                 connection_label.style(
                     f'color: {STATUS_COLORS["online" if on else "failed"]}')
-            if dl and up:
+            if dl is not None and up is not None:
                 speed_label.text = (
-                    f'↓ {_format_rate(dl.value)}  ↑ {_format_rate(up.value)}')
-            if total:
-                torrents_label.text = f'{int(total.value)}'
-                if downloading:
-                    torrents_label.text += f' ({int(downloading.value)} active)'
-            if stalled:
-                count = int(stalled.value)
-                stalled_label.text = str(count)
+                    f'↓ {_format_rate(dl)}  ↑ {_format_rate(up)}')
+            if total is not None:
+                text = f'{int(total)}'
+                if downloading is not None:
+                    text += f' ({int(downloading)} active)'
+                torrents_label.text = text
+            if stalled is not None:
+                count = int(stalled)
                 if count >= stalled_threshold:
                     colour = STATUS_COLORS['failed']
                 elif count >= stalled_warning:
@@ -549,10 +565,10 @@ class QbittorrentUIPlugin(UIPlugin):
                 else:
                     colour = STATUS_COLORS['online']
                 stalled_label.style(f'color: {colour}')
-            if errored:
-                count = int(errored.value)
-                errored_label.text = str(count)
+            if errored is not None:
+                count = int(errored)
                 errored_label.style(
                     f'color: {STATUS_COLORS["failed" if count else "online"]}')
 
-        on_data_event('metric', connection_label, update_cards)
+        page.on_refresh(update_cards)
+        page.start()

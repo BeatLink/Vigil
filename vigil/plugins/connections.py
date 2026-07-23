@@ -101,44 +101,43 @@ class ConnectionsUIPlugin(UIPlugin):
         from nicegui import ui
 
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         total_warning   = int(self.config.get('total_warning',   500))
         total_threshold = int(self.config.get('total_threshold', 1000))
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['total', 'established', 'listen', 'time_wait'])
+
+        def _int_or_dash(v):
+            return '--' if v is None else f'{v:.0f}'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('total_card'):
-            total_label = info_card('TOTAL', '--')
+            total_label = info_card('TOTAL', '--').bind_text_from(
+                page.model, ('metrics', 'total'), backward=_int_or_dash)
         with layout.cell('established_card'):
-            established_label = info_card('ESTABLISHED', '--')
+            info_card('ESTABLISHED', '--').bind_text_from(
+                page.model, ('metrics', 'established'), backward=_int_or_dash)
         with layout.cell('listen_card'):
-            listen_label = info_card('LISTENING', '--')
+            info_card('LISTENING', '--').bind_text_from(
+                page.model, ('metrics', 'listen'), backward=_int_or_dash)
         with layout.cell('timewait_card'):
-            timewait_label = info_card('TIME_WAIT', '--')
+            info_card('TIME_WAIT', '--').bind_text_from(
+                page.model, ('metrics', 'time_wait'), backward=_int_or_dash)
         with layout.cell('total_chart'):
-            history_chart('TOTAL CONNECTIONS', self.id, 'total')
+            history_chart(page, 'TOTAL CONNECTIONS', self.id, 'total')
         with layout.cell('established_chart'):
-            history_chart('ESTABLISHED', self.id, 'established')
+            history_chart(page, 'ESTABLISHED', self.id, 'established')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            total = self.latest_metric('total')
-            established = self.latest_metric('established')
-            listen = self.latest_metric('listen')
-            timewait = self.latest_metric('time_wait')
-            if total:
-                total_label.text = f'{total.value:.0f}'
-                total_label.style(f'color: {STATUS_COLORS[_level_for(total.value, total_warning, total_threshold)]}')
-            if established:
-                established_label.text = f'{established.value:.0f}'
-            if listen:
-                listen_label.text = f'{listen.value:.0f}'
-            if timewait:
-                timewait_label.text = f'{timewait.value:.0f}'
+        def update_color():
+            total = page.model.metrics.get('total')
+            if total is not None:
+                total_label.style(f'color: {STATUS_COLORS[_level_for(total, total_warning, total_threshold)]}')
 
-        on_data_event('metric', total_label, update_cards)
+        page.on_refresh(update_color)
+        page.start()

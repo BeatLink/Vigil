@@ -544,7 +544,7 @@ class TestBackupCommand:
 
 def _streaming(lines, status=0, error=""):
     """Fake execute_streaming emitting `lines` then exiting with `status`."""
-    def run(command, on_line=None, timeout=None, should_cancel=None):
+    async def run(command, on_line=None, timeout=None, should_cancel=None):
         for line in lines:
             if on_line:
                 on_line("stdout", line)
@@ -606,7 +606,7 @@ class TestBackupExecution:
         })
         seen = []
 
-        def streaming(command, on_line=None, timeout=None, should_cancel=None):
+        async def streaming(command, on_line=None, timeout=None, should_cancel=None):
             on_line("stdout", progress)
             job_id = backup_plugin.job_controller.current_job_id()
             seen.append(db_manager.get_job(job_id)['progress'])

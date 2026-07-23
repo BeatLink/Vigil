@@ -1,6 +1,5 @@
-import asyncio
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.collector.collectors.ssh_collector import SSHCollector
@@ -10,7 +9,9 @@ from vigil.collector.collectors.ssh_collector import SSHCollector
 def mock_conn():
     conn = MagicMock()
     conn.host = "test.host"
-    conn.execute = MagicMock(return_value=(0, "output", ""))
+    # execute() is a coroutine on the real SSHConnection (asyncssh-based —
+    # see ssh_connector.py); SSHCollector is now a thin pass-through to it.
+    conn.execute = AsyncMock(return_value=(0, "output", ""))
     return conn
 
 
@@ -29,16 +30,10 @@ class TestFetchOutput:
         assert rc == 1
         assert err == "command not found"
 
-    async def test_timeout_returns_minus_one(self, mock_conn):
-        # Patch asyncio.wait_for to simulate a timeout without actually waiting
-        with patch("vigil.collector.collectors.ssh_collector.asyncio.wait_for",
-                   side_effect=asyncio.TimeoutError):
-            collector = SSHCollector(mock_conn)
-            rc, out, err = await collector.fetch_output("slow_cmd")
-        assert rc == -1
-        assert "Timed out" in err
-
     async def test_exception_returns_minus_one(self, mock_conn):
+        # SSHConnection.execute() itself handles its own timeouts/kills (see
+        # ssh_connector.py) — SSHCollector's only remaining job is to catch
+        # whatever still escapes and turn it into the (-1, "", msg) sentinel.
         mock_conn.execute.side_effect = Exception("connection reset")
         collector = SSHCollector(mock_conn)
         rc, out, err = await collector.fetch_output("cmd")
@@ -49,8 +44,6 @@ class TestFetchOutput:
         from vigil.collector.collectors.ssh_collector import TIMEOUT
         collector = SSHCollector(mock_conn)
         await collector.fetch_output("df -h")
-        # The deadline goes down to execute(), which is what actually kills the
-        # process group; wait_for alone would leave it running.
         mock_conn.execute.assert_called_once_with("df -h", timeout=TIMEOUT)
 
     async def test_collector_timeout_is_configurable(self, mock_conn):

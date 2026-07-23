@@ -219,42 +219,46 @@ class FreshrssUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+        page = self.page(metric_names=['refresh_age_hours', 'feeds_total', 'feeds_stale'])
+
+        def _age_or_dash(v):
+            return '--' if v is None else _format_age(v)
+
+        def _int_or_dash(v):
+            return '--' if v is None else str(int(v))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('refresh_card'):
-            refresh_label = info_card('LAST REFRESH', '--')
+            refresh_label = info_card('LAST REFRESH', '--').bind_text_from(
+                page.model, ('metrics', 'refresh_age_hours'), backward=_age_or_dash)
         with layout.cell('feeds_card'):
-            feeds_label = info_card('FEEDS', '--')
+            info_card('FEEDS', '--').bind_text_from(
+                page.model, ('metrics', 'feeds_total'), backward=_int_or_dash)
         with layout.cell('stale_card'):
-            stale_label = info_card('STALE FEEDS', '--')
+            stale_label = info_card('STALE FEEDS', '--').bind_text_from(
+                page.model, ('metrics', 'feeds_stale'), backward=_int_or_dash)
         with layout.cell('chart'):
-            history_chart('REFRESH AGE (HOURS)', self.id, 'refresh_age_hours')
+            history_chart(page, 'REFRESH AGE (HOURS)', self.id, 'refresh_age_hours')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            refresh_age = self.latest_metric('refresh_age_hours')
-            total       = self.latest_metric('feeds_total')
-            stale       = self.latest_metric('feeds_stale')
-
-            if refresh_age:
-                refresh_label.text = _format_age(refresh_age.value)
+        def update_colors():
+            refresh_age = page.model.metrics.get('refresh_age_hours')
+            if refresh_age is not None:
                 refresh_label.style(
-                    f'color: {STATUS_COLORS["warning" if refresh_age.value >= self.refresh_stale_warning else "online"]}')
-            if total:
-                feeds_label.text = f'{int(total.value)}'
-            if stale:
-                count = int(stale.value)
-                stale_label.text = str(count)
+                    f'color: {STATUS_COLORS["warning" if refresh_age >= self.refresh_stale_warning else "online"]}')
+            stale = page.model.metrics.get('feeds_stale')
+            if stale is not None:
                 stale_label.style(
-                    f'color: {STATUS_COLORS["warning" if count else "online"]}')
+                    f'color: {STATUS_COLORS["warning" if int(stale) else "online"]}')
 
-        on_data_event('metric', refresh_label, update_cards)
+        page.on_refresh(update_colors)
+        page.start()

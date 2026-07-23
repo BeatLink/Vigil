@@ -97,37 +97,38 @@ class InterruptsUIPlugin(UIPlugin):
     """Dashboard rendering for the interrupts monitor."""
 
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('irq_card'):
-            irq_label = info_card('INTERRUPTS/S', '--')
-        with layout.cell('ctxt_card'):
-            ctxt_label = info_card('CTX SWITCH/S', '--')
-        with layout.cell('irq_chart'):
-            history_chart('INTERRUPTS / SEC', self.id, 'irq_per_sec')
-        with layout.cell('ctxt_chart'):
-            history_chart('CONTEXT SWITCHES / SEC', self.id, 'ctxt_per_sec')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+        page = self.page(metric_names=['irq_per_sec', 'ctxt_per_sec'])
 
         irq_warning   = int(self.config.get('irq_warning',   20000))
         irq_threshold = int(self.config.get('irq_threshold', 50000))
 
-        def update_cards():
-            irq = self.latest_metric('irq_per_sec')
-            ctxt = self.latest_metric('ctxt_per_sec')
-            if irq:
-                irq_label.text = f'{irq.value:,.0f}'
-                irq_label.style(f'color: {STATUS_COLORS[_level_for(irq.value, irq_warning, irq_threshold)]}')
-            if ctxt:
-                ctxt_label.text = f'{ctxt.value:,.0f}'
+        def _rate_or_dash(v):
+            return '--' if v is None else f'{v:,.0f}'
 
-        on_data_event('metric', irq_label, update_cards)
+        with layout.cell('host_card'):
+            self.internal_modules['ui']['host_card']()
+        with layout.cell('irq_card'):
+            irq_label = info_card('INTERRUPTS/S', '--').bind_text_from(
+                page.model, ('metrics', 'irq_per_sec'), backward=_rate_or_dash)
+        with layout.cell('ctxt_card'):
+            info_card('CTX SWITCH/S', '--').bind_text_from(
+                page.model, ('metrics', 'ctxt_per_sec'), backward=_rate_or_dash)
+        with layout.cell('irq_chart'):
+            history_chart(page, 'INTERRUPTS / SEC', self.id, 'irq_per_sec')
+        with layout.cell('ctxt_chart'):
+            history_chart(page, 'CONTEXT SWITCHES / SEC', self.id, 'ctxt_per_sec')
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table'](page)
+
+        def update_color():
+            irq = page.model.metrics.get('irq_per_sec')
+            if irq is not None:
+                irq_label.style(f'color: {STATUS_COLORS[_level_for(irq, irq_warning, irq_threshold)]}')
+
+        page.on_refresh(update_color)
+        page.start()

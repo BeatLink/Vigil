@@ -176,34 +176,40 @@ class TriliumUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
+        page = self.page(metric_names=['last_modified_age_hours', 'notes_total'])
+
+        def _age_or_dash(v):
+            return '--' if v is None else f'{_format_age(v)} ago'
+
+        def _count_or_dash(v):
+            return '--' if v is None else f'{int(v):,}'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('lastmod_card'):
-            lastmod_label = info_card('LAST MODIFIED', '--')
+            lastmod_label = info_card('LAST MODIFIED', '--').bind_text_from(
+                page.model, ('metrics', 'last_modified_age_hours'), backward=_age_or_dash)
         with layout.cell('notes_card'):
-            notes_label = info_card('TOTAL NOTES', '--')
+            info_card('TOTAL NOTES', '--').bind_text_from(
+                page.model, ('metrics', 'notes_total'), backward=_count_or_dash)
         with layout.cell('chart'):
-            history_chart('HOURS SINCE LAST MODIFIED', self.id, 'last_modified_age_hours')
+            history_chart(page, 'HOURS SINCE LAST MODIFIED', self.id, 'last_modified_age_hours')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            age   = self.latest_metric('last_modified_age_hours')
-            total = self.latest_metric('notes_total')
-
-            if age:
-                lastmod_label.text = f'{_format_age(age.value)} ago'
+        def update_lastmod_color():
+            age = page.model.metrics.get('last_modified_age_hours')
+            if age is not None:
                 lastmod_label.style(
-                    f'color: {STATUS_COLORS["warning" if age.value >= self.stale_warning else "online"]}')
-            if total:
-                notes_label.text = f'{int(total.value):,}'
+                    f'color: {STATUS_COLORS["warning" if age >= self.stale_warning else "online"]}')
 
-        on_data_event('metric', lastmod_label, update_cards)
+        page.on_refresh(update_lastmod_color)
+
+        page.start()

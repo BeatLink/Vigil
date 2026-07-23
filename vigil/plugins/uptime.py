@@ -73,33 +73,31 @@ class UptimeUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.data.database import Metric
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['latency_ms'])
+
+        def _latency_or_dash(v):
+            return '-- ms' if v is None else f'{v:.1f} ms'
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('status_card'):
             self.internal_modules['ui']['status_card'](
+                page,
                 metric_name='up',
                 title='CURRENT STATUS',
                 on_text='ONLINE',
                 off_text='OFFLINE'
             )
         with layout.cell('latency_card'):
-            latency_label = info_card('LAST LATENCY', '-- ms')
+            info_card('LAST LATENCY', '-- ms').bind_text_from(
+                page.model, ('metrics', 'latency_ms'), backward=_latency_or_dash)
         with layout.cell('chart'):
-            history_chart('RESPONSE TIME HISTORY (ms)', self.id, 'latency_ms')
+            history_chart(page, 'RESPONSE TIME HISTORY (ms)', self.id, 'latency_ms')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_latency():
-            last = Metric.select().where(
-                (Metric.collector == self.id) & (Metric.metric_name == 'latency_ms')
-            ).order_by(Metric.timestamp.desc()).first()
-            if last:
-                latency_label.text = f"{last.value:.1f} ms"
-
-        on_data_event('metric', latency_label, update_latency)
+        page.start()

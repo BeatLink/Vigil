@@ -267,10 +267,11 @@ class FilesystemsUIPlugin(UIPlugin):
         from nicegui import ui
         from vigil.core.data.database import Metric
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=[])
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -283,7 +284,7 @@ class FilesystemsUIPlugin(UIPlugin):
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
         def update():
             # Latest space and inode percentages per filesystem, deduplicated in
@@ -334,4 +335,6 @@ class FilesystemsUIPlugin(UIPlugin):
                 worst_label.style(f'color: {STATUS_COLORS[self._level_for(worst_m.value)]}')
             count_label.text = str(len(fs_pct))
 
-        on_data_event('metric', fs_container, update)
+        page.on_refresh(update)
+        update()
+        page.start()

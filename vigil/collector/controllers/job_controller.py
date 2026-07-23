@@ -1,12 +1,11 @@
 import asyncio
 import logging
-import threading
 import time
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from vigil.core.common.ssh_connector import SSHConnection
 
-# How often the reader thread flushes buffered output lines to the database.
+# How often buffered output lines are flushed to the database.
 # Output arrives far faster than one-row-per-commit can absorb (borg --progress
 # emits continuously), so lines are batched; half a second keeps the UI feeling
 # live while collapsing a burst into a single write.
@@ -30,13 +29,20 @@ class JobController:
     express a borg backup — it runs for hours, produces output worth watching
     while it runs, and must survive the browser session that started it.
 
-    A job here is a database row (see database.Job) plus a background thread
-    draining the remote process's output into it. Nothing about a job lives only
-    in memory, so the UI reattaches after a reload by reading the row, and a
-    second browser sees the same state. The controller holds one job at a time
-    per plugin: borg takes an exclusive repository lock, so a concurrent backup
-    would fail on the lock anyway — rejecting it here gives a clear error
-    instead of a confusing one from borg.
+    A job here is a database row (see database.Job) plus the output of
+    SSHConnection.execute_streaming persisted into it as it arrives. Nothing
+    about a job lives only in memory, so the UI reattaches after a reload by
+    reading the row, and a second browser sees the same state. The controller
+    holds one job at a time per plugin: borg takes an exclusive repository
+    lock, so a concurrent backup would fail on the lock anyway — rejecting it
+    here gives a clear error instead of a confusing one from borg.
+
+    Previously ran its blocking body in a worker thread (run_in_executor),
+    because SSHConnection.execute_streaming shelled out to a blocking `ssh`
+    subprocess. Now that it's a native coroutine (asyncssh — see
+    ssh_connector.py), the job runs directly on the event loop; concurrency
+    across jobs/monitors is still real, since execute_streaming itself awaits
+    on I/O rather than blocking a thread.
     """
 
     def __init__(self, ssh_conn: SSHConnection, db: Any, plugin_id: str, target: str):
@@ -44,11 +50,11 @@ class JobController:
         self.db = db
         self.plugin_id = plugin_id
         self.target = target
-        # Guards _current_job / _cancel against the reader thread finishing at
-        # the same moment the UI starts or cancels a job.
-        self._lock = threading.Lock()
+        # Guards _current_job / _cancel — no longer against a worker thread
+        # (there isn't one now), but two coroutines can still race to start a
+        # job at the same event-loop tick before either awaits.
         self._current_job: Optional[int] = None
-        self._cancel = threading.Event()
+        self._cancel = asyncio.Event()
 
     # -------------------------------------------------------------------------
     # Status
@@ -56,13 +62,11 @@ class JobController:
 
     def is_running(self) -> bool:
         """True if this controller is currently executing a job."""
-        with self._lock:
-            return self._current_job is not None
+        return self._current_job is not None
 
     def current_job_id(self) -> Optional[int]:
         """The id of the running job, or None."""
-        with self._lock:
-            return self._current_job
+        return self._current_job
 
     # -------------------------------------------------------------------------
     # Execution
@@ -82,35 +86,29 @@ class JobController:
         `on_line(stream, text)` is invoked for each output line before it is
         stored, letting a caller parse structured progress out of the stream.
 
-        The blocking work runs in a worker thread; awaiting this coroutine does
-        not occupy the event loop. Raises JobRejected if a job is already running.
+        Raises JobRejected if a job is already running.
         """
-        with self._lock:
-            if self._current_job is not None:
-                raise JobRejected(
-                    f"A {kind} job is already running for this monitor"
-                )
-            self._cancel.clear()
-            job_id = self.db.create_job(
-                plugin_id=self.plugin_id, target=self.target, kind=kind,
-                command=redacted if redacted is not None else command,
+        if self._current_job is not None:
+            raise JobRejected(
+                f"A {kind} job is already running for this monitor"
             )
-            self._current_job = job_id
+        self._cancel.clear()
+        job_id = self.db.create_job(
+            plugin_id=self.plugin_id, target=self.target, kind=kind,
+            command=redacted if redacted is not None else command,
+        )
+        self._current_job = job_id
 
         try:
-            exit_code = await asyncio.get_event_loop().run_in_executor(
-                None, self._execute, job_id, command, on_line, timeout
-            )
-            return job_id, exit_code
+            return job_id, await self._execute(job_id, command, on_line, timeout)
         finally:
-            with self._lock:
-                self._current_job = None
+            self._current_job = None
 
-    def _execute(self, job_id: int, command: str,
-                 on_line: Optional[Callable[[str, str], None]],
-                 timeout: Optional[float]) -> int:
+    async def _execute(self, job_id: int, command: str,
+                       on_line: Optional[Callable[[str, str], None]],
+                       timeout: Optional[float]) -> int:
         """
-        Blocking body of a job, run in a worker thread.
+        Run the job's remote command and persist its output as it arrives.
 
         Buffers output lines and flushes them on a timer so a chatty command
         does not turn into one DB commit per line, while the UI still sees
@@ -142,7 +140,7 @@ class JobController:
                 flush()
 
         try:
-            status, error = self.ssh.execute_streaming(
+            status, error = await self.ssh.execute_streaming(
                 command,
                 on_line=handle,
                 timeout=timeout,
@@ -170,16 +168,16 @@ class JobController:
         """
         Request cancellation of the running job.
 
-        Sets a flag the reader thread checks between output lines; it then
-        terminates the remote process. Returns False if no job is running.
-        Cancellation is therefore observed at the next line of output — for
-        borg, which reports progress continuously, that is effectively immediate.
+        Sets a flag execute_streaming's read loop checks between lines; it
+        then terminates the remote process. Returns False if no job is
+        running. Cancellation is therefore observed at the next line of
+        output — for borg, which reports progress continuously, that is
+        effectively immediate.
         """
-        with self._lock:
-            if self._current_job is None:
-                return False
-            self._cancel.set()
-            return True
+        if self._current_job is None:
+            return False
+        self._cancel.set()
+        return True
 
     # -------------------------------------------------------------------------
     # History

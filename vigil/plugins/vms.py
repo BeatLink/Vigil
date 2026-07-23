@@ -167,36 +167,30 @@ class VmsUIPlugin(UIPlugin):
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page(metric_names=['vms_total', 'vms_running', 'vms_stopped'])
+
+        def _int_or_dash(v):
+            return '--' if v is None else str(int(v))
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('total_card'):
-            total_label = info_card('VMS', '--')
+            info_card('VMS', '--').bind_text_from(
+                page.model, ('metrics', 'vms_total'), backward=_int_or_dash)
         with layout.cell('running_card'):
-            running_label = info_card('RUNNING', '--')
+            info_card('RUNNING', '--').bind_text_from(
+                page.model, ('metrics', 'vms_running'), backward=_int_or_dash
+            ).style(f"color: {STATUS_COLORS['online']}")
         with layout.cell('stopped_card'):
-            stopped_label = info_card('STOPPED', '--')
+            info_card('STOPPED', '--').bind_text_from(
+                page.model, ('metrics', 'vms_stopped'), backward=_int_or_dash)
         with layout.cell('vms'):
             ui.element('div')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
-        def update_cards():
-            def _ival(name):
-                m = self.latest_metric(name)
-                return int(m.value) if m else None
-
-            total = _ival('vms_total')
-            running = _ival('vms_running')
-            stopped = _ival('vms_stopped')
-            if total is not None:
-                total_label.text = str(total)
-                running_label.text = str(running)
-                running_label.style(f"color: {STATUS_COLORS['online']}")
-                stopped_label.text = str(stopped)
-
-        on_data_event('metric', total_label, update_cards)
+        page.start()

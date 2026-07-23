@@ -163,10 +163,11 @@ class PortsUIPlugin(UIPlugin):
         from nicegui import ui
 
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page()
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -178,9 +179,9 @@ class PortsUIPlugin(UIPlugin):
 
         with layout.cell('charts'):
             for check in checks:
-                history_chart(f"{check['name']} LATENCY (ms)", self.id, f"{check['metric']}_latency_ms")
+                history_chart(page, f"{check['name']} LATENCY (ms)", self.id, f"{check['metric']}_latency_ms")
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+            self.internal_modules['ui']['events_table'](page)
 
         def update_cards():
             if not checks:
@@ -202,4 +203,6 @@ class PortsUIPlugin(UIPlugin):
             down_label.text = f'{down}'
             down_label.style(f'color: {STATUS_COLORS["failed" if down else "online"]}')
 
-        on_data_event('metric', up_label, update_cards)
+        page.on_refresh(update_cards)
+        update_cards()
+        page.start()

@@ -125,30 +125,14 @@ class GpuUIPlugin(UIPlugin):
         from nicegui import ui
         from vigil.core.data.database import Metric
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart, on_data_event
+        from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
         )
-
-        with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
-        with layout.cell('util_card'):
-            util_label = info_card('GPU', '-- %')
-        with layout.cell('mem_card'):
-            mem_label = info_card('VRAM', '-- %')
-        with layout.cell('temp_card'):
-            temp_label = info_card('TEMP', '--')
-        with layout.cell('gpus'):
-            gpu_container = ui.element('div').style(
-                'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
-            )
-        with layout.cell('chart'):
-            history_chart('GPU UTILIZATION (%)', self.id, 'gpu_util')
-        with layout.cell('events'):
-            self.internal_modules['ui']['events_table']()
+        page = self.page(metric_names=['gpu_util', 'gpu_mem_pct', 'gpu_temp'])
 
         util_warning   = int(self.config.get('util_warning',   85))
         util_threshold = int(self.config.get('util_threshold', 95))
@@ -157,22 +141,41 @@ class GpuUIPlugin(UIPlugin):
         temp_warning   = int(self.config.get('temp_warning',   80))
         temp_threshold = int(self.config.get('temp_threshold', 90))
 
-        def update():
-            def _val(name):
-                m = self.latest_metric(name)
-                return m.value if m else None
+        def _pct_or_dash(v):
+            return '-- %' if v is None else f'{v:.0f}%'
 
-            util = _val('gpu_util')
-            mem  = _val('gpu_mem_pct')
-            temp = _val('gpu_temp')
+        def _temp_or_dash(v):
+            return '--' if v is None else f'{v:.0f}°C'
+
+        with layout.cell('host_card'):
+            self.internal_modules['ui']['host_card']()
+        with layout.cell('util_card'):
+            util_label = info_card('GPU', '-- %').bind_text_from(
+                page.model, ('metrics', 'gpu_util'), backward=_pct_or_dash)
+        with layout.cell('mem_card'):
+            mem_label = info_card('VRAM', '-- %').bind_text_from(
+                page.model, ('metrics', 'gpu_mem_pct'), backward=_pct_or_dash)
+        with layout.cell('temp_card'):
+            temp_label = info_card('TEMP', '--').bind_text_from(
+                page.model, ('metrics', 'gpu_temp'), backward=_temp_or_dash)
+        with layout.cell('gpus'):
+            gpu_container = ui.element('div').style(
+                'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
+            )
+        with layout.cell('chart'):
+            history_chart(page, 'GPU UTILIZATION (%)', self.id, 'gpu_util')
+        with layout.cell('events'):
+            self.internal_modules['ui']['events_table'](page)
+
+        def update():
+            util = page.model.metrics.get('gpu_util')
+            mem  = page.model.metrics.get('gpu_mem_pct')
+            temp = page.model.metrics.get('gpu_temp')
             if util is not None:
-                util_label.text = f'{util:.0f}%'
                 util_label.style(f"color: {STATUS_COLORS[_level_for(util, util_warning, util_threshold)]}")
             if mem is not None:
-                mem_label.text = f'{mem:.0f}%'
                 mem_label.style(f"color: {STATUS_COLORS[_level_for(mem, mem_warning, mem_threshold)]}")
             if temp is not None:
-                temp_label.text = f'{temp:.0f}°C'
                 temp_label.style(f"color: {STATUS_COLORS[_level_for(temp, temp_warning, temp_threshold)]}")
 
             # Per-GPU cards: latest util for each gpu<idx>_util metric
@@ -199,4 +202,6 @@ class GpuUIPlugin(UIPlugin):
                     lbl = info_card(f'GPU {idx}', f'{val:.0f}%')
                     lbl.style(f'color: {STATUS_COLORS[_level_for(val, util_warning, util_threshold)]}')
 
-        on_data_event('metric', util_label, update)
+        page.on_refresh(update)
+        update()
+        page.start()

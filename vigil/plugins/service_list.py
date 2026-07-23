@@ -221,9 +221,10 @@ class ServiceListUIPlugin(UIPlugin):
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, on_data_event
+        from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
+        page = self.page()
 
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
@@ -334,10 +335,13 @@ class ServiceListUIPlugin(UIPlugin):
                 update_table()
 
             search_in.on('update:modelValue', lambda e: update())
-            on_data_event(('metric', 'snapshot'), table, update)
+            page.on_refresh(update)
+            update()
 
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](title='PLUGIN EVENTS')
+            self.internal_modules['ui']['events_table'](page, title='PLUGIN EVENTS')
+
+        page.start()
 
     async def _show_status(self, service_name: str):
         from nicegui import ui
