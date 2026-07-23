@@ -42,6 +42,7 @@
                     pyyaml
                     peewee
                     nicegui
+                    dnspython
                 ];
 
                 vigil-pkg = pkgs.python312Packages.buildPythonApplication {

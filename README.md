@@ -100,6 +100,8 @@ theme:
 |------|----------|------------|-------------|---------|
 | [`uptime`](#uptime)                     | Host reachability                     | ICMP ping                                        | `up`, `latency_ms`                              | — |
 | [`push`](#push)                         | External heartbeat (dead man's switch) | REST API (caller pushes in)                     | `last_push_epoch`, `reported_up`, `value`       | — |
+| [`dns_record`](#dns_record)             | DNS record resolution                 | DNS query (via dnspython, in-process)            | `resolved`, `ttl`, `matches_expected`            | — |
+| [`ddns_updater`](#ddns_updater)         | Dynamic DNS record kept current       | Public IP lookup + DNS query (in-process)        | `in_sync`, `last_update_epoch`                   | Force Update |
 | [`systemd_service`](#systemd_service)   | systemd unit state / last run         | SSH (`systemctl`)                                | `active` *or* `last_run_epoch`, `last_run_success` | Restart, Stop, Enable, Disable |
 | [`service_list`](#service_list)         | Systemd unit browser and control      | SSH (`systemctl`)                                | `services_total`, `services_active`, `services_failed` | Start, Stop, Restart, Enable, Disable, View Status |
 | [`smart_disk`](#smart_disk)             | Physical disk SMART health            | SSH (`smartctl`)                                 | `disks_total`, `disks_ok`, `disks_failed`       | — |
@@ -134,7 +136,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `systemd_service`, `service_list`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `interrupts`, `connections`, `wifi`, `ports`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `borg`, `gpu`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `interrupts`, `connections`, `wifi`, `ports`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `borg`, `gpu`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -189,6 +191,89 @@ curl "https://vigil.example.com/api/push/nightly-backup/a1b2c3d4e5f6...?status=u
 
 # Or report a failure the job detected itself, while still checking in on time:
 curl "https://vigil.example.com/api/push/nightly-backup/a1b2c3d4e5f6...?status=down&msg=disk+full"
+```
+
+---
+
+### `dns_record`
+Resolves a DNS record and reports failed on NXDOMAIN, no answer, a timeout, or (when `expected` is set) an answer outside the accepted values — catching a stale record, a botched migration, or a DNS provider outage.
+
+Runs in-process via [dnspython](https://www.dnspython.org/) rather than over SSH: there is no target host, only a domain to ask about. Query the system resolver by default, or point `resolver` at a specific one (public or internal) — doing so doubles as a liveness probe for that resolver, distinct from [`unbound`](#unbound)'s SERVFAIL-rate monitoring of one resolver's own stats.
+
+| Option        | Description                                                                 |
+|---------------|-------------------------------------------------------------------------------|
+| `domain`      | Domain name to query *(required)*                                            |
+| `record_type` | One of `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, `SOA` (default: `A`)          |
+| `resolver`    | Resolver IP to query directly (default: system resolver)                     |
+| `port`        | Resolver port (default: `53`)                                                |
+| `timeout`     | Query timeout in seconds (default: `5`)                                      |
+| `expected`    | *(Optional)* List of acceptable answer values. Any answer outside this list fails the monitor. Order-independent — only presence in the answer set is checked. |
+
+**Metrics**: `resolved` (1/0), `ttl` (seconds), `matches_expected` (1/0, only when `expected` is set)
+
+```yaml
+# Pin an A record to known IPs — fails if it ever points elsewhere
+- name: "Website A Record"
+  id: "website-a-record"
+  type: "dns_record"
+  domain: "example.com"
+  record_type: "A"
+  expected:
+    - "93.184.216.34"
+  interval: 5m
+
+# Confirm MX still points at the expected mail provider
+- name: "Mail Routing"
+  id: "example-mx"
+  type: "dns_record"
+  domain: "example.com"
+  record_type: "MX"
+  expected:
+    - "10 mail.example.com"
+  interval: 1h
+
+# Query a specific resolver directly, e.g. to check an internal DNS server
+- name: "Internal DNS"
+  id: "internal-dns-check"
+  type: "dns_record"
+  domain: "heimdall.technet"
+  resolver: "10.0.0.1"
+  interval: 1m
+```
+
+---
+
+### `ddns_updater`
+Keeps a DNS record pointed at this network's current public IP, and reports on it while doing so — a built-in replacement for standalone dynamic-DNS-updater services. Each cycle: look up the current public IP, resolve what the domain currently answers publicly, and push an update to the provider only when the two differ. Because a provider update is a real side effect (and most providers rate-limit or ban accounts that call too often), it is never fired on a fixed schedule — only on detected drift, and even then no more often than `min_interval`.
+
+Currently speaks FreeDNS's (afraid.org, including `*.mooo.com` and its other free subdomains) per-host dynamic update URL convention: a plain HTTPS GET to a secret, account-specific URL that updates the record to the caller's apparent IP, responding `good <ip>` or `nochg <ip>` on success. Other providers using the same "secret update URL" convention work too; anything returning JSON or requiring a signed request does not, yet.
+
+Resolves the public record against an explicit `resolver` (default `8.8.8.8`) rather than the local/default resolver — a local network commonly has a hosts-file override pinning this exact hostname to a LAN IP (so internal clients don't route out to the internet and back for it), which would mask real DDNS drift by always answering with that LAN IP instead.
+
+| Option        | Description                                                                 |
+|---------------|-------------------------------------------------------------------------------|
+| `domain`      | Domain whose public record is kept current *(required)*                      |
+| `update_url`  | Provider's per-host dynamic update URL, including its own secret token       |
+| `update_url_file` | Path to a file containing the update URL (keeps the token out of config.yaml) |
+| `update_url_command` | Shell command whose stdout is the update URL                         |
+| `resolver`    | Resolver IP to check the current public record against (default: `8.8.8.8`)  |
+| `record_type` | Record type being kept current (default: `A`)                                |
+| `timeout`     | Timeout in seconds for both the IP lookup and the update request (default: `10`) |
+| `min_interval`| Minimum seconds between update attempts regardless of how often `interval` ticks (default: `300`) |
+
+Precedence when more than one update-URL source is set: `update_url` > `update_url_file` > `update_url_command`.
+
+**Metrics**: `in_sync` (1/0), `last_update_epoch` (Unix timestamp of the last successful push)
+
+**Actions**: Force Update — pushes an update immediately regardless of detected drift, bypassing `min_interval`.
+
+```yaml
+- name: "DDNS"
+  id: "ddns-bltechnet"
+  type: "ddns_updater"
+  domain: "bltechnet.mooo.com"
+  update_url_file: "/run/secrets/freedns_update_url"
+  interval: 5m
 ```
 
 ---
@@ -1085,6 +1170,8 @@ exporters:
 - [x] VM monitor (libvirt/KVM via `virsh`, with start/shutdown)
 - [x] Cloud instance metadata monitor (AWS/GCP/Azure)
 - [x] Push monitor (dead man's switch — external heartbeat via REST API, per-monitor token)
+- [x] DNS record monitor (A/AAAA/CNAME/MX/TXT/NS/SOA via dnspython, custom resolver, expected-value pinning)
+- [x] Dynamic DNS updater (public IP lookup + FreeDNS-style update URL, drift-triggered with rate limiting, Force Update action)
 - [x] Unified, filterable events feed
 - [x] REST API for monitors, metrics, and events
 - [x] Prometheus `/metrics` export endpoint (pull)
