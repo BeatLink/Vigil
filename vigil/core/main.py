@@ -33,7 +33,7 @@ class VigilEngine:
         else:
             self.db_path = self.config_loader.database_settings.get('path', 'vigil.db')
         try:
-            self.db = VigilDatabase(self.db_path)
+            self.db = VigilDatabase(self.db_path, write_batch_seconds=self.config_loader.write_batch_seconds)
             self.db.insert_event("INFO", "Vigil Engine initialized.", "vigil_core")
             # Jobs are child processes of this one, so any still marked running
             # died with the previous Vigil. Clear them at startup or the UI will

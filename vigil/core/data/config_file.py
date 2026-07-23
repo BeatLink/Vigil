@@ -30,6 +30,32 @@ class ConfigFileManager:
         """Returns the database section or default path."""
         return self.data.get('database', {'path': 'vigil.db'})
 
+    # Default window over which queued DB writes (metrics, status history,
+    # events, log lines) are batched into one commit. Larger values mean
+    # fewer disk commits/fsyncs under load, at the cost of losing up to this
+    # many seconds of unwritten data on a crash.
+    DEFAULT_WRITE_BATCH_SECONDS = 5.0
+
+    @property
+    def write_batch_seconds(self) -> float:
+        """
+        Seconds the background DB writer accumulates queued writes before
+        committing them as one transaction.
+
+        Read from `database.write_batch_seconds`; defaults to
+        DEFAULT_WRITE_BATCH_SECONDS. A value <= 0 disables batching (each
+        write commits immediately, as before).
+        """
+        value = self.database_settings.get('write_batch_seconds', self.DEFAULT_WRITE_BATCH_SECONDS)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            logging.warning(
+                f"Invalid database.write_batch_seconds={value!r}; "
+                f"falling back to {self.DEFAULT_WRITE_BATCH_SECONDS}"
+            )
+            return self.DEFAULT_WRITE_BATCH_SECONDS
+
     @property
     def plugins(self) -> List[Dict[str, Any]]:
         """Returns the list of plugin configurations."""

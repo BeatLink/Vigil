@@ -2,6 +2,7 @@ import logging
 import hashlib
 import queue
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Any, Dict, Callable
 from peewee import *
@@ -20,10 +21,20 @@ class _AsyncWriter:
     for the caller) and this one thread drains the queue and commits them, so the
     fsync never happens on the event loop. A single writer also means SQLite only
     ever sees one writer, which is exactly what it wants.
+
+    Queued writes are additionally batched: rather than committing (and fsyncing
+    at the WAL checkpoint) on every single insert, the thread accumulates
+    whatever arrives within `batch_window` seconds and commits them as one
+    transaction. That trades up to `batch_window` seconds of durability — a
+    crash can lose the batch still in memory — for far fewer commit round-trips
+    under load. Acceptable here: this is monitoring data (metrics, status
+    history, events, log lines), not financial or user-authored records, and it
+    was already being written from a best-effort background thread.
     """
-    def __init__(self):
+    def __init__(self, batch_window: float = 5.0):
         self._q: "queue.Queue[Optional[Callable[[], None]]]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
+        self.batch_window = batch_window
         # When True, submit() executes inline instead of queueing. Used by tests
         # so a write is immediately visible to the following read.
         self.synchronous = False
@@ -52,15 +63,42 @@ class _AsyncWriter:
             if fn is None:  # sentinel (unused today; kept for clean shutdown)
                 self._q.task_done()
                 break
+
+            # Collect whatever else arrives within batch_window so the whole
+            # group commits (and fsyncs) once, instead of once per write.
+            batch = [fn]
+            deadline = time.monotonic() + self.batch_window
+            stop = False
+            while not stop:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                try:
+                    nxt = self._q.get(timeout=remaining)
+                except queue.Empty:
+                    break
+                if nxt is None:
+                    stop = True
+                    self._q.task_done()
+                    break
+                batch.append(nxt)
+
             try:
                 # This thread gets its own connection via connection_context();
                 # WAL lets it write while reader threads (web UI) read on theirs.
                 with db.connection_context():
-                    fn()
-            except Exception as e:
-                logging.error(f"DB write failed: {e}")
+                    with db.atomic():
+                        for item in batch:
+                            try:
+                                item()
+                            except Exception as e:
+                                logging.error(f"DB write failed: {e}")
             finally:
-                self._q.task_done()
+                for _ in batch:
+                    self._q.task_done()
+
+            if stop:
+                break
 
 
 _writer = _AsyncWriter()
@@ -260,9 +298,12 @@ class InternalDatabaseLogger:
 # DATABASE MANAGER ##################################################################################################################################
 class DatabaseManager:
     """Manages the Peewee ORM connection and schema for Vigil."""
-    def __init__(self, db_path: str = "vigil.db"):
+    def __init__(self, db_path: str = "vigil.db", write_batch_seconds: float = 5.0):
         self.db_path = db_path
+        _writer.batch_window = write_batch_seconds
         self._connect_and_init()
+        self._statuses_cache: Optional[Dict[str, str]] = None
+        self._statuses_cache_at: float = 0.0
 
     def _connect_and_init(self):
         """Connects to the database and creates tables if they don't exist."""
@@ -339,18 +380,27 @@ class DatabaseManager:
         """Block until all queued writes have been committed (mainly for tests)."""
         _writer.flush(timeout)
 
-    def latest_statuses(self) -> Dict[str, str]:
+    def latest_statuses(self, max_age: float = 2.0) -> Dict[str, str]:
         """
         Return {collector_id: state} with the most recent status for every
         monitor, in a single query.
 
         The dashboard renders a status per monitor in several places (tree,
-        table, charts). Doing one 'latest row' query per monitor means hundreds
-        of sequential SQLite reads at page load — slow, and worse while the
+        table, charts), each on its own timer, for every connected browser
+        tab. Doing one 'latest row' query per monitor means hundreds of
+        sequential SQLite reads at page load — slow, and worse while the
         polling loop holds the write lock. This collapses that to one grouped
         query. Monitors with no status row yet simply won't appear in the map;
         callers treat a missing id as 'offline'.
+
+        Results are cached for `max_age` seconds so the several widgets/tabs
+        that all poll this within the same tick share one query instead of
+        each hitting SQLite independently; callers already tolerate a few
+        seconds of staleness (that's the polling interval itself).
         """
+        now = time.monotonic()
+        if self._statuses_cache is not None and (now - self._statuses_cache_at) < max_age:
+            return self._statuses_cache
         with db.connection_context():
             # Highest id per collector_id == its most recent row (id is a
             # monotonic rowid, so it breaks timestamp ties deterministically
@@ -361,7 +411,10 @@ class DatabaseManager:
             query = (StatusHistory
                      .select(StatusHistory.collector_id, StatusHistory.state)
                      .where(StatusHistory.id.in_(newest)))
-            return {row.collector_id: row.state for row in query}
+            result = {row.collector_id: row.state for row in query}
+        self._statuses_cache = result
+        self._statuses_cache_at = now
+        return result
 
     def latest_metrics(self):
         """

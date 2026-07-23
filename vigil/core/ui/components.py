@@ -42,7 +42,7 @@ class _SafeTimer(ui.timer):
         return self._detached() or super()._should_stop()
 
 
-def safe_timer(interval: float, callback):
+def safe_timer(interval: float, callback, defer_first: bool = False):
     """
     Create a periodic timer that goes quiet once its page is torn down.
 
@@ -50,6 +50,11 @@ def safe_timer(interval: float, callback):
     disconnects, raising on every tick. This variant cancels itself instead —
     see _SafeTimer. The callback is additionally guarded so a teardown race
     mid-callback is swallowed rather than logged.
+
+    `defer_first=True` skips ui.timer's immediate first call (which otherwise
+    runs inline during widget construction, before the page has painted) and
+    instead fires it on the next event-loop tick, so navigation/clicks aren't
+    stuck behind that first DB query.
     """
     timer = None
 
@@ -63,7 +68,7 @@ def safe_timer(interval: float, callback):
                 return
             raise
 
-    timer = _SafeTimer(interval, _wrapped)
+    timer = _SafeTimer(interval, _wrapped, immediate=not defer_first)
     return timer
 
 

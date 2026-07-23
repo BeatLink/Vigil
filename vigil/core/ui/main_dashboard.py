@@ -97,10 +97,7 @@ def init_gui(engine: Any, port: int = 8080):
                   return 350
 
       def _save_drawer_width(width: int):
-          with Setting._meta.database.connection_context():
-              Setting.insert(
-                  key='drawer_width', value=str(width)
-              ).on_conflict_replace().execute()
+          engine.db.set_setting('drawer_width', str(width))
 
       drawer_width = _load_drawer_width()
 
@@ -200,8 +197,7 @@ def init_gui(engine: Any, port: int = 8080):
 
           def _save_expanded(e):
               ids = e.args if isinstance(e.args, list) else []
-              with Setting._meta.database.connection_context():
-                  Setting.insert(key='tree_expanded', value=json.dumps(ids)).on_conflict_replace().execute()
+              engine.db.set_setting('tree_expanded', json.dumps(ids))
 
           tree._props['expanded'] = _load_expanded()
           tree.update()
@@ -295,8 +291,7 @@ def init_gui(engine: Any, port: int = 8080):
           target_in.on_value_change(_on_target)
           search_in.on_value_change(_on_search)
 
-          refresh_events()
-          safe_timer(5.0, refresh_events)
+          safe_timer(5.0, refresh_events, defer_first=True)
 
       def render_overview():
           section_title('Monitors', 'mb-6 font-light')
@@ -464,8 +459,7 @@ def init_gui(engine: Any, port: int = 8080):
               type_chart.update()
               update_table()
 
-          update_charts()
-          safe_timer(10.0, update_charts)
+          safe_timer(10.0, update_charts, defer_first=True)
 
           with ui.row().classes('w-full gap-4'):
               with card('flex-1'):
