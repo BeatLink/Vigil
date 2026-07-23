@@ -313,11 +313,22 @@ class DatabaseManager:
             #   journal_mode=WAL    writes append to a log and fsync at
             #                       checkpoints, not per commit — and let readers
             #                       run concurrently with the writer.
-            #   synchronous=NORMAL  in WAL, only fsync at checkpoints, not on
-            #                       every commit (safe against app crashes; only
-            #                       a power loss at a checkpoint risks the last
-            #                       few durable writes — fine for monitoring).
-            #   cache_size=-65536   64 MB page cache in memory (negative = KiB).
+            #   synchronous=OFF     SQLite issues no fsync/fdatasync at all; the
+            #                       OS write() returns as soon as the page cache
+            #                       has it. This is what actually removes commit
+            #                       latency (WAL alone still fsyncs at
+            #                       checkpoints). Trade-off: a process crash is
+            #                       still safe (WAL's own recovery covers it),
+            #                       but an OS crash or power loss around a
+            #                       checkpoint can corrupt the WAL/lose recent
+            #                       writes — accepted here, same as the
+            #                       existing async-writer/batching trade-off,
+            #                       for monitoring data that isn't reasonable
+            #                       to fsync per row.
+            #   cache_size=-262144  256 MB page cache in memory (negative =
+            #                       KiB) — large enough that the working set
+            #                       for a typical Vigil install stays resident
+            #                       and reads rarely touch disk either.
             #   mmap_size=256 MB    memory-map the DB file so reads come from the
             #                       page cache instead of read() syscalls.
             #   temp_store=MEMORY   keep temp tables / sort scratch in RAM.
@@ -326,8 +337,8 @@ class DatabaseManager:
             #   busy_timeout        wait for a writer rather than erroring.
             db.init(self.db_path, pragmas={
                 'journal_mode': 'wal',
-                'synchronous': 1,            # NORMAL
-                'cache_size': -65536,        # 64 MB, in KiB
+                'synchronous': 0,            # OFF
+                'cache_size': -262144,       # 256 MB, in KiB
                 'mmap_size': 268435456,      # 256 MB
                 'temp_store': 2,             # MEMORY
                 'wal_autocheckpoint': 2000,  # pages (~8 MB) between checkpoints

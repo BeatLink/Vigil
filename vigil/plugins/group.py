@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Dict, Any, List
 from vigil.core.common.base_plugin import BasePlugin
-from vigil.core.data.database import StatusHistory, Setting
+from vigil.core.data.database import Setting
 from vigil.core.ui.theme import STATUS_COLORS, TEXT, TEXT_MUTED
 from vigil.core.ui.components import card
 
@@ -56,24 +56,20 @@ class GroupPlugin(BasePlugin):
         logging.debug(f"Group '{self.name}' aggregated status: {aggregated_status}")
 
     def _get_aggregated_status(self) -> str:
-        with StatusHistory._meta.database.connection_context():
-            current_max_severity = SEVERITY_ORDER['online']
+        statuses = self.db.latest_statuses()
+        current_max_severity = SEVERITY_ORDER['online']
 
-            for child in self.children:
-                latest = StatusHistory.select(StatusHistory.state).where(
-                    StatusHistory.collector_id == child.id
-                ).order_by(StatusHistory.timestamp.desc()).first()
+        for child in self.children:
+            child_status = statuses.get(child.id, 'offline')
+            child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['offline'])
 
-                child_status = latest.state if latest else 'offline'
-                child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['offline'])
+            if child_severity > current_max_severity:
+                current_max_severity = child_severity
 
-                if child_severity > current_max_severity:
-                    current_max_severity = child_severity
-
-            for status, severity in SEVERITY_ORDER.items():
-                if severity == current_max_severity:
-                    return status
-            return 'offline'
+        for status, severity in SEVERITY_ORDER.items():
+            if severity == current_max_severity:
+                return status
+        return 'offline'
 
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return False
@@ -107,14 +103,10 @@ class GroupPlugin(BasePlugin):
                 }}
             }}
         ''')
+        statuses = self.db.latest_statuses()
         with ui.element('div').classes(grid_cls):
             for child in self.children:
-                with StatusHistory._meta.database.connection_context():
-                    latest = StatusHistory.select(StatusHistory.state).where(
-                        StatusHistory.collector_id == child.id
-                    ).order_by(StatusHistory.timestamp.desc()).first()
-                    child_status = latest.state if latest else 'offline'
-
+                child_status = statuses.get(child.id, 'offline')
                 child_color = STATUS_COLORS.get(child_status, STATUS_COLORS['offline'])
                 col_span = int(child.config.get('grid_col_span', 1))
                 child_height = child.config.get('grid_height', None)
@@ -142,15 +134,27 @@ class GroupPlugin(BasePlugin):
 
                         body = ui.column().classes('w-full p-4 border-t border-gray-100')
                         body.set_visibility(is_open)
-                        with body:
-                            child.render_ui(context='inline')
+                        rendered = False
+                        if is_open:
+                            with body:
+                                child.render_ui(context='inline')
+                            rendered = True
 
-                    def _toggle(e=None, cid=child.id, _body=body, _chev=chevron):
-                        self._expanded[cid] = not self._expanded.get(cid, False)
-                        open_now = self._expanded[cid]
+                    def _toggle(e=None, c=child, _body=body, _chev=chevron):
+                        self._expanded[c.id] = not self._expanded.get(c.id, False)
+                        open_now = self._expanded[c.id]
                         _body.set_visibility(open_now)
                         angle = '180deg' if open_now else '0deg'
                         _chev.style(f'color: {TEXT_MUTED}; transition: transform 0.2s; transform: rotate({angle})')
                         self._save_expanded()
+                        # Deferred until first expand: a collapsed panel's
+                        # content (DB queries, per-child polling timers) never
+                        # ran, so most panels in a large group cost nothing
+                        # until the user actually opens them.
+                        nonlocal rendered
+                        if open_now and not rendered:
+                            with _body:
+                                c.render_ui(context='inline')
+                            rendered = True
 
                     header_row.on('click', _toggle)

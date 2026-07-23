@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 from nicegui import app, ui
-from vigil.core.data.database import DatabaseManager as VigilDatabase, Metric, Event, StatusHistory, Setting
+from vigil.core.data.database import Metric, Event, StatusHistory, Setting
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
 from .components import action_chip, card, section_title, safe_timer
 
@@ -22,15 +22,7 @@ def navigate_to(plugin_instance: Any):
 
 
 def init_gui(engine: Any, port: int = 8080):
-    db_path = engine.db_path
     engine_run_func = engine.run
-
-    # Initialize database connection context
-    try:
-        VigilDatabase(db_path)
-    except Exception as e:
-        logging.error(f"Could not connect to database: {e}")
-        return
 
     app.add_static_file(local_file=_ICON, url_path='/icon.svg')
 
