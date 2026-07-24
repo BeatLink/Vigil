@@ -1,12 +1,12 @@
 from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional, Union
 
-from vigil.core.common.plugin_config import PluginConfigMixin
+from vigil.core.common.plugin_helpers import PluginConfigMixin
 from vigil.core.common.time_utils import parse_duration
-from vigil.collector.collectors.ssh_collector import TIMEOUT as SSH_TIMEOUT
+from vigil.collector.ssh_runner import COLLECT_TIMEOUT as SSH_TIMEOUT
 from vigil.collector.orchestration.local_io_orchestrator import LocalIOOrchestrator
 from vigil.collector.orchestration.network_orchestrator import NetworkOrchestrator, SSHConnectionPool
-from vigil.collector.orchestration.storage_orchestrator import StorageOrchestrator
+from vigil.collector.orchestration.collector_storage_orchestrator import StorageOrchestrator
 from vigil.collector.orchestration.types import (
     ActionPlan, CmdResult, Command, CollectResult, JobPlan, LocalActionPlan,
 )

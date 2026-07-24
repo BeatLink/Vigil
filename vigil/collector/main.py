@@ -6,7 +6,7 @@ import random
 import sys
 import time
 from typing import List, Optional, Dict, Tuple
-from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.collector_plugin_base import CollectorPlugin
 from vigil.collector.orchestration.network_orchestrator import SSHConnectionPool
 from vigil.collector.orchestration.types import JobPlan
 from vigil.core.data.config_file import ConfigFileManager as VigilConfig

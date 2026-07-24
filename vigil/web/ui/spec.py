@@ -72,7 +72,7 @@ def _temp_c1(v):
 
 @register_formatter('bytes_gb')
 def _bytes_gb(v):
-    from vigil.core.common.plugin_utils import format_bytes
+    from vigil.core.common.plugin_helpers import format_bytes
     return '--' if v is None else format_bytes(v)
 
 @register_formatter('kbps_rate')
@@ -162,7 +162,7 @@ def threshold_color(warning: float, threshold: float):
     def rule(v):
         if v is None:
             return None
-        from vigil.core.common.plugin_utils import level_for
+        from vigil.core.common.plugin_helpers import level_for
         level = level_for(v, warning, threshold)
         return {'online': 'online', 'warning': 'warning', 'failed': 'failed'}[level]
     return rule

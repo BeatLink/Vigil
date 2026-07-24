@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
 
-from vigil.web.plugin_base import UIPlugin
+from vigil.web.web_plugin_base import UIPlugin
 
 
 class _ProbeUIPlugin(UIPlugin):

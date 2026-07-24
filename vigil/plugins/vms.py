@@ -1,8 +1,8 @@
 from typing import Dict, Any, List, Optional, Union
 
-from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.collector_plugin_base import CollectorPlugin
 from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.web.plugin_base import UIPlugin
+from vigil.web.web_plugin_base import UIPlugin
 
 _LIST_CMD = "virsh list --all"
 

@@ -2,9 +2,9 @@ import shlex
 import time as _time
 from typing import Any, Dict, List, Optional
 
-from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.collector_plugin_base import CollectorPlugin
 from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.plugin_base import UIPlugin
+from vigil.web.web_plugin_base import UIPlugin
 
 _PROPFIND_BODY = (
     '<?xml version="1.0"?>'

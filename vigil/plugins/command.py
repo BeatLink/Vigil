@@ -1,10 +1,10 @@
 import re
 from typing import Dict, Any, List, Optional
 
-from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.collector_plugin_base import CollectorPlugin
 from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.plugin_base import UIPlugin
-from vigil.core.common.plugin_utils import level_for as _level_for
+from vigil.web.web_plugin_base import UIPlugin
+from vigil.core.common.plugin_helpers import level_for as _level_for
 
 _DEFAULT_LAYOUT_METRIC = [
     ['host_card', 'exit_card', 'value_card'],

@@ -2,7 +2,7 @@ import asyncio
 import pytest
 from typing import List
 
-from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.collector_plugin_base import CollectorPlugin
 from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 
 
@@ -67,7 +67,7 @@ class TestReturnValue:
 
 class TestTimeoutConfig:
     def test_defaults_to_framework_timeout(self, make_plugin):
-        from vigil.collector.collectors.ssh_collector import TIMEOUT
+        from vigil.collector.ssh_runner import TIMEOUT
         p = make_plugin(_Probe, {})
         assert p.timeout == TIMEOUT
 

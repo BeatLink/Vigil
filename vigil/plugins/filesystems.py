@@ -1,8 +1,8 @@
 from typing import Dict, Any, List
-from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.collector_plugin_base import CollectorPlugin
 from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.plugin_base import UIPlugin
-from vigil.core.common.plugin_utils import format_bytes as _format_gb
+from vigil.web.web_plugin_base import UIPlugin
+from vigil.core.common.plugin_helpers import format_bytes as _format_gb
 
 _EXCLUDE_TYPES = ['tmpfs', 'devtmpfs', 'squashfs', 'overlay', 'proc', 'sysfs',
                   'cgroup', 'cgroup2', 'devpts', 'mqueue', 'debugfs',

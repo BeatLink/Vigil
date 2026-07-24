@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 from typing import List
 
-from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.collector_plugin_base import CollectorPlugin
 from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.core.data.database import db, Event, Metric
 

@@ -5,9 +5,9 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Union
 
-from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.collector_plugin_base import CollectorPlugin
 from vigil.collector.orchestration.types import CmdResult, Command, CollectResult, JobPlan
-from vigil.web.plugin_base import UIPlugin
+from vigil.web.web_plugin_base import UIPlugin
 from vigil.core.common.time_utils import parse_duration, format_duration, format_age
 
 

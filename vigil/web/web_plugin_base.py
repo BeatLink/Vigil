@@ -1,9 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional, Tuple, Union
 
-from vigil.core.common.plugin_config import PluginConfigMixin
-from vigil.web.orchestration.storage_orchestrator import WebStorageOrchestrator
-from vigil.web.orchestration.ui_orchestrator import UIOrchestrator
+from vigil.core.common.plugin_helpers import PluginConfigMixin
+from vigil.web.orchestration import WebStorageOrchestrator, UIOrchestrator
 from vigil.web.remote_proxy import RemoteNetworkOrchestrator
 
 

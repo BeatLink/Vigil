@@ -3,7 +3,7 @@ import inspect
 import logging
 from typing import Any, Dict, List, Optional
 
-from vigil.web.plugin_base import UIPlugin
+from vigil.web.web_plugin_base import UIPlugin
 from vigil.core.data.config_file import ConfigFileManager as VigilConfig
 from vigil.core.data.database import DatabaseManager as VigilDatabase
 from vigil.web.remote_proxy import CollectorClient

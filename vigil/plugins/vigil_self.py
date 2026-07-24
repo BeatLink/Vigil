@@ -2,10 +2,10 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.collector_plugin_base import CollectorPlugin
 from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.plugin_base import UIPlugin
-from vigil.core.common.plugin_utils import level_for as _level_for
+from vigil.web.web_plugin_base import UIPlugin
+from vigil.core.common.plugin_helpers import level_for as _level_for
 
 _CLOCK_TICKS = os.sysconf('SC_CLK_TCK') if hasattr(os, 'sysconf') else 100
 

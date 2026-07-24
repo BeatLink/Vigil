@@ -1,9 +1,9 @@
 import re
 from typing import Any, Dict, List
 
-from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.collector_plugin_base import CollectorPlugin
 from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.plugin_base import UIPlugin
+from vigil.web.web_plugin_base import UIPlugin
 
 _ARRAY_RE = re.compile(r'^(md\d+)\s*:\s*(\S+)\s+(\S+)', re.MULTILINE)
 _STATE_RE = re.compile(r'\[(\d+)/(\d+)\]\s*\[([U_]+)\]')

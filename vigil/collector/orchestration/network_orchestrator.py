@@ -2,8 +2,7 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.core.common.ssh_connector import SSHConnection
-from vigil.collector.collectors.ssh_collector import SSHCollector
-from vigil.collector.controllers.ssh_controller import SSHController
+from vigil.collector.ssh_runner import SSHCollector, SSHController
 from vigil.collector.controllers.job_controller import JobController
 from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, JobPlan
 
