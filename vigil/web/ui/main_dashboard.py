@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 from nicegui import app, ui
-from vigil.core.data.database import Metric, Event, StatusHistory, Setting
+from vigil.core.data.database import Setting
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
 from .components import action_chip, card, section_title, safe_timer, on_data_event, offload
 
@@ -271,7 +271,7 @@ def init_gui(engine: Any, port: int = 8080):
               ''' % (_LEVEL_COLORS['ERROR'], _LEVEL_COLORS['WARNING'], _LEVEL_COLORS['INFO']))
 
           async def refresh_events():
-              rows = await offload(engine.db.recent_events)(
+              rows = await offload(engine.db.recent_events_cached)(
                   limit=500,
                   level=ev_filter['level'],
                   target=(ev_filter['target'] or None),
@@ -486,12 +486,8 @@ def init_gui(engine: Any, port: int = 8080):
                   ]
                   m_table = ui.table(columns=metric_columns, rows=[]).classes('w-full')
 
-                  def _read_metrics():
-                      query = Metric.select().order_by(Metric.timestamp.desc()).limit(20)
-                      return [m.__data__ for m in query]
-
                   async def update_m():
-                      m_table.rows = await offload(_read_metrics)()
+                      m_table.rows = await offload(engine.db.recent_metrics_raw_cached)(limit=20)
                       m_table.update()
                   on_data_event('metric', m_table, update_m)
 
@@ -505,12 +501,8 @@ def init_gui(engine: Any, port: int = 8080):
                   ]
                   e_table = ui.table(columns=event_columns, rows=[]).classes('w-full')
 
-                  def _read_events():
-                      query = Event.select().order_by(Event.timestamp.desc()).limit(20)
-                      return [e.__data__ for e in query]
-
                   async def update_e():
-                      e_table.rows = await offload(_read_events)()
+                      e_table.rows = await offload(engine.db.recent_events_raw_cached)(limit=20)
                       e_table.update()
                   on_data_event('event', e_table, update_e)
 

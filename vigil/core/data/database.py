@@ -367,6 +367,39 @@ class DatabaseManager:
         self._statuses_cache_at: float = 0.0
         self._metric_cache: Dict[tuple, Any] = {}
         self._metric_cache_at: Dict[tuple, float] = {}
+        # Generic keyed TTL cache for every other read the dashboard repeats
+        # every tick — recent_events, LogLine/Event feeds, metric history,
+        # status history. See _cached() below for why one cache covers all
+        # of these instead of a dedicated pair of dicts per query shape.
+        self._read_cache: Dict[tuple, Any] = {}
+        self._read_cache_at: Dict[tuple, float] = {}
+
+    def _cached(self, key: tuple, max_age: float, fetch: Callable[[], Any]) -> Any:
+        """
+        Return `fetch()`'s result, reused for `max_age` seconds per unique `key`.
+
+        The dashboard's overview page, every plugin detail page, and every
+        expanded child inside a group each poll roughly once a second, and
+        several of those often want the exact same rows (two tabs open on
+        the same monitor, a group with the same metric shown in a card and a
+        chart). Without this, each of those is its own SQLite round-trip;
+        with it, the first caller in a ~1s window pays for the query and
+        the rest reuse its result. `max_age` should not be set below the
+        writer's batch window (DEFAULT_WRITE_BATCH_SECONDS) — polling faster
+        than a write can land doesn't see fresher data anyway.
+
+        Mirrors latest_statuses()'s original single-purpose cache, widened
+        to a keyed dict so every parameterized query (limit, filters, ids)
+        gets its own slot instead of each needing a bespoke pair of fields.
+        """
+        now = time.monotonic()
+        cached_at = self._read_cache_at.get(key)
+        if cached_at is not None and (now - cached_at) < max_age:
+            return self._read_cache[key]
+        result = fetch()
+        self._read_cache[key] = result
+        self._read_cache_at[key] = now
+        return result
 
     def _connect_and_init(self):
         """Connects to the database and creates tables if they don't exist."""
@@ -532,21 +565,120 @@ class DatabaseManager:
         latest_statuses() does — polling faster than a write can land doesn't
         see fresher data anyway.
         """
-        key = (collector, metric_name)
-        now = time.monotonic()
-        cached_at = self._metric_cache_at.get(key)
-        if cached_at is not None and (now - cached_at) < max_age:
-            return self._metric_cache[key]
-        with db.connection_context():
-            result = (
-                Metric.select()
-                .where((Metric.collector == collector) & (Metric.metric_name == metric_name))
-                .order_by(Metric.timestamp.desc())
-                .first()
-            )
-        self._metric_cache[key] = result
-        self._metric_cache_at[key] = now
-        return result
+        def _fetch():
+            with db.connection_context():
+                return (
+                    Metric.select()
+                    .where((Metric.collector == collector) & (Metric.metric_name == metric_name))
+                    .order_by(Metric.timestamp.desc())
+                    .first()
+                )
+        return self._cached(('metric', collector, metric_name), max_age, _fetch)
+
+    def metric_history_cached(self, collector: str, metric_name: str, limit: int = 30, max_age: float = 1.0):
+        """
+        Return the last `limit` Metric rows for (collector, metric_name),
+        oldest first — the series history_chart plots. Cached the same way
+        as latest_metric_cached: a group with several children showing the
+        same chart, or two open tabs, would otherwise each re-run this.
+        """
+        def _fetch():
+            with db.connection_context():
+                rows = (
+                    Metric.select()
+                    .where((Metric.collector == collector) & (Metric.metric_name == metric_name))
+                    .order_by(Metric.timestamp.desc())
+                    .limit(limit)
+                )
+                return list(reversed(rows))
+        return self._cached(('metric_history', collector, metric_name, limit), max_age, _fetch)
+
+    def collector_metrics_cached(self, collector: str, limit: int = 15, max_age: float = 1.0):
+        """Cached recent-metrics feed (all metric names) for metric_table."""
+        def _fetch():
+            with db.connection_context():
+                query = (Metric.select()
+                         .where(Metric.collector == collector)
+                         .order_by(Metric.timestamp.desc())
+                         .limit(limit))
+                return [m.__data__ for m in query]
+        return self._cached(('collector_metrics', collector, limit), max_age, _fetch)
+
+    def log_lines_cached(self, target: str, filter_prefix: str = '', limit: int = 15, max_age: float = 1.0):
+        """Cached LogLine feed for log_table — see metric_history_cached."""
+        def _fetch():
+            with db.connection_context():
+                condition = (LogLine.target == target)
+                if filter_prefix:
+                    condition &= (LogLine.source == filter_prefix)
+                query = LogLine.select().where(condition).order_by(LogLine.timestamp.desc()).limit(limit)
+                return [e.__data__ for e in query]
+        return self._cached(('log_lines', target, filter_prefix, limit), max_age, _fetch)
+
+    def plugin_events_cached(self, plugin_id: str = '', prefix: str = '', target: str = '',
+                             limit: int = 100, max_age: float = 1.0):
+        """Cached Event feed for event_table — see metric_history_cached."""
+        def _fetch():
+            with db.connection_context():
+                if plugin_id:
+                    condition = (Event.source_id == plugin_id)
+                else:
+                    condition = Event.message.startswith(prefix)
+                    if target:
+                        condition &= (Event.target == target)
+                query = (Event.select()
+                         .where(condition)
+                         .order_by(Event.timestamp.desc())
+                         .limit(limit))
+                return [
+                    {
+                        'timestamp': e.timestamp.isoformat(sep=' ', timespec='seconds'),
+                        'level': e.level,
+                        'message': e.message[len(prefix):] if prefix and e.message.startswith(prefix)
+                                   else e.message,
+                    }
+                    for e in query
+                ]
+        return self._cached(('plugin_events', plugin_id, prefix, target, limit), max_age, _fetch)
+
+    def recent_metrics_raw_cached(self, limit: int = 20, max_age: float = 1.0):
+        """Cached "last N metrics across every collector" feed for the
+        overview page's Recent System Metrics table."""
+        def _fetch():
+            with db.connection_context():
+                query = Metric.select().order_by(Metric.timestamp.desc()).limit(limit)
+                return [m.__data__ for m in query]
+        return self._cached(('recent_metrics_raw', limit), max_age, _fetch)
+
+    def recent_events_raw_cached(self, limit: int = 20, max_age: float = 1.0):
+        """Cached "last N events across every collector" feed for the
+        overview page's Recent Events table."""
+        def _fetch():
+            with db.connection_context():
+                query = Event.select().order_by(Event.timestamp.desc()).limit(limit)
+                return [e.__data__ for e in query]
+        return self._cached(('recent_events_raw', limit), max_age, _fetch)
+
+    def recent_events_cached(self, limit: int = 200, level: Optional[str] = None,
+                             target: Optional[str] = None, search: Optional[str] = None,
+                             max_age: float = 1.0):
+        """Cached wrapper around recent_events() for the dashboard's Events
+        page — see recent_events()'s docstring for why the method itself
+        stays uncached (the REST API shares it and expects a live read)."""
+        key = ('recent_events', limit, level, target, search)
+        return self._cached(key, max_age, lambda: self.recent_events(
+            limit=limit, level=level, target=target, search=search))
+
+    def latest_status_cached(self, collector_id: str, max_age: float = 1.0):
+        """Cached single-collector status lookup for PluginPage.refresh_status."""
+        def _fetch():
+            with db.connection_context():
+                row = (StatusHistory.select()
+                       .where(StatusHistory.collector_id == collector_id)
+                       .order_by(StatusHistory.timestamp.desc())
+                       .first())
+                return row.state if row else 'offline'
+        return self._cached(('status', collector_id), max_age, _fetch)
 
     def insert_event(self, level: str, message: str, target: Optional[str] = None,
                      source_id: Optional[str] = None):
@@ -562,7 +694,10 @@ class DatabaseManager:
 
         Returns a list of plain dicts (not model instances) so callers — the
         events UI and the REST API — can consume it without holding a DB
-        connection or importing peewee models.
+        connection or importing peewee models. Uncached: the REST API expects
+        an on-demand read, not a 1s-stale one. The dashboard's Events page
+        caches around this at the call site instead (main_dashboard.py's
+        refresh_events) so only the polling UI gets the reuse, not the API.
         """
         with db.connection_context():
             query = Event.select().order_by(Event.timestamp.desc())

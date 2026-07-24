@@ -237,7 +237,6 @@ def metric_table(page, collector: str, title: str = 'Monitor Metrics', limit: in
     an explicit `.rows = ...; .update()` step — just driven by the shared
     tick instead of a per-widget one.
     """
-    from vigil.core.data.database import Metric
     with card():
         ui.label(title).classes('font-bold mb-2').style(f'color: {PRIMARY}')
         table = ui.table(columns=[
@@ -247,8 +246,7 @@ def metric_table(page, collector: str, title: str = 'Monitor Metrics', limit: in
         ], rows=[]).classes('w-full border-none')
 
         def _read():
-            query = Metric.select().where(Metric.collector == collector).order_by(Metric.timestamp.desc()).limit(limit)
-            return [m.__data__ for m in query]
+            return page.plugin.db.collector_metrics_cached(collector, limit=limit)
 
         async def update():
             table.rows = await offload(_read)()
@@ -270,7 +268,6 @@ def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent L
     prefix it shows every source for the target. See metric_table's docstring
     for why this refreshes via `page` rather than binding table.rows directly.
     """
-    from vigil.core.data.database import LogLine
     card_classes = 'w-full overflow-hidden flex-grow' if full_height else ''
 
     with card(card_classes, padding=not full_height):
@@ -295,11 +292,7 @@ def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent L
             table.props('virtual-scroll')
 
         def _read():
-            condition = (LogLine.target == target)
-            if filter_prefix:
-                condition &= (LogLine.source == filter_prefix)
-            query = LogLine.select().where(condition).order_by(LogLine.timestamp.desc()).limit(limit)
-            return [e.__data__ for e in query]
+            return page.plugin.db.log_lines_cached(target, filter_prefix, limit=limit)
 
         async def update_logs():
             table.rows = await offload(_read)()
@@ -329,7 +322,6 @@ def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
     monitors' events. The prefix is still stripped for display. See
     metric_table's docstring for why this refreshes via `page`.
     """
-    from vigil.core.data.database import Event
     prefix = f"[{plugin_name}] "
     card_classes = 'w-full overflow-hidden flex-grow' if full_height else ''
 
@@ -352,30 +344,7 @@ def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
             table.props('virtual-scroll')
 
         def _read():
-            if plugin_id:
-                condition = (Event.source_id == plugin_id)
-            else:
-                # No id given (or rows predating source_id): fall back to the
-                # message prefix, narrowed by target. Ambiguous where two
-                # monitors share a name on one host, but better than nothing.
-                condition = Event.message.startswith(prefix)
-                if target:
-                    condition &= (Event.target == target)
-            query = (Event.select()
-                     .where(condition)
-                     .order_by(Event.timestamp.desc())
-                     .limit(limit))
-            return [
-                {
-                    'timestamp': e.timestamp.isoformat(sep=' ', timespec='seconds'),
-                    'level': e.level,
-                    # The prefix is how rows are found; repeating it on every
-                    # line of a single plugin's own table is just noise.
-                    'message': e.message[len(prefix):] if e.message.startswith(prefix)
-                               else e.message,
-                }
-                for e in query
-            ]
+            return page.plugin.db.plugin_events_cached(plugin_id, prefix, target, limit=limit)
 
         async def update():
             table.rows = await offload(_read)()
@@ -393,7 +362,6 @@ def history_chart(page, title: str, collector: str, metric_name: str, limit: int
     metric_table's docstring for why this refreshes via `page` — ui.echart's
     `options` has the same no-on-change-hook limitation as table.rows.
     """
-    from vigil.core.data.database import Metric
     with card('w-full h-80 mb-4 p-2', padding=False):
         ui.label(title.upper()).classes(f'{LABEL_CLASS} mb-1')
         chart = ui.echart({
@@ -411,10 +379,7 @@ def history_chart(page, title: str, collector: str, metric_name: str, limit: int
         }).classes('w-full h-72')
 
         def _read():
-            history = Metric.select().where(
-                (Metric.collector == collector) & (Metric.metric_name == metric_name)
-            ).order_by(Metric.timestamp.desc()).limit(limit)
-            history = list(reversed(history))
+            history = page.plugin.db.metric_history_cached(collector, metric_name, limit=limit)
             return (
                 [m.timestamp.strftime('%H:%M:%S') for m in history],
                 [m.value for m in history],
