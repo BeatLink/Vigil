@@ -1,6 +1,34 @@
+import asyncio
 from nicegui import ui
 from vigil.core.data.events import bus
 from .theme import TEXT, TEXT_MUTED, PRIMARY, ACCENT, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
+
+
+def offload(read_fn):
+    """
+    Wrap a blocking DB read so it runs in the default thread pool executor
+    instead of inline on NiceGUI's single asyncio event loop.
+
+    Every dashboard widget refresh used to run its SQLite query directly
+    inside a ui.timer callback on the event loop thread. NiceGUI's websocket
+    heartbeat (ping/pong, driven by `reconnect_timeout`, default 3s/2s) also
+    runs on that same loop — with 47 plugin pages and several always-on
+    overview widgets each polling every ~1s, enough of those blocking reads
+    landing close together stalls the loop long enough to miss a pong, and
+    the browser sees it as a dropped connection. That's the dashboard's
+    "lags and disconnects" symptom, not (only) a caching problem.
+
+    `read_fn` must be pure I/O — no NiceGUI element access — since it runs
+    off the event loop; only the *result* of awaiting this wrapper is safe
+    to hand to a widget back on the loop. Element updates like `.rows = ...`
+    / `.update()` are not thread-safe (they touch plain dicts and an
+    asyncio.Event without call_soon_threadsafe), so callers must apply the
+    result after awaiting, never inside `read_fn` itself.
+    """
+    async def _run(*args, **kwargs):
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: read_fn(*args, **kwargs))
+    return _run
 
 
 class _SafeTimer(ui.timer):
@@ -56,12 +84,22 @@ def safe_timer(interval: float, callback, defer_first: bool = False):
     runs inline during widget construction, before the page has painted) and
     instead fires it on the next event-loop tick, so navigation/clicks aren't
     stuck behind that first DB query.
+
+    `callback` may be a plain function or an async function — NiceGUI's own
+    Timer._invoke_callback already awaits a callback that returns an
+    awaitable (see helpers.should_await), so an async callback here just
+    works. Widgets should prefer async callbacks that `offload()` their DB
+    read: see offload()'s docstring for why a synchronous callback blocking
+    on SQLite here is what causes the dashboard's disconnects.
     """
+    from nicegui import helpers
     timer = None
 
-    def _wrapped():
+    async def _wrapped():
         try:
-            callback()
+            result = callback()
+            if helpers.should_await(result):
+                await result
         except RuntimeError as e:
             if 'parent slot' in str(e) or 'has been deleted' in str(e):
                 if timer is not None:
@@ -136,18 +174,21 @@ def on_data_event(event, element, callback, run_now: bool = True):
         except Exception:
             return True
 
+    from nicegui import helpers
     offs: list = []
 
     def _unsubscribe():
         for off in offs:
             off()
 
-    def _wrapped():
+    async def _wrapped():
         if _detached():
             _unsubscribe()
             return
         try:
-            callback()
+            result = callback()
+            if helpers.should_await(result):
+                await result
         except RuntimeError as e:
             if 'parent slot' not in str(e) and 'has been deleted' not in str(e):
                 raise
@@ -205,13 +246,17 @@ def metric_table(page, collector: str, title: str = 'Monitor Metrics', limit: in
             {'name': 'val', 'label': 'Value', 'field': 'value', 'align': 'left'},
         ], rows=[]).classes('w-full border-none')
 
-        def update():
+        def _read():
             query = Metric.select().where(Metric.collector == collector).order_by(Metric.timestamp.desc()).limit(limit)
-            table.rows = [m.__data__ for m in query]
+            return [m.__data__ for m in query]
+
+        async def update():
+            table.rows = await offload(_read)()
             table.update()
 
         page.on_refresh(update)
-        update()
+        table.rows = _read()
+        table.update()
         return table
 
 def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent Logs',
@@ -249,16 +294,20 @@ def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent L
         if full_height:
             table.props('virtual-scroll')
 
-        def update_logs():
+        def _read():
             condition = (LogLine.target == target)
             if filter_prefix:
                 condition &= (LogLine.source == filter_prefix)
             query = LogLine.select().where(condition).order_by(LogLine.timestamp.desc()).limit(limit)
-            table.rows = [e.__data__ for e in query]
+            return [e.__data__ for e in query]
+
+        async def update_logs():
+            table.rows = await offload(_read)()
             table.update()
 
         page.on_refresh(update_logs)
-        update_logs()
+        table.rows = _read()
+        table.update()
         return table
 
 def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
@@ -302,7 +351,7 @@ def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
         if full_height:
             table.props('virtual-scroll')
 
-        def update():
+        def _read():
             if plugin_id:
                 condition = (Event.source_id == plugin_id)
             else:
@@ -316,7 +365,7 @@ def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
                      .where(condition)
                      .order_by(Event.timestamp.desc())
                      .limit(limit))
-            table.rows = [
+            return [
                 {
                     'timestamp': e.timestamp.isoformat(sep=' ', timespec='seconds'),
                     'level': e.level,
@@ -327,10 +376,14 @@ def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
                 }
                 for e in query
             ]
+
+        async def update():
+            table.rows = await offload(_read)()
             table.update()
 
         page.on_refresh(update)
-        update()
+        table.rows = _read()
+        table.update()
         return table
 
 
@@ -357,17 +410,27 @@ def history_chart(page, title: str, collector: str, metric_name: str, limit: int
             }]
         }).classes('w-full h-72')
 
-        def update():
+        def _read():
             history = Metric.select().where(
                 (Metric.collector == collector) & (Metric.metric_name == metric_name)
             ).order_by(Metric.timestamp.desc()).limit(limit)
             history = list(reversed(history))
-            chart.options['xAxis']['data'] = [m.timestamp.strftime('%H:%M:%S') for m in history]
-            chart.options['series'][0]['data'] = [m.value for m in history]
+            return (
+                [m.timestamp.strftime('%H:%M:%S') for m in history],
+                [m.value for m in history],
+            )
+
+        def _apply(data):
+            x, y = data
+            chart.options['xAxis']['data'] = x
+            chart.options['series'][0]['data'] = y
             chart.update()
 
+        async def update():
+            _apply(await offload(_read)())
+
         page.on_refresh(update)
-        update()
+        _apply(_read())
         return chart
 
 def render_host_card(target: str):

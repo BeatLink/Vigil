@@ -35,11 +35,12 @@ tick (not one per widget), scalar fields get real diffing (no redundant
 websocket writes for unchanged values), and row-based widgets still
 refresh from a single shared driver instead of N independent timers.
 """
+import asyncio
 from typing import Any, Callable, Dict, List
 
-from nicegui import binding
+from nicegui import binding, helpers
 
-from .components import safe_timer
+from .components import safe_timer, offload
 
 
 @binding.bindable_dataclass
@@ -112,13 +113,30 @@ class PluginPage:
         response". The timer itself still uses defer_first=True — this
         first refresh already did the initial paint's DB read, so the
         timer's own immediate-first-call would just repeat it.
-        """
-        def _tick():
-            self._refresh_model()
-            for cb in self._refresh_callbacks:
-                cb()
 
-        _tick()  # populate real data before anything is ever shown to a client
+        Row-based widgets (metric_table, log_table, event_table,
+        history_chart) each already do their own synchronous initial paint
+        inline when built, before registering with on_refresh — so this only
+        needs to cover the model's own scalar fields, not call the
+        (possibly-async, offloaded) on_refresh callbacks a second time here.
+
+        Every subsequent tick runs its DB reads (_refresh_model and each
+        on_refresh callback) off the event loop via `offload` — see that
+        function's docstring for why a blocking read inline on the loop
+        causes the dashboard's disconnects, not just its lag. The
+        synchronous call below stays inline: it runs during page
+        construction, before the client is attached, so there's no
+        websocket heartbeat yet to stall.
+        """
+        self._refresh_model()
+
+        async def _tick():
+            await self._refresh_model_async()
+            for cb in self._refresh_callbacks:
+                result = cb()
+                if helpers.should_await(result):
+                    await result
+
         self._timer = safe_timer(self._interval, _tick, defer_first=True)
 
     def _refresh_model(self) -> None:
@@ -128,6 +146,18 @@ class PluginPage:
                 m = self.plugin.latest_metric(name)
                 metrics[name] = m.value if m is not None else None
             self.model.metrics = metrics
+
+    async def _refresh_model_async(self) -> None:
+        if not self._metric_names:
+            return
+        names = list(self._metric_names)
+        values = await offload(
+            lambda: [self.plugin.latest_metric(n) for n in names]
+        )()
+        metrics = dict(self.model.metrics)
+        for name, m in zip(names, values):
+            metrics[name] = m.value if m is not None else None
+        self.model.metrics = metrics
 
     def refresh_status(self) -> None:
         """Populate model.status/status_color from the plugin's latest

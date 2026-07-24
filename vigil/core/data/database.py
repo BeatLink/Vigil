@@ -365,6 +365,8 @@ class DatabaseManager:
         self._connect_and_init()
         self._statuses_cache: Optional[Dict[str, str]] = None
         self._statuses_cache_at: float = 0.0
+        self._metric_cache: Dict[tuple, Any] = {}
+        self._metric_cache_at: Dict[tuple, float] = {}
 
     def _connect_and_init(self):
         """Connects to the database and creates tables if they don't exist."""
@@ -516,6 +518,35 @@ class DatabaseManager:
                 }
                 for m in query
             ]
+
+    def latest_metric_cached(self, collector: str, metric_name: str, max_age: float = 1.0):
+        """
+        Return the most recent Metric row for (collector, metric_name), reusing
+        a cached result if it was fetched within `max_age` seconds.
+
+        Mirrors latest_statuses()'s cache: the web dashboard can have several
+        widgets and browser tabs reading the same plugin's same metric within
+        one refresh tick (status_card + a history_chart + a second tab), and
+        without this each of those is its own SQLite round-trip. `max_age`
+        defaults to the write-batch window for the same reason
+        latest_statuses() does — polling faster than a write can land doesn't
+        see fresher data anyway.
+        """
+        key = (collector, metric_name)
+        now = time.monotonic()
+        cached_at = self._metric_cache_at.get(key)
+        if cached_at is not None and (now - cached_at) < max_age:
+            return self._metric_cache[key]
+        with db.connection_context():
+            result = (
+                Metric.select()
+                .where((Metric.collector == collector) & (Metric.metric_name == metric_name))
+                .order_by(Metric.timestamp.desc())
+                .first()
+            )
+        self._metric_cache[key] = result
+        self._metric_cache_at[key] = now
+        return result
 
     def insert_event(self, level: str, message: str, target: Optional[str] = None,
                      source_id: Optional[str] = None):

@@ -89,14 +89,14 @@ class UIPlugin(PluginConfigMixin, ABC):
         return await self._collector_client.poll(self.id)
 
     def latest_metric(self, metric_name: str):
-        """Same query as CollectorPlugin.latest_metric — a plain DB read."""
-        from vigil.core.data.database import Metric
-        return (
-            Metric.select()
-            .where((Metric.collector == self.id) & (Metric.metric_name == metric_name))
-            .order_by(Metric.timestamp.desc())
-            .first()
-        )
+        """
+        Same query as CollectorPlugin.latest_metric, but cached for a second
+        (DatabaseManager.latest_metric_cached) — the web process can have
+        several widgets/tabs asking for the same plugin's same metric within
+        one refresh tick, and the collector never writes faster than its own
+        batch window anyway, so nothing is lost by sharing that one read.
+        """
+        return self.db.latest_metric_cached(self.id, metric_name)
 
     def page(self, metric_names: List[str] = (), interval: float = 1.0) -> "PluginPage":
         """

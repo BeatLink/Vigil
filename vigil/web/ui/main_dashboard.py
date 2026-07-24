@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from nicegui import app, ui
 from vigil.core.data.database import Metric, Event, StatusHistory, Setting
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
-from .components import action_chip, card, section_title, safe_timer, on_data_event
+from .components import action_chip, card, section_title, safe_timer, on_data_event, offload
 
 _ICON = Path(__file__).parent.parent.parent / 'static' / 'icon.svg'
 
@@ -185,8 +185,8 @@ def init_gui(engine: Any, port: int = 8080):
               </span>
           ''')
         
-          def refresh_tree():
-              tree._props['nodes'] = build_tree_nodes(engine.plugins)
+          async def refresh_tree():
+              tree._props['nodes'] = await offload(build_tree_nodes)(engine.plugins)
               tree.update()
 
           # Refresh tree data (dots and nodes) whenever a monitor's status changes
@@ -270,8 +270,8 @@ def init_gui(engine: Any, port: int = 8080):
                   </q-td>
               ''' % (_LEVEL_COLORS['ERROR'], _LEVEL_COLORS['WARNING'], _LEVEL_COLORS['INFO']))
 
-          def refresh_events():
-              rows = engine.db.recent_events(
+          async def refresh_events():
+              rows = await offload(engine.db.recent_events)(
                   limit=500,
                   level=ev_filter['level'],
                   target=(ev_filter['target'] or None),
@@ -280,17 +280,17 @@ def init_gui(engine: Any, port: int = 8080):
               events_table.rows = rows
               events_table.update()
 
-          def _on_level(e):
+          async def _on_level(e):
               ev_filter['level'] = e.value
-              refresh_events()
+              await refresh_events()
 
-          def _on_target(e):
+          async def _on_target(e):
               ev_filter['target'] = (e.value or '').strip() or None
-              refresh_events()
+              await refresh_events()
 
-          def _on_search(e):
+          async def _on_search(e):
               ev_filter['search'] = (e.value or '').strip() or None
-              refresh_events()
+              await refresh_events()
 
           level_sel.on_value_change(_on_level)
           target_in.on_value_change(_on_target)
@@ -398,13 +398,13 @@ def init_gui(engine: Any, port: int = 8080):
               else:
                   filter_row.set_visibility(False)
 
-          def _clear_filter():
+          async def _clear_filter():
               filter_state['field'] = None
               filter_state['value'] = None
               _update_filter_ui()
-              update_table()
+              await update_table()
 
-          def _set_filter(field: str, raw_value: str):
+          async def _set_filter(field: str, raw_value: str):
               value = raw_value.lower()
               if filter_state['field'] == field and filter_state['value'] == value:
                   filter_state['field'] = None
@@ -413,14 +413,13 @@ def init_gui(engine: Any, port: int = 8080):
                   filter_state['field'] = field
                   filter_state['value'] = value
               _update_filter_ui()
-              update_table()
+              await update_table()
 
           status_chart.on_point_click(lambda e: _set_filter('status', e.name))
           type_chart.on_point_click(lambda e: _set_filter('type', e.name))
 
-          def update_table():
+          def _build_table_rows(statuses):
               rows = []
-              statuses = engine.db.latest_statuses()
               for m in all_monitors:
                   st = statuses.get(m.id, 'offline')
                   mtype = m.config.get('type', 'unknown')
@@ -438,18 +437,26 @@ def init_gui(engine: Any, port: int = 8080):
                       'status': st.upper(),
                       'status_color': STATUS_COLORS.get(st, STATUS_COLORS['offline']),
                   })
-              monitor_table.rows = rows
+              return rows
+
+          async def update_table():
+              statuses = await offload(engine.db.latest_statuses)()
+              monitor_table.rows = _build_table_rows(statuses)
               monitor_table.update()
 
-          def update_charts():
+          def _build_chart_counts(statuses):
               status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'offline': 0}
               type_counts = {}
-              statuses = engine.db.latest_statuses()
               for m in all_monitors:
                   st = statuses.get(m.id, 'offline')
                   status_counts[st] = status_counts.get(st, 0) + 1
                   mtype = m.config.get('type', 'unknown')
                   type_counts[mtype] = type_counts.get(mtype, 0) + 1
+              return status_counts, type_counts
+
+          async def update_charts():
+              statuses = await offload(engine.db.latest_statuses)()
+              status_counts, type_counts = _build_chart_counts(statuses)
 
               status_chart.options['series'][0]['data'] = [
                   {'value': status_counts['online'],  'name': 'Online',  'itemStyle': {'color': STATUS_COLORS['online']}},
@@ -462,7 +469,8 @@ def init_gui(engine: Any, port: int = 8080):
               ]
               status_chart.update()
               type_chart.update()
-              update_table()
+              monitor_table.rows = _build_table_rows(statuses)
+              monitor_table.update()
 
           on_data_event('status', status_chart, update_charts, run_now=False)
 
@@ -478,9 +486,12 @@ def init_gui(engine: Any, port: int = 8080):
                   ]
                   m_table = ui.table(columns=metric_columns, rows=[]).classes('w-full')
 
-                  def update_m():
+                  def _read_metrics():
                       query = Metric.select().order_by(Metric.timestamp.desc()).limit(20)
-                      m_table.rows = [m.__data__ for m in query]
+                      return [m.__data__ for m in query]
+
+                  async def update_m():
+                      m_table.rows = await offload(_read_metrics)()
                       m_table.update()
                   on_data_event('metric', m_table, update_m)
 
@@ -494,9 +505,12 @@ def init_gui(engine: Any, port: int = 8080):
                   ]
                   e_table = ui.table(columns=event_columns, rows=[]).classes('w-full')
 
-                  def update_e():
+                  def _read_events():
                       query = Event.select().order_by(Event.timestamp.desc()).limit(20)
-                      e_table.rows = [e.__data__ for e in query]
+                      return [e.__data__ for e in query]
+
+                  async def update_e():
+                      e_table.rows = await offload(_read_events)()
                       e_table.update()
                   on_data_event('event', e_table, update_e)
 

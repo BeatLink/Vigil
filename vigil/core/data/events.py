@@ -72,9 +72,12 @@ class DataBus:
             return
 
         def _run():
+            import asyncio
             for cb in callbacks:
                 try:
-                    cb()
+                    result = cb()
+                    if asyncio.iscoroutine(result):
+                        asyncio.ensure_future(result)
                 except Exception as e:
                     logging.error(f"DataBus callback failed for '{event}': {e}")
 
