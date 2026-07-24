@@ -146,56 +146,38 @@ class DnsRecordUIPlugin(UIPlugin):
             [str(v).rstrip('.') for v in expected] if expected else None
         )
 
+        from vigil.web.ui.spec import register_item_color_rule
+        self._color_rule_name = f'dns_record_expected_{self.id}'
+        register_item_color_rule(self._color_rule_name)(self._item_color)
+
+    def _item_color(self, item: Dict[str, Any]) -> str:
+        v = item.get('value')
+        return 'online' if self.expected is None or v in self.expected else 'failed'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'status_card': {'metric': 'resolved', 'title': 'RESOLUTION',
+                                'on_text': 'OK', 'off_text': 'FAILED'},
+                'type_card': {'title': 'RECORD TYPE', 'value': self.record_type},
+                'ttl_card': {'metric': 'ttl', 'title': 'TTL', 'format': 'ttl_seconds'},
+                'answer': {
+                    'repeat': {
+                        'source': 'setting',
+                        'setting_key': 'dns_record:{plugin_id}',
+                        'item_label': '_none',
+                        'item_value': 'value',
+                        'item_color_by': self._color_rule_name,
+                        'container': 'chips',
+                        'empty_text': 'No answer yet',
+                    },
+                },
+            },
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        import json
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page(metric_names=[])
-
-        with layout.cell('status_card'):
-            self.ui.status_card(
-                page,
-                metric_name='resolved',
-                title='RESOLUTION',
-                on_text='OK',
-                off_text='FAILED'
-            )
-        with layout.cell('type_card'):
-            info_card('RECORD TYPE', self.record_type)
-        with layout.cell('ttl_card'):
-            ttl_label = info_card('TTL', '--')
-        with layout.cell('answer'):
-            answer_container = ui.element('div').style(
-                'display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%'
-            )
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update():
-            ttl = self.storage.latest_metric('ttl')
-            if ttl is not None:
-                ttl_label.text = f'{int(ttl.value)}s'
-
-            raw = self.storage.get_setting(f"dns_record:{self.id}")
-            answer_container.clear()
-            if not raw:
-                return
-            try:
-                values = json.loads(raw)
-            except Exception:
-                return
-            with answer_container:
-                for v in values:
-                    ok = self.expected is None or v in self.expected
-                    color = STATUS_COLORS['online'] if ok else STATUS_COLORS['failed']
-                    ui.label(v).classes('px-2 py-1 rounded text-sm font-mono').style(
-                        f'background: {color}22; color: {color}'
-                    )
-
-        page.on_refresh(update)
-        update()
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

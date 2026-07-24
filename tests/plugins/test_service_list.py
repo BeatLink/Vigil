@@ -55,7 +55,26 @@ class TestServiceListPlugin:
 
     async def test_view_status_action_fails_without_service(self, plugin):
         plan = plugin.plan_action("view_status")
-        assert plan is None
+        assert plan.success is False
+
+    async def test_view_status_action_plans_status_command(self, plugin):
+        plan = plugin.plan_action("view_status", service_name="nginx.service")
+        assert plan.command == "sudo systemctl status nginx.service --no-pager"
+
+    async def test_view_status_interprets_output_as_content(self, plugin):
+        outcome = plugin.interpret_action("view_status", CmdResult(0, "Active: active", ""))
+        assert outcome.success is True
+        assert outcome.metadata == {'content': 'Active: active'}
+
+    async def test_view_unit_file_action_plans_cat_command(self, plugin):
+        plan = plugin.plan_action("view_unit_file", service_name="nginx.service")
+        assert plan.command == "sudo systemctl cat nginx.service"
+
+    async def test_write_unit_file_plans_path_resolve_and_base64_write(self, plugin):
+        import base64
+        plan = plugin.plan_action("write_unit_file", service_name="nginx.service", content="[Unit]\n")
+        assert "systemctl show -p FragmentPath" in plan.command
+        assert base64.b64encode(b"[Unit]\n").decode('ascii') in plan.command
 
     async def test_unknown_action_returns_false(self, plugin):
         assert plugin.plan_action("nuke_service", service_name="nginx.service") is None

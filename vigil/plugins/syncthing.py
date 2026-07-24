@@ -205,73 +205,58 @@ class SyncthingCollectorPlugin(CollectorPlugin):
 
 
 class SyncthingUIPlugin(UIPlugin):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        from vigil.web.ui.spec import register_color_rule, register_item_formatter
+        self._devices_format_name = f'syncthing_devices_{self.id}'
+        register_item_formatter(self._devices_format_name)(self._devices_text)
+        self._need_format_name = f'syncthing_need_{self.id}'
+        register_item_formatter(self._need_format_name)(self._need_text)
+
+        self._devices_color_name = f'syncthing_devices_color_{self.id}'
+        register_item_formatter(self._devices_color_name)(
+            lambda values: None if values.get('devices_disconnected') is None
+            else ('online' if values['devices_disconnected'] == 0 else 'warning'))
+        self._errored_color_name = f'syncthing_errored_color_{self.id}'
+        register_color_rule(self._errored_color_name)(
+            lambda errored: None if errored is None else ('failed' if errored else 'online'))
+        self._stalled_color_name = f'syncthing_stalled_color_{self.id}'
+        register_color_rule(self._stalled_color_name)(
+            lambda stalled: None if stalled is None else ('warning' if stalled else 'online'))
+
+    @staticmethod
+    def _need_text(values: Dict[str, Any]) -> str:
+        v = values.get('need_bytes')
+        if v is None:
+            return '--'
+        return f'{v / (1024 * 1024):.1f} MiB'
+
+    @staticmethod
+    def _devices_text(values: Dict[str, Any]) -> str:
+        exp_dev, disc = values.get('devices_expected'), values.get('devices_disconnected')
+        if exp_dev is None or disc is None:
+            return '--'
+        return f'{int(exp_dev) - int(disc)}/{int(exp_dev)}'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'folders_card': {'metric': 'folders_total', 'title': 'FOLDERS', 'format': 'int'},
+                'devices_card': {'title': 'DEVICES', 'metrics': ['devices_expected', 'devices_disconnected'],
+                                 'format_fn': self._devices_format_name, 'color_fn': self._devices_color_name},
+                'errors_card': {'metric': 'folders_errored', 'title': 'ERRORED', 'format': 'int',
+                                'color': self._errored_color_name},
+                'need_card': {'title': 'NEED', 'metrics': ['need_bytes'], 'format_fn': self._need_format_name},
+                'stalled_card': {'metric': 'folders_stalled', 'title': 'STALLED', 'format': 'int',
+                                 'color': self._stalled_color_name},
+            },
+            'chart': {'metric': 'need_bytes', 'title': 'BYTES NEEDED'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.spec import FORMATTERS
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-        page = self.ui.page(metric_names=[
-            'folders_total', 'folders_errored', 'folders_stalled',
-            'need_bytes', 'devices_expected', 'devices_disconnected',
-        ])
-
-        _int_or_dash = FORMATTERS['int']
-
-        def _need_text(v):
-            if v is None:
-                return '--'
-            return f'{v / (1024 * 1024):.1f} MiB'
-
-        def _devices_text(_):
-            exp_dev = page.model.metrics.get('devices_expected')
-            disc = page.model.metrics.get('devices_disconnected')
-            if exp_dev is None or disc is None:
-                return '--'
-            connected = int(exp_dev) - int(disc)
-            return f'{connected}/{int(exp_dev)}'
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('folders_card'):
-            info_card('FOLDERS', '--').bind_text_from(
-                page.model, ('metrics', 'folders_total'), backward=_int_or_dash)
-        with layout.cell('devices_card'):
-            devices_label = info_card('DEVICES', '--').bind_text_from(
-                page.model, ('metrics', 'devices_disconnected'), backward=_devices_text)
-        with layout.cell('errors_card'):
-            errors_label = info_card('ERRORED', '--').bind_text_from(
-                page.model, ('metrics', 'folders_errored'), backward=_int_or_dash)
-        with layout.cell('need_card'):
-            info_card('NEED', '--').bind_text_from(
-                page.model, ('metrics', 'need_bytes'), backward=_need_text)
-        with layout.cell('stalled_card'):
-            stalled_label = info_card('STALLED', '--').bind_text_from(
-                page.model, ('metrics', 'folders_stalled'), backward=_int_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'BYTES NEEDED', self.id, 'need_bytes')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_colors():
-            disc = page.model.metrics.get('devices_disconnected')
-            if disc is not None:
-                devices_label.style(
-                    f'color: {STATUS_COLORS["online" if disc == 0 else "warning"]}')
-
-            errored = page.model.metrics.get('folders_errored')
-            if errored is not None:
-                errors_label.style(
-                    f'color: {STATUS_COLORS["failed" if errored else "online"]}')
-
-            stalled = page.model.metrics.get('folders_stalled')
-            if stalled is not None:
-                stalled_label.style(
-                    f'color: {STATUS_COLORS["warning" if stalled else "online"]}')
-
-        page.on_refresh(update_colors)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

@@ -83,65 +83,37 @@ class TemperatureUIPlugin(UIPlugin):
         self.temp_warning   = int(self.config.get('temp_warning',   70))
         self.temp_threshold = int(self.config.get('temp_threshold', 80))
 
+        from vigil.web.ui.spec import register_item_color_rule, register_color_rule, threshold_color
+        self._item_color_rule_name = f'temperature_zone_{self.id}'
+        register_item_color_rule(self._item_color_rule_name)(
+            lambda item: _level_for(item.get('value') or 0.0, self.temp_warning, self.temp_threshold))
+        self._max_color_rule_name = f'temperature_max_{self.id}'
+        register_color_rule(self._max_color_rule_name)(
+            threshold_color(warning=self.temp_warning, threshold=self.temp_threshold))
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'max_card': {'metric': 'temp_c', 'title': 'MAX TEMP', 'format': 'temp_c1',
+                            'color': self._max_color_rule_name},
+                'sensors': {
+                    'repeat': {
+                        'source': 'metrics_prefix',
+                        'metrics_prefix': 'temp_zone_', 'metrics_suffix': '',
+                        'item_format': 'temp_c1',
+                        'item_color_by': self._item_color_rule_name,
+                        'label_transform': 'spaces_upper',
+                        'container': 'cards',
+                        'empty_text': 'No thermal zones found',
+                    },
+                },
+            },
+            'chart': {'metric': 'temp_c', 'title': 'TEMPERATURE (°C)'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.core.data.database import Metric
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.spec import FORMATTERS
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
-        )
-        page = self.ui.page(metric_names=['temp_c'])
-
-        _temp_or_dash = FORMATTERS['temp_c1']
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('max_card'):
-            max_label = info_card('MAX TEMP', '--').bind_text_from(
-                page.model, ('metrics', 'temp_c'), backward=_temp_or_dash)
-        with layout.cell('sensors'):
-            sensor_container = ui.element('div').style(
-                'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
-            )
-        with layout.cell('chart'):
-            history_chart(page, 'TEMPERATURE (°C)', self.id, 'temp_c')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_max_color():
-            val = page.model.metrics.get('temp_c')
-            if val is not None:
-                max_label.style(f'color: {STATUS_COLORS[_level_for(val, self.temp_warning, self.temp_threshold)]}')
-
-        def update_sensors():
-            zone_values: Dict[str, float] = {}
-            for row in (
-                Metric.select()
-                .where(
-                    (Metric.collector == self.id) &
-                    (Metric.metric_name.startswith('temp_zone_'))
-                )
-                .order_by(Metric.timestamp.desc())
-                .limit(100)
-            ):
-                if row.metric_name not in zone_values:
-                    zone_values[row.metric_name] = row.value
-
-            sensor_container.clear()
-            with sensor_container:
-                for metric_name in sorted(zone_values):
-                    val = zone_values[metric_name]
-                    display = metric_name.removeprefix('temp_zone_').replace('_', ' ').upper()
-                    lbl = info_card(display, f'{val:.1f}°C')
-                    lbl.style(f'color: {STATUS_COLORS[_level_for(val, self.temp_warning, self.temp_threshold)]}')
-
-        page.on_refresh(update_max_color)
-        page.on_refresh(update_sensors)
-        update_sensors()
-
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

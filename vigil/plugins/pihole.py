@@ -282,87 +282,65 @@ class PiholeUIPlugin(UIPlugin):
         self.block_rate_threshold = float(config.get('block_rate_threshold', 1))
         self.gravity_max_age = parse_duration(config.get('gravity_max_age', '8d'))
 
-        from vigil.web.ui.spec import register_color_rule
+        from vigil.web.ui.spec import register_color_rule, register_item_formatter, register_formatter
         self._block_rate_rule_name = f'pihole_block_rate_{self.id}'
+        register_color_rule(self._block_rate_rule_name)(self._block_rate_color)
 
-        @register_color_rule(self._block_rate_rule_name)
-        def _block_rate_color(v, _warning=self.block_rate_warning, _threshold=self.block_rate_threshold):
-            if v is None:
-                return None
-            if v < _threshold:
-                return 'failed'
-            if v < _warning:
-                return 'warning'
-            return 'online'
+        self._gravity_format_name = f'pihole_gravity_text_{self.id}'
+        register_item_formatter(self._gravity_format_name)(self._gravity_text)
+        self._gravity_color_name = f'pihole_gravity_color_{self.id}'
+        register_item_formatter(self._gravity_color_name)(self._gravity_color)
+
+        self._blocking_format_name = f'pihole_blocking_text_{self.id}'
+        register_formatter(self._blocking_format_name)(
+            lambda v: '--' if v is None else ('ENABLED' if v >= 1.0 else 'DISABLED'))
+        self._blocking_color_name = f'pihole_blocking_color_{self.id}'
+        register_color_rule(self._blocking_color_name)(
+            lambda v: None if v is None else ('online' if v >= 1.0 else 'failed'))
+
+    def _block_rate_color(self, v: Optional[float]) -> Optional[str]:
+        if v is None:
+            return None
+        if v < self.block_rate_threshold:
+            return 'failed'
+        if v < self.block_rate_warning:
+            return 'warning'
+        return 'online'
+
+    def _gravity_text(self, values: Dict[str, Any]) -> str:
+        domains = values.get('gravity_domains')
+        if domains is None:
+            return '--'
+        text = f'{int(domains):,} domains'
+        age = values.get('gravity_age_seconds')
+        if age is not None:
+            text += f' ({_format_age(age)} old)'
+        return text
+
+    def _gravity_color(self, values: Dict[str, Any]) -> Optional[str]:
+        age = values.get('gravity_age_seconds')
+        if age is None:
+            return None
+        return 'warning' if age > self.gravity_max_age else 'online'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'block_rate_card': {'metric': 'block_rate_pct', 'title': 'BLOCK RATE', 'format': 'percent1',
+                                    'color': self._block_rate_rule_name},
+                'queries_card': {'metric': 'queries_total', 'title': 'QUERIES', 'format': 'count_comma'},
+                'gravity_card': {'title': 'BLOCKLIST', 'metrics': ['gravity_domains', 'gravity_age_seconds'],
+                                 'format_fn': self._gravity_format_name, 'color_fn': self._gravity_color_name},
+                'clients_card': {'metric': 'clients_active', 'title': 'ACTIVE CLIENTS', 'format': 'int'},
+                'blocking_card': {'metric': 'blocking_enabled', 'title': 'BLOCKING',
+                                  'format': self._blocking_format_name, 'color': self._blocking_color_name},
+            },
+            'chart': {'metric': 'block_rate_pct', 'title': 'BLOCK RATE (%)'},
+            'events': True,
+        }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.spec import FORMATTERS, COLOR_RULES
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-        page = self.ui.page(metric_names=[
-            'block_rate_pct', 'queries_total', 'gravity_domains',
-            'gravity_age_seconds', 'clients_active', 'blocking_enabled',
-        ])
-
-        pct_formatter = FORMATTERS['percent1']
-        count_formatter = FORMATTERS['count_comma']
-        int_formatter = FORMATTERS['int']
-        block_rate_rule = COLOR_RULES[self._block_rate_rule_name]
-
-        def _enabled_text(v):
-            if v is None:
-                return '--'
-            return 'ENABLED' if v >= 1.0 else 'DISABLED'
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('block_rate_card'):
-            block_rate_label = info_card('BLOCK RATE', pct_formatter(None)).bind_text_from(
-                page.model, ('metrics', 'block_rate_pct'), backward=pct_formatter)
-        with layout.cell('queries_card'):
-            info_card('QUERIES', count_formatter(None)).bind_text_from(
-                page.model, ('metrics', 'queries_total'), backward=count_formatter)
-        with layout.cell('gravity_card'):
-            gravity_label = info_card('BLOCKLIST', '--')
-        with layout.cell('clients_card'):
-            info_card('ACTIVE CLIENTS', int_formatter(None)).bind_text_from(
-                page.model, ('metrics', 'clients_active'), backward=int_formatter)
-        with layout.cell('blocking_card'):
-            blocking_label = info_card('BLOCKING', '--').bind_text_from(
-                page.model, ('metrics', 'blocking_enabled'), backward=_enabled_text)
-        with layout.cell('chart'):
-            history_chart(page, 'BLOCK RATE (%)', self.id, 'block_rate_pct')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_colors():
-            block_rate = page.model.metrics.get('block_rate_pct')
-            if block_rate is not None:
-                state = block_rate_rule(block_rate)
-                if state is not None:
-                    block_rate_label.style(f'color: {STATUS_COLORS[state]}')
-
-            domains = page.model.metrics.get('gravity_domains')
-            age = page.model.metrics.get('gravity_age_seconds')
-            if domains is not None:
-                text = f'{int(domains):,} domains'
-                if age is not None:
-                    text += f' ({_format_age(age)} old)'
-                    gravity_label.style(
-                        f'color: {STATUS_COLORS["warning" if age > self.gravity_max_age else "online"]}'
-                    )
-                gravity_label.text = text
-
-            enabled = page.model.metrics.get('blocking_enabled')
-            if enabled is not None:
-                on = enabled >= 1.0
-                blocking_label.style(f'color: {STATUS_COLORS["online" if on else "failed"]}')
-
-        page.on_refresh(update_colors)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

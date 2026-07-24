@@ -80,39 +80,22 @@ class InterruptsUIPlugin(UIPlugin):
         register_color_rule(self._color_rule_name)(
             threshold_color(warning=self.irq_warning, threshold=self.irq_threshold))
 
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'irq_card': {'metric': 'irq_per_sec', 'title': 'INTERRUPTS/S', 'format': 'count_comma_rounded',
+                            'color': self._color_rule_name},
+                'ctxt_card': {'metric': 'ctxt_per_sec', 'title': 'CTX SWITCH/S', 'format': 'count_comma_rounded'},
+            },
+            'charts': {
+                'irq_chart': {'metric': 'irq_per_sec', 'title': 'INTERRUPTS / SEC'},
+                'ctxt_chart': {'metric': 'ctxt_per_sec', 'title': 'CONTEXT SWITCHES / SEC'},
+            },
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.spec import FORMATTERS, COLOR_RULES
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page(metric_names=['irq_per_sec', 'ctxt_per_sec'])
-
-        rate_formatter = FORMATTERS['count_comma_rounded']
-        color_rule = COLOR_RULES[self._color_rule_name]
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('irq_card'):
-            irq_label = info_card('INTERRUPTS/S', rate_formatter(None)).bind_text_from(
-                page.model, ('metrics', 'irq_per_sec'), backward=rate_formatter)
-        with layout.cell('ctxt_card'):
-            info_card('CTX SWITCH/S', rate_formatter(None)).bind_text_from(
-                page.model, ('metrics', 'ctxt_per_sec'), backward=rate_formatter)
-        with layout.cell('irq_chart'):
-            history_chart(page, 'INTERRUPTS / SEC', self.id, 'irq_per_sec')
-        with layout.cell('ctxt_chart'):
-            history_chart(page, 'CONTEXT SWITCHES / SEC', self.id, 'ctxt_per_sec')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_color():
-            irq = page.model.metrics.get('irq_per_sec')
-            if irq is not None:
-                state = color_rule(irq)
-                if state is not None:
-                    irq_label.style(f'color: {STATUS_COLORS[state]}')
-
-        page.on_refresh(update_color)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

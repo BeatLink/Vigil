@@ -162,77 +162,67 @@ class VigilSelfCollectorPlugin(CollectorPlugin):
 
 
 class VigilSelfUIPlugin(UIPlugin):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.memory_warning   = float(self.config.get('memory_warning',   256))
+        self.memory_threshold = float(self.config.get('memory_threshold', 512))
+
+        from vigil.web.ui.spec import register_color_rule, register_formatter, threshold_color, register_item_formatter
+        self._memory_color_name = f'vigil_self_memory_{self.id}'
+        register_color_rule(self._memory_color_name)(
+            threshold_color(warning=self.memory_warning, threshold=self.memory_threshold))
+        self._uptime_format_name = f'vigil_self_uptime_{self.id}'
+        register_formatter(self._uptime_format_name)(lambda v: '--' if v is None else _format_uptime(v))
+        self._memory_format_name = f'vigil_self_memory_fmt_{self.id}'
+        register_formatter(self._memory_format_name)(lambda v: '-- MB' if v is None else f'{v:.0f} MB')
+        self._monitors_format_name = f'vigil_self_monitors_{self.id}'
+        register_item_formatter(self._monitors_format_name)(self._monitors_text)
+        self._monitors_color_name = f'vigil_self_monitors_color_{self.id}'
+        register_item_formatter(self._monitors_color_name)(self._monitors_color)
+
+    @staticmethod
+    def _monitors_text(values: Dict[str, Any]) -> str:
+        total = values.get('monitors_total')
+        if total is None:
+            return '--'
+        n_late = int(values.get('monitors_late') or 0)
+        n_stalled = int(values.get('monitors_stalled') or 0)
+        if n_stalled:
+            return f'{int(total)} ({n_stalled} stalled)'
+        if n_late:
+            return f'{int(total)} ({n_late} late)'
+        return f'{int(total)} OK'
+
+    @staticmethod
+    def _monitors_color(values: Dict[str, Any]) -> Optional[str]:
+        if values.get('monitors_total') is None:
+            return None
+        if int(values.get('monitors_stalled') or 0):
+            return 'failed'
+        if int(values.get('monitors_late') or 0):
+            return 'warning'
+        return 'online'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'uptime_card': {'metric': 'uptime_seconds', 'title': 'VIGIL UPTIME',
+                                'format': self._uptime_format_name},
+                'memory_card': {'metric': 'memory_mb', 'title': 'MEMORY', 'format': self._memory_format_name,
+                                'color': self._memory_color_name},
+                'monitors_card': {'title': 'MONITORS',
+                                  'metrics': ['monitors_total', 'monitors_late', 'monitors_stalled'],
+                                  'format_fn': self._monitors_format_name, 'color_fn': self._monitors_color_name},
+            },
+            'chart': {'metric': 'memory_mb', 'title': 'VIGIL MEMORY (MB)'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-
-        memory_warning   = float(self.config.get('memory_warning',   256))
-        memory_threshold = float(self.config.get('memory_threshold', 512))
-
-        page = self.ui.page(metric_names=[
-            'uptime_seconds', 'memory_mb', 'monitors_total',
-            'monitors_late', 'monitors_stalled',
-        ])
-
-        def _uptime_or_dash(v):
-            return '--' if v is None else _format_uptime(v)
-
-        def _memory_or_dash(v):
-            return '-- MB' if v is None else f'{v:.0f} MB'
-
-        def _monitors_text(_):
-            total = page.model.metrics.get('monitors_total')
-            if total is None:
-                return '--'
-            n_late = int(page.model.metrics.get('monitors_late') or 0)
-            n_stalled = int(page.model.metrics.get('monitors_stalled') or 0)
-            if n_stalled:
-                return f'{int(total)} ({n_stalled} stalled)'
-            if n_late:
-                return f'{int(total)} ({n_late} late)'
-            return f'{int(total)} OK'
-
-        with layout.cell('uptime_card'):
-            info_card('VIGIL UPTIME', '--').bind_text_from(
-                page.model, ('metrics', 'uptime_seconds'), backward=_uptime_or_dash)
-        with layout.cell('memory_card'):
-            memory_label = info_card('MEMORY', '-- MB').bind_text_from(
-                page.model, ('metrics', 'memory_mb'), backward=_memory_or_dash)
-        with layout.cell('monitors_card'):
-            monitors_label = info_card('MONITORS', '--').bind_text_from(
-                page.model, ('metrics', 'monitors_total'), backward=_monitors_text)
-        with layout.cell('chart'):
-            history_chart(page, 'VIGIL MEMORY (MB)', self.id, 'memory_mb')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_colors():
-            memory = page.model.metrics.get('memory_mb')
-            if memory is not None:
-                memory_label.style(
-                    f'color: {STATUS_COLORS[_level_for(memory, memory_warning, memory_threshold)]}'
-                )
-
-            total = page.model.metrics.get('monitors_total')
-            if total is not None:
-                n_late = int(page.model.metrics.get('monitors_late') or 0)
-                n_stalled = int(page.model.metrics.get('monitors_stalled') or 0)
-                if n_stalled:
-                    monitors_label.style(f'color: {STATUS_COLORS["failed"]}')
-                elif n_late:
-                    monitors_label.style(f'color: {STATUS_COLORS["warning"]}')
-                else:
-                    monitors_label.style(f'color: {STATUS_COLORS["online"]}')
-
-        page.on_refresh(update_colors)
-
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
 
 def _format_uptime(seconds: float) -> str:

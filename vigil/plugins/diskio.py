@@ -104,40 +104,27 @@ class DiskIoCollectorPlugin(CollectorPlugin):
 
 
 class DiskIoUIPlugin(UIPlugin):
+    @property
+    def _active_device_text(self) -> str:
+        return (self.storage.get_setting(f"diskio:{self.id}:active_device")
+                or self.config.get('device') or 'Detecting...')
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'device_card': {'title': 'DEVICE', 'value_attr': '_active_device_text', 'refresh': True},
+                'read_card': {'metric': 'read_kbps', 'title': 'READ', 'format': 'kbps_rate'},
+                'write_card': {'metric': 'write_kbps', 'title': 'WRITE', 'format': 'kbps_rate'},
+            },
+            'charts': {
+                'read_chart': {'metric': 'read_kbps', 'title': 'READ THROUGHPUT (KB/s)'},
+                'write_chart': {'metric': 'write_kbps', 'title': 'WRITE THROUGHPUT (KB/s)'},
+            },
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.spec import FORMATTERS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page(metric_names=['read_kbps', 'write_kbps'])
-
-        active_device = self.storage.get_setting(f"diskio:{self.id}:active_device") or self.config.get('device')
-        _rate_or_dash = FORMATTERS['kbps_rate']
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('device_card'):
-            device_label = info_card('DEVICE', active_device or 'Detecting...')
-        with layout.cell('read_card'):
-            info_card('READ', '-- KB/s').bind_text_from(
-                page.model, ('metrics', 'read_kbps'), backward=_rate_or_dash)
-        with layout.cell('write_card'):
-            info_card('WRITE', '-- KB/s').bind_text_from(
-                page.model, ('metrics', 'write_kbps'), backward=_rate_or_dash)
-        with layout.cell('read_chart'):
-            history_chart(page, 'READ THROUGHPUT (KB/s)', self.id, 'read_kbps')
-        with layout.cell('write_chart'):
-            history_chart(page, 'WRITE THROUGHPUT (KB/s)', self.id, 'write_kbps')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_device():
-            device = self.storage.get_setting(f"diskio:{self.id}:active_device")
-            if device:
-                device_label.text = device
-
-        page.on_refresh(update_device)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

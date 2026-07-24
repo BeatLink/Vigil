@@ -544,120 +544,117 @@ class BorgCollectorPlugin(CollectorPlugin):
 
 
 class BorgUIPlugin(UIPlugin):
-    def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.web.ui.theme import STATUS_COLORS
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, safe_timer
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.repo = config.get('repo')
+        self.max_age = parse_duration(config.get('max_age', '1d'))
+        self.source_paths = _as_list(config.get('source_paths'))
 
-        repo = self.config.get('repo')
-        max_age = parse_duration(self.config.get('max_age', '1d'))
-        source_paths = _as_list(self.config.get('source_paths'))
+        from vigil.web.ui.spec import register_enabled_predicate
+        self._has_sources_name = f'borg_has_sources_{self.id}'
+        register_enabled_predicate(self._has_sources_name)(lambda p: bool(p.source_paths))
 
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
-        )
-        page = self.ui.page()
+    def _epoch(self) -> Optional[float]:
+        m = self.storage.latest_metric('last_backup_epoch')
+        return m.value if m is not None else None
 
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('repo_card'):
-            info_card('REPO', repo or '--')
-        with layout.cell('maxage_card'):
-            info_card('MAX AGE', format_duration(max_age))
-        with layout.cell('state_card'):
-            state_label = info_card('CURRENT STATE', '--')
-        with layout.cell('size_card'):
-            size_label = info_card('REPO SIZE', '--')
-        with layout.cell('dedup_card'):
-            dedup_label = info_card('DEDUP RATIO', '--')
-        with layout.cell('count_card'):
-            count_label = info_card('ARCHIVES', '--')
-        with layout.cell('age_card'):
-            age_label = info_card('LAST ARCHIVE', '--')
-        with layout.cell('archives'):
-            archives_table = self._render_archives_table()
-        with layout.cell('jobs'):
-            update_jobs = self._render_jobs_panel(source_paths)
-        with layout.cell('events'):
-            self.ui.events_table(page, title='EVENTS', limit=100,
-                                 full_height=True)
+    @property
+    def _state_text(self) -> str:
+        epoch = self._epoch()
+        if epoch is None:
+            return 'UNKNOWN'
+        epoch = int(epoch)
+        if epoch == 0:
+            return 'NO ARCHIVES'
+        age = int(time.time()) - epoch
+        return 'OK' if age <= self.max_age else 'STALE'
 
-        safe_timer(2.0, update_jobs)
+    @property
+    def _state_color(self) -> Optional[str]:
+        epoch = self._epoch()
+        if epoch is None:
+            return 'offline'
+        epoch = int(epoch)
+        if epoch == 0:
+            return 'failed'
+        age = int(time.time()) - epoch
+        return 'online' if age <= self.max_age else 'failed'
 
-        def update():
-            m = self.storage.latest_metric('last_backup_epoch')
-            epoch_val = m.value if m else None
+    @property
+    def _last_archive_age_text(self) -> str:
+        epoch = self._epoch()
+        if epoch is None:
+            return '--'
+        if int(epoch) == 0:
+            return 'Never'
+        return format_age(int(time.time()) - int(epoch))
 
-            self._update_stat_cards(size_label, dedup_label, count_label)
-            self._refresh_archives_table(archives_table)
+    @property
+    def _last_archive_age_color(self) -> Optional[str]:
+        epoch = self._epoch()
+        if epoch is None or int(epoch) == 0:
+            return 'failed'
+        age = int(time.time()) - int(epoch)
+        return 'online' if age <= self.max_age else 'failed'
 
-            if epoch_val is None:
-                state_label.text = 'UNKNOWN'
-                state_label.style(f"color: {STATUS_COLORS['offline']}")
-                return
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'repo_card': {'title': 'REPO', 'value': self.repo or '--'},
+                'maxage_card': {'title': 'MAX AGE', 'value': format_duration(self.max_age)},
+                'state_card': {'title': 'CURRENT STATE', 'value_attr': '_state_text',
+                              'color_attr': '_state_color'},
+                'size_card': {'metric': 'deduplicated_size', 'title': 'REPO SIZE', 'format': 'bytes_gb'},
+                'dedup_card': {'metric': 'dedup_ratio', 'title': 'DEDUP RATIO', 'format': 'dedup_ratio'},
+                'count_card': {'metric': 'archive_count', 'title': 'ARCHIVES', 'format': 'int'},
+                'age_card': {'title': 'LAST ARCHIVE', 'value_attr': '_last_archive_age_text',
+                            'color_attr': '_last_archive_age_color'},
+            },
+            'tables': {
+                'archives': {
+                    'row_key': 'name',
+                    'rows_attr': '_archive_rows',
+                    'columns': [
+                        {'name': 'name', 'label': 'Archive', 'field': 'name', 'align': 'left', 'sortable': True},
+                        {'name': 'created', 'label': 'Created', 'field': 'created', 'align': 'left', 'sortable': True},
+                        {'name': 'age', 'label': 'Age', 'field': 'age', 'align': 'left'},
+                        {'name': 'size', 'label': 'Size', 'field': 'size', 'align': 'right', 'sortable': True},
+                        {'name': 'added', 'label': 'Added', 'field': 'added', 'align': 'right', 'sortable': True},
+                        {'name': 'files', 'label': 'Files', 'field': 'files', 'align': 'right', 'sortable': True},
+                    ],
+                },
+            },
+            'job_panel': {
+                'widget': 'jobs',
+                'title': 'BACKUP JOBS',
+                'run_action_id': 'run_backup', 'run_label': 'Run Backup', 'run_icon': 'play_arrow',
+                'cancel_label': 'Cancel', 'cancel_icon': 'stop',
+                'enabled_if': self._has_sources_name,
+                'refresh_interval': 2.0,
+                'history_limit': 10,
+            },
+            'events': {'title': 'EVENTS', 'limit': 100, 'full_height': True},
+        }
 
-            epoch = int(epoch_val)
-            if epoch == 0:
-                state_label.text = 'NO ARCHIVES'
-                state_label.style(f"color: {STATUS_COLORS['failed']}")
-                age_label.text = 'Never'
-                age_label.style(f"color: {STATUS_COLORS['failed']}")
-                return
+    def cached_archives(self) -> (List[Dict[str, Any]], Dict[str, Any]):
+        metric = self.storage.latest_metric('archive_list')
+        if metric is None or not metric.metadata:
+            return [], {}
+        try:
+            data = json.loads(metric.metadata)
+        except (json.JSONDecodeError, ValueError):
+            return [], {}
+        if not isinstance(data, dict):
+            return [], {}
+        return data.get('archives') or [], data.get('repository') or {}
 
-            age = int(time.time()) - epoch
-            is_fresh = age <= max_age
-            state_label.text = 'OK' if is_fresh else 'STALE'
-            state_label.style(f"color: {STATUS_COLORS['online' if is_fresh else 'failed']}")
-            age_label.text = format_age(age)
-            age_label.style(f"color: {STATUS_COLORS['online' if is_fresh else 'failed']}")
-
-        page.on_refresh(update)
-        update()
-        page.start()
-
-    def _update_stat_cards(self, size_label, dedup_label, count_label) -> None:
-        dedup_metric = self.storage.latest_metric('deduplicated_size')
-        size_label.text = (
-            _format_bytes(dedup_metric.value) if dedup_metric else '--'
-        )
-
-        ratio_metric = self.storage.latest_metric('dedup_ratio')
-        dedup_label.text = f"{ratio_metric.value:.1f}x" if ratio_metric else '--'
-
-        count_metric = self.storage.latest_metric('archive_count')
-        count_label.text = str(int(count_metric.value)) if count_metric else '--'
-
-    def _render_archives_table(self):
-        from nicegui import ui
-        from vigil.web.ui.components import card
-        from vigil.web.ui.theme import PRIMARY
-
-        with card('w-full'):
-            ui.label('ARCHIVES').classes('font-bold mb-2').style(f'color: {PRIMARY}')
-            return ui.table(
-                columns=[
-                    {'name': 'name', 'label': 'Archive', 'field': 'name',
-                     'align': 'left', 'sortable': True},
-                    {'name': 'created', 'label': 'Created', 'field': 'created',
-                     'align': 'left', 'sortable': True},
-                    {'name': 'age', 'label': 'Age', 'field': 'age', 'align': 'left'},
-                    {'name': 'size', 'label': 'Size', 'field': 'size',
-                     'align': 'right', 'sortable': True},
-                    {'name': 'added', 'label': 'Added', 'field': 'added',
-                     'align': 'right', 'sortable': True},
-                    {'name': 'files', 'label': 'Files', 'field': 'files',
-                     'align': 'right', 'sortable': True},
-                ],
-                rows=[],
-                row_key='name',
-            ).classes('w-full border-none')
-
-    def _refresh_archives_table(self, table) -> None:
+    @property
+    def _archive_rows(self) -> List[Dict[str, Any]]:
         archives, _ = self.cached_archives()
         now = int(time.time())
-        table.rows = [
+        return [
             {
                 'name': a.get('name', '?'),
                 'created': (
@@ -673,104 +670,7 @@ class BorgUIPlugin(UIPlugin):
             }
             for a in archives
         ]
-        table.update()
 
-    def cached_archives(self) -> (List[Dict[str, Any]], Dict[str, Any]):
-        metric = self.storage.latest_metric('archive_list')
-        if metric is None or not metric.metadata:
-            return [], {}
-        try:
-            data = json.loads(metric.metadata)
-        except (json.JSONDecodeError, ValueError):
-            return [], {}
-        if not isinstance(data, dict):
-            return [], {}
-        return data.get('archives') or [], data.get('repository') or {}
-
-    def _render_jobs_panel(self, source_paths: List[str]):
-        from nicegui import ui
-        from vigil.web.ui.components import card
-        from vigil.web.ui.theme import PRIMARY, STATUS_COLORS
-
-        with card('w-full'):
-            with ui.row().classes('w-full items-center justify-between mb-2'):
-                ui.label('BACKUP JOBS').classes('font-bold').style(f'color: {PRIMARY}')
-                with ui.row().classes('gap-2'):
-                    run_btn = ui.button(
-                        'Run Backup', icon='play_arrow',
-                        on_click=lambda: self._start_backup_from_ui(),
-                    ).props('dense')
-                    cancel_btn = ui.button(
-                        'Cancel', icon='stop',
-                        on_click=lambda: self._cancel_backup_from_ui(),
-                    ).props('dense outline color=negative')
-
-            progress_label = ui.label('').classes('text-xs font-mono mb-2')
-
-            jobs_table = ui.table(
-                columns=[
-                    {'name': 'started', 'label': 'Started', 'field': 'started', 'align': 'left'},
-                    {'name': 'kind', 'label': 'Kind', 'field': 'kind', 'align': 'left'},
-                    {'name': 'state', 'label': 'State', 'field': 'state', 'align': 'left'},
-                    {'name': 'duration', 'label': 'Duration', 'field': 'duration', 'align': 'left'},
-                ],
-                rows=[],
-                row_key='id',
-            ).classes('w-full border-none')
-
-            def update():
-                running = self.network.is_running()
-                run_btn.set_enabled(bool(source_paths) and not running)
-                cancel_btn.set_visibility(running)
-
-                if running:
-                    job = self.db.get_job(self.network.current_job_id())
-                    progress = (job or {}).get('progress') or 'Starting...'
-                    progress_label.text = progress
-                    progress_label.style(f"color: {STATUS_COLORS['online']}")
-                elif not source_paths:
-                    progress_label.text = 'No source_paths configured — backups disabled'
-                    progress_label.style(f"color: {STATUS_COLORS['offline']}")
-                else:
-                    progress_label.text = ''
-
-                jobs_table.rows = [
-                    {
-                        'id': j['id'],
-                        'started': j['started'],
-                        'kind': j['kind'],
-                        'state': j['state'],
-                        'duration': format_duration(j['duration']),
-                    }
-                    for j in self.network.recent(limit=10)
-                ]
-                jobs_table.update()
-
-            update()
-            return update
-
-    def _start_backup_from_ui(self) -> None:
-        from nicegui import ui
-        import asyncio
-
-        source_paths = _as_list(self.config.get('source_paths'))
-        if not source_paths:
-            ui.notify('No source_paths configured for this monitor', type='negative')
-            return
-        if self.network.is_running():
-            ui.notify('A job is already running', type='warning')
-            return
-
-        ui.notify('Backup started', type='positive')
-        asyncio.create_task(self.on_action('run_backup'))
-
-    def _cancel_backup_from_ui(self) -> None:
-        import asyncio
-        asyncio.create_task(self._do_cancel_backup())
-
-    async def _do_cancel_backup(self) -> None:
-        from nicegui import ui
-        if await self.network.cancel():
-            ui.notify('Cancellation requested', type='warning')
-        else:
-            ui.notify('No job is running', type='info')
+    def render_ui(self, context: str = 'page'):
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

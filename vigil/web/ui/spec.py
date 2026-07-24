@@ -83,6 +83,18 @@ def _kbps_rate(v):
         return f'{v / 1024:.1f} MB/s'
     return f'{v:.1f} KB/s'
 
+@register_formatter('dbm0')
+def _dbm0(v):
+    return '-- dBm' if v is None else f'{v:.0f} dBm'
+
+@register_formatter('dedup_ratio')
+def _dedup_ratio(v):
+    return '--' if v is None else f'{v:.1f}x'
+
+@register_formatter('ttl_seconds')
+def _ttl_seconds(v):
+    return '--' if v is None else f'{int(v)}s'
+
 @register_formatter('on_off')
 def _on_off(v):
     if v is None:
@@ -96,6 +108,45 @@ COLOR_RULES: Dict[str, Callable[[Optional[float]], Optional[str]]] = {}
 def register_color_rule(name: str):
     def wrap(fn):
         COLOR_RULES[name] = fn
+        return fn
+    return wrap
+
+
+ITEM_FORMATTERS: Dict[str, Callable[[dict], str]] = {}
+
+
+def register_item_formatter(name: str):
+    """Like register_formatter, but the formatter receives the whole
+    item/row dict — for repeat-card text composed from more than one field
+    (e.g. '42% · inodes 7%')."""
+    def wrap(fn):
+        ITEM_FORMATTERS[name] = fn
+        return fn
+    return wrap
+
+
+ITEM_COLOR_RULES: Dict[str, Callable[[dict], Optional[str]]] = {}
+
+
+def register_item_color_rule(name: str):
+    """Like register_color_rule, but the rule receives the whole item/row
+    dict rather than a single metric value — for repeat-cards and table
+    cells whose color depends on more than one field."""
+    def wrap(fn):
+        ITEM_COLOR_RULES[name] = fn
+        return fn
+    return wrap
+
+
+ENABLED_PREDICATES: Dict[str, Callable[[Any], bool]] = {}
+
+
+def register_enabled_predicate(name: str):
+    """Pure predicate over a plugin instance, used for row-action/button
+    visible_if and job_panel enabled_if. Plugin-instance-specific (e.g. a
+    config flag), not derivable from a single metric or item."""
+    def wrap(fn):
+        ENABLED_PREDICATES[name] = fn
         return fn
     return wrap
 
@@ -117,11 +168,19 @@ def threshold_color(warning: float, threshold: float):
     return rule
 
 
+def _dialog_spec_for(plugin: Any, dialog_name: str) -> Optional[Dict[str, Any]]:
+    ui_spec = getattr(plugin, 'UI_SPEC', None) or {}
+    return ui_spec.get('dialogs', {}).get(dialog_name)
+
+
 def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, Any]] = None,
                    page=None, start: bool = True):
     from nicegui import ui
     from vigil.web.ui.layout import PluginLayout, make_inline_layout
-    from vigil.web.ui.components import info_card, history_chart
+    from vigil.web.ui.components import (
+        info_card, history_chart, render_repeat_card, render_table_with_actions,
+        render_buttons, render_job_panel,
+    )
     from vigil.web.ui.theme import STATUS_COLORS
 
     spec = spec if spec is not None else getattr(plugin, 'UI_SPEC', None)
@@ -133,8 +192,15 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
     layout_rows = spec.get('layout', [])
     cards = spec.get('cards', {})
     chart_spec = spec.get('chart')
+    charts = dict(spec.get('charts', {}))
+    if chart_spec:
+        charts.setdefault('chart', chart_spec)
     show_events = spec.get('events', False)
     show_logs = spec.get('logs', False)
+    tables = spec.get('tables', {})
+    filters = spec.get('filters', {})
+    buttons = spec.get('buttons', {})
+    job_panel_spec = spec.get('job_panel')
 
     layout = PluginLayout(
         plugin.config,
@@ -144,14 +210,20 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
     if page is None:
         metric_names = [c['metric'] for name, c in cards.items()
                         if 'metric' in c and name != 'status_card']
-        if chart_spec:
-            metric_names.append(chart_spec['metric'])
+        for c in cards.values():
+            metric_names += c.get('metrics', [])
+        metric_names += [c['metric'] for c in charts.values()]
         page = plugin.ui.page(metric_names=metric_names)
 
     color_updates = []
 
     for widget_name, card_spec in cards.items():
         if widget_name == 'host_card' or widget_name == 'status_card':
+            continue
+
+        if 'repeat' in card_spec:
+            with layout.cell(widget_name):
+                render_repeat_card(plugin, page, card_spec['repeat'])
             continue
 
         title = card_spec['title']
@@ -163,7 +235,42 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
             else:
                 text = card_spec.get('value', '--')
             with layout.cell(widget_name):
-                info_card(title, text)
+                label = info_card(title, text)
+
+            color_attr = card_spec.get('color_attr')
+            if color_attr or card_spec.get('refresh'):
+                def _make_attr_update(lbl=label, value_attr=card_spec.get('value_attr'),
+                                      value_format=card_spec.get('value_format', '{}'),
+                                      color_attr=color_attr):
+                    def _update():
+                        if value_attr:
+                            lbl.text = value_format.format(getattr(plugin, value_attr))
+                        if color_attr:
+                            state = getattr(plugin, color_attr)
+                            if state is not None:
+                                lbl.style(f'color: {STATUS_COLORS[state]}')
+                    return _update
+                color_updates.append(_make_attr_update())
+            continue
+
+        if 'metrics' in card_spec:
+            metric_list = card_spec['metrics']
+            format_fn = ITEM_FORMATTERS[card_spec['format_fn']]
+            color_fn_name = card_spec.get('color_fn')
+            color_fn = ITEM_FORMATTERS.get(color_fn_name) if color_fn_name else None
+            with layout.cell(widget_name):
+                label = info_card(title, format_fn({}))
+
+            def _make_multi_update(lbl=label, metric_list=metric_list, format_fn=format_fn, color_fn=color_fn):
+                def _update():
+                    values = {m: page.model.metrics.get(m) for m in metric_list}
+                    lbl.text = format_fn(values)
+                    if color_fn:
+                        state = color_fn(values)
+                        if state is not None:
+                            lbl.style(f'color: {STATUS_COLORS[state]}')
+                return _update
+            color_updates.append(_make_multi_update())
             continue
 
         metric_name = card_spec['metric']
@@ -211,19 +318,38 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
                 off_text=sc.get('off_text', 'INACTIVE'),
             )
 
-    if chart_spec:
-        with layout.cell('chart'):
-            history_chart(page, chart_spec.get('title', chart_spec['metric'].upper()),
-                          plugin.id, chart_spec['metric'])
+    for widget_name, cs in charts.items():
+        with layout.cell(widget_name):
+            history_chart(page, cs.get('title', cs['metric'].upper()),
+                          plugin.id, cs['metric'])
+
+    dynamic_charts_spec = spec.get('dynamic_charts')
+    if dynamic_charts_spec:
+        with layout.cell(dynamic_charts_spec.get('widget', 'charts')):
+            for chart_title, chart_metric in getattr(plugin, dynamic_charts_spec['items_attr']):
+                history_chart(page, chart_title, plugin.id, chart_metric)
 
     if show_events:
+        events_kwargs = show_events if isinstance(show_events, dict) else {}
         with layout.cell('events'):
-            plugin.ui.events_table(page)
+            plugin.ui.events_table(page, **events_kwargs)
 
     if show_logs:
         logs_kwargs = show_logs if isinstance(show_logs, dict) else {}
         with layout.cell('logs'):
             plugin.ui.logs_table(page, **logs_kwargs)
+
+    for widget_name, table_spec in tables.items():
+        with layout.cell(widget_name):
+            render_table_with_actions(plugin, page, table_spec, filters.get(widget_name))
+
+    for widget_name, button_specs in buttons.items():
+        with layout.cell(widget_name):
+            render_buttons(plugin, button_specs)
+
+    if job_panel_spec:
+        with layout.cell(job_panel_spec.get('widget', 'jobs')):
+            render_job_panel(plugin, job_panel_spec)
 
     if color_updates:
         def _update_all_colors():

@@ -104,89 +104,59 @@ class ProcessesCollectorPlugin(CollectorPlugin):
 
 
 class ProcessesUIPlugin(UIPlugin):
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.cpu_warning   = float(config['cpu_warning'])   if 'cpu_warning'   in config else None
+        self.cpu_threshold = float(config['cpu_threshold']) if 'cpu_threshold' in config else None
+
+        if self.cpu_warning is not None and self.cpu_threshold is not None:
+            from vigil.web.ui.spec import register_item_color_rule, register_color_rule, threshold_color
+            self._cpu_color_rule_name = f'processes_cpu_{self.id}'
+            register_item_color_rule(self._cpu_color_rule_name)(
+                lambda row: _level_for(row['cpu'], self.cpu_warning, self.cpu_threshold)
+            )
+            self._top_cpu_color_rule_name = f'processes_top_cpu_{self.id}'
+            register_color_rule(self._top_cpu_color_rule_name)(
+                threshold_color(warning=self.cpu_warning, threshold=self.cpu_threshold))
+        else:
+            self._cpu_color_rule_name = None
+            self._top_cpu_color_rule_name = None
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'count_card': {'metric': 'process_count', 'title': 'PROCESSES', 'format': 'int'},
+                'top_cpu_card': {
+                    'metric': 'top_cpu_pct', 'title': 'TOP CPU', 'format': 'percent1',
+                    **({'color': self._top_cpu_color_rule_name} if self._top_cpu_color_rule_name else {}),
+                },
+            },
+            'tables': {
+                'table': {
+                    'row_key': 'pid',
+                    'columns': [
+                        {'name': 'pid', 'label': 'PID', 'field': 'pid', 'sortable': True, 'align': 'right'},
+                        {'name': 'user', 'label': 'USER', 'field': 'user', 'sortable': True, 'align': 'left'},
+                        {'name': 'cpu', 'label': 'CPU %', 'field': 'cpu', 'sortable': True, 'align': 'right',
+                         **({'cell_color_by': self._cpu_color_rule_name} if self._cpu_color_rule_name else {})},
+                        {'name': 'mem', 'label': 'MEM %', 'field': 'mem', 'sortable': True, 'align': 'right'},
+                        {'name': 'command', 'label': 'COMMAND', 'field': 'command', 'sortable': True, 'align': 'left'},
+                    ],
+                    'row_actions': [
+                        {'id': 'kill_term', 'icon': 'cancel', 'color': 'warning',
+                         'tooltip': 'SIGTERM (graceful)', 'kind': 'dispatch', 'action_id': 'kill',
+                         'params': {'pid': 'pid'}, 'static_params': {'signal': 'TERM'}},
+                        {'id': 'kill_kill', 'icon': 'dangerous', 'color': 'negative',
+                         'tooltip': 'SIGKILL (force)', 'kind': 'dispatch', 'action_id': 'kill',
+                         'params': {'pid': 'pid'}, 'static_params': {'signal': 'KILL'}},
+                    ],
+                },
+            },
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        import asyncio
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        cpu_warning   = float(self.config['cpu_warning'])   if 'cpu_warning'   in self.config else None
-        cpu_threshold = float(self.config['cpu_threshold']) if 'cpu_threshold' in self.config else None
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page()
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('count_card'):
-            count_label = info_card('PROCESSES', '--')
-        with layout.cell('top_cpu_card'):
-            top_cpu_label = info_card('TOP CPU', '-- %')
-
-        columns = [
-            {'name': 'pid',     'label': 'PID',     'field': 'pid',     'sortable': True,  'align': 'right'},
-            {'name': 'user',    'label': 'USER',    'field': 'user',    'sortable': True,  'align': 'left'},
-            {'name': 'cpu',     'label': 'CPU %',   'field': 'cpu',     'sortable': True,  'align': 'right'},
-            {'name': 'mem',     'label': 'MEM %',   'field': 'mem',     'sortable': True,  'align': 'right'},
-            {'name': 'command', 'label': 'COMMAND', 'field': 'command', 'sortable': True,  'align': 'left'},
-            {'name': 'actions', 'label': '',        'field': 'actions', 'sortable': False, 'align': 'center'},
-        ]
-
-        with layout.cell('table'):
-            table = ui.table(columns=columns, rows=[], row_key='pid').classes('w-full text-sm')
-            table.add_slot('body-cell-cpu', '''
-                <q-td :props="props">
-                    <span :style="{ color: props.row._cpu_color }">{{ props.row.cpu }}</span>
-                </q-td>
-            ''')
-            table.add_slot('body-cell-actions', '''
-                <q-td :props="props">
-                    <q-btn dense flat icon="cancel" color="warning" size="sm"
-                           @click="$parent.$emit('kill_term', props.row)"
-                           title="SIGTERM (graceful)" />
-                    <q-btn dense flat icon="dangerous" color="negative" size="sm"
-                           @click="$parent.$emit('kill_kill', props.row)"
-                           title="SIGKILL (force)" />
-                </q-td>
-            ''')
-
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        async def _do_kill(e, signal):
-            pid = (e.args or {}).get('pid')
-            if pid is None:
-                return
-            success = await self.on_action('kill', pid=pid, signal=signal)
-            msg = (f'Sent SIG{signal} to PID {pid}' if success
-                   else f'Failed to kill PID {pid}')
-            ui.notify(msg, type='positive' if success else 'negative')
-
-        table.on('kill_term', lambda e: asyncio.create_task(_do_kill(e, 'TERM')))
-        table.on('kill_kill', lambda e: asyncio.create_task(_do_kill(e, 'KILL')))
-
-        def update():
-            count_metric = self.storage.latest_metric('process_count')
-            top_cpu_metric = self.storage.latest_metric('top_cpu_pct')
-            if count_metric is not None:
-                count_label.text = str(int(count_metric.value))
-            if top_cpu_metric is not None:
-                top_cpu = top_cpu_metric.value
-                top_cpu_label.text = f'{top_cpu:.1f}%'
-                if cpu_warning is not None and cpu_threshold is not None:
-                    top_cpu_label.style(
-                        f'color: {STATUS_COLORS[_level_for(top_cpu, cpu_warning, cpu_threshold)]}'
-                    )
-            rows = []
-            for p in self.storage.latest_snapshot(default=[]):
-                cpu_color = STATUS_COLORS['online']
-                if cpu_warning is not None and cpu_threshold is not None:
-                    cpu_color = STATUS_COLORS[_level_for(p['cpu'], cpu_warning, cpu_threshold)]
-                rows.append({**p, '_cpu_color': cpu_color})
-            table.rows[:] = rows
-            table.update()
-
-        page.on_refresh(update)
-        update()
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

@@ -87,54 +87,40 @@ class WifiUIPlugin(UIPlugin):
         self.quality_warning   = float(self.config.get('quality_warning',   40))
         self.quality_threshold = float(self.config.get('quality_threshold', 20))
 
-    def _level_for_quality(self, quality: float) -> str:
+        from vigil.web.ui.spec import register_color_rule
+        self._quality_color_name = f'wifi_quality_{self.id}'
+        register_color_rule(self._quality_color_name)(self._quality_color)
+
+    def _quality_color(self, quality: Optional[float]) -> Optional[str]:
+        if quality is None:
+            return None
         if quality <= self.quality_threshold:
             return 'failed'
         if quality <= self.quality_warning:
             return 'warning'
         return 'online'
 
+    @property
+    def _active_interface_text(self) -> str:
+        return self.storage.get_setting(f"wifi:{self.id}:active_interface") or self.interface or 'Detecting...'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'iface_card': {'title': 'INTERFACE', 'value_attr': '_active_interface_text', 'refresh': True},
+                'quality_card': {'metric': 'link_quality', 'title': 'LINK QUALITY', 'format': 'int_rounded',
+                                 'color': self._quality_color_name},
+                'signal_card': {'metric': 'signal_dbm', 'title': 'SIGNAL', 'format': 'dbm0'},
+            },
+            'charts': {
+                'quality_chart': {'metric': 'link_quality', 'title': 'LINK QUALITY'},
+                'signal_chart': {'metric': 'signal_dbm', 'title': 'SIGNAL (dBm)'},
+            },
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page(metric_names=['link_quality', 'signal_dbm'])
-
-        active_interface = self.storage.get_setting(f"wifi:{self.id}:active_interface") or self.interface
-
-        def _quality_or_dash(v):
-            return '--' if v is None else f'{v:.0f}'
-
-        def _signal_or_dash(v):
-            return '-- dBm' if v is None else f'{v:.0f} dBm'
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('iface_card'):
-            iface_label = info_card('INTERFACE', active_interface or 'Detecting...')
-        with layout.cell('quality_card'):
-            quality_label = info_card('LINK QUALITY', '--').bind_text_from(
-                page.model, ('metrics', 'link_quality'), backward=_quality_or_dash)
-        with layout.cell('signal_card'):
-            info_card('SIGNAL', '-- dBm').bind_text_from(
-                page.model, ('metrics', 'signal_dbm'), backward=_signal_or_dash)
-        with layout.cell('quality_chart'):
-            history_chart(page, 'LINK QUALITY', self.id, 'link_quality')
-        with layout.cell('signal_chart'):
-            history_chart(page, 'SIGNAL (dBm)', self.id, 'signal_dbm')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_iface_and_color():
-            device = self.storage.get_setting(f"wifi:{self.id}:active_interface")
-            if device:
-                iface_label.text = device
-            quality = page.model.metrics.get('link_quality')
-            if quality is not None:
-                quality_label.style(f'color: {STATUS_COLORS[self._level_for_quality(quality)]}')
-
-        page.on_refresh(update_iface_and_color)
-
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

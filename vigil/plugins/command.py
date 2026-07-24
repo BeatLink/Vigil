@@ -92,62 +92,55 @@ class CommandCollectorPlugin(CollectorPlugin):
 
 
 class CommandUIPlugin(UIPlugin):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.pattern = self.config.get('pattern')
+        self.warning = self.config.get('warning')
+        self.threshold = self.config.get('threshold')
+        self.invert = bool(self.config.get('invert', False))
+        self.value_label = self.config.get('value_label', 'VALUE')
+        self.value_unit = self.config.get('value_unit', '')
+        self.has_value = self.pattern is not None
+
+        from vigil.web.ui.spec import register_color_rule, register_formatter
+        self._exit_color_name = f'command_exit_{self.id}'
+        register_color_rule(self._exit_color_name)(
+            lambda code: None if code is None else ('online' if code == 0 else 'failed'))
+        self._value_color_name = f'command_value_{self.id}'
+        register_color_rule(self._value_color_name)(self._value_color)
+        self._value_format_name = f'command_value_fmt_{self.id}'
+        register_formatter(self._value_format_name)(
+            lambda v: '--' if v is None else f'{v:g}{self.value_unit}')
+
+    def _value_color(self, value: Optional[float]) -> Optional[str]:
+        if value is None:
+            return None
+        if self.warning is None or self.threshold is None:
+            return 'online'
+        if self.invert:
+            return _level_for(-value, -float(self.warning), -float(self.threshold))
+        return _level_for(value, float(self.warning), float(self.threshold))
+
+    @property
+    def UI_SPEC(self):
+        cards = {
+            'exit_card': {'metric': 'exit_code', 'title': 'EXIT CODE', 'format': 'int',
+                          'color': self._exit_color_name},
+        }
+        spec = {
+            'layout': _DEFAULT_LAYOUT_METRIC if self.has_value else _DEFAULT_LAYOUT_PLAIN,
+            'cards': cards,
+            'events': True,
+        }
+        if self.has_value:
+            cards['value_card'] = {'metric': 'value', 'title': self.value_label,
+                                   'format': self._value_format_name, 'color': self._value_color_name}
+            spec['chart'] = {'metric': 'value', 'title': self.value_label}
+        return spec
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        pattern = self.config.get('pattern')
-        warning = self.config.get('warning')
-        threshold = self.config.get('threshold')
-        invert = bool(self.config.get('invert', False))
-        value_label = self.config.get('value_label', 'VALUE')
-        value_unit = self.config.get('value_unit', '')
-
-        def level_for_value(value: float) -> str:
-            if warning is None or threshold is None:
-                return 'online'
-            if invert:
-                return _level_for(-value, -float(warning), -float(threshold))
-            return _level_for(value, float(warning), float(threshold))
-
-        from vigil.web.ui.spec import FORMATTERS
-        has_value = pattern is not None
-        base = _DEFAULT_LAYOUT_METRIC if has_value else _DEFAULT_LAYOUT_PLAIN
-        layout = PluginLayout(self.config, base if context == 'page' else make_inline_layout(base))
-        metric_names = ['exit_code'] + (['value'] if has_value else [])
-        page = self.ui.page(metric_names=metric_names)
-
-        _exit_text = FORMATTERS['int']
-
-        def _value_text(v):
-            return '--' if v is None else f'{v:g}{value_unit}'
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('exit_card'):
-            exit_label = info_card('EXIT CODE', '--').bind_text_from(
-                page.model, ('metrics', 'exit_code'), backward=_exit_text)
-        if has_value:
-            with layout.cell('value_card'):
-                value_label_widget = info_card(value_label, '--').bind_text_from(
-                    page.model, ('metrics', 'value'), backward=_value_text)
-            with layout.cell('chart'):
-                history_chart(page, value_label, self.id, 'value')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_colors():
-            code = page.model.metrics.get('exit_code')
-            if code is not None:
-                exit_label.style(f"color: {STATUS_COLORS['online' if code == 0 else 'failed']}")
-            if has_value:
-                val = page.model.metrics.get('value')
-                if val is not None:
-                    value_label_widget.style(f"color: {STATUS_COLORS[level_for_value(val)]}")
-
-        page.on_refresh(update_colors)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
 
 def _shquote(s: str) -> str:

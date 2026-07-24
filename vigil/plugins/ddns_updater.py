@@ -219,46 +219,44 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
 
 
 class DdnsUpdaterUIPlugin(UIPlugin):
+    @property
+    def _public_ip_text(self) -> str:
+        return self.storage.get_setting(f"ddns:{self.id}:public_ip") or '--'
+
+    @property
+    def _dns_ip_text(self) -> str:
+        return self.storage.get_setting(f"ddns:{self.id}:dns_ip") or '--'
+
+    @property
+    def _dns_ip_color(self) -> Optional[str]:
+        dns_ip = self.storage.get_setting(f"ddns:{self.id}:dns_ip")
+        if not dns_ip:
+            return None
+        public_ip = self.storage.get_setting(f"ddns:{self.id}:public_ip")
+        return 'online' if dns_ip == public_ip else 'failed'
+
+    @property
+    def _last_update_text(self) -> str:
+        last_update = self.storage.latest_metric('last_update_epoch')
+        if last_update is None:
+            return 'Never'
+        return format_age(int(time.time() - last_update.value))
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'status_card': {'metric': 'in_sync', 'title': 'DDNS STATUS',
+                                'on_text': 'IN SYNC', 'off_text': 'OUT OF SYNC'},
+                'public_ip_card': {'title': 'PUBLIC IP', 'value_attr': '_public_ip_text', 'refresh': True},
+                'dns_ip_card': {'title': 'DNS RECORD', 'value_attr': '_dns_ip_text', 'color_attr': '_dns_ip_color'},
+                'lastupdate_card': {'title': 'LAST UPDATE PUSHED', 'value_attr': '_last_update_text',
+                                    'refresh': True},
+            },
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page(metric_names=[])
-
-        with layout.cell('status_card'):
-            self.ui.status_card(
-                page,
-                metric_name='in_sync',
-                title='DDNS STATUS',
-                on_text='IN SYNC',
-                off_text='OUT OF SYNC'
-            )
-        with layout.cell('public_ip_card'):
-            public_ip_label = info_card('PUBLIC IP', '--')
-        with layout.cell('dns_ip_card'):
-            dns_ip_label = info_card('DNS RECORD', '--')
-        with layout.cell('lastupdate_card'):
-            lastupdate_label = info_card('LAST UPDATE PUSHED', 'Never')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update():
-            public_ip = self.storage.get_setting(f"ddns:{self.id}:public_ip")
-            dns_ip = self.storage.get_setting(f"ddns:{self.id}:dns_ip")
-            if public_ip:
-                public_ip_label.text = public_ip
-            if dns_ip:
-                in_sync = dns_ip == public_ip
-                dns_ip_label.text = dns_ip
-                dns_ip_label.style(f"color: {STATUS_COLORS['online' if in_sync else 'failed']}")
-
-            last_update = self.storage.latest_metric('last_update_epoch')
-            if last_update is not None:
-                age = int(time.time() - last_update.value)
-                lastupdate_label.text = format_age(age)
-
-        page.on_refresh(update)
-        update()
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

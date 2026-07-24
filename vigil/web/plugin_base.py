@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Tuple, Union
 
 from vigil.core.common.plugin_config import PluginConfigMixin
 from vigil.web.orchestration.storage_orchestrator import WebStorageOrchestrator
@@ -22,6 +22,9 @@ class UIPlugin(PluginConfigMixin, ABC):
 
     async def on_action(self, action_id: str, **kwargs) -> bool:
         return await self._collector_client.action(self.id, action_id, kwargs)
+
+    async def action_with_output(self, action_id: str, **kwargs) -> Tuple[bool, str]:
+        return await self._collector_client.action_with_output(self.id, action_id, kwargs)
 
     async def present(self) -> Dict[str, Any]:
         actions = await self._collector_client.actions(self.id)

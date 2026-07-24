@@ -350,87 +350,78 @@ class QbittorrentCollectorPlugin(CollectorPlugin):
 
 
 class QbittorrentUIPlugin(UIPlugin):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.stalled_warning = int(self.config.get('stalled_warning', 3))
+        self.stalled_threshold = int(self.config.get('stalled_threshold', 10))
+
+        from vigil.web.ui.spec import register_formatter, register_color_rule, register_item_formatter
+        self._connection_format_name = f'qbittorrent_connection_{self.id}'
+        register_formatter(self._connection_format_name)(
+            lambda v: '--' if v is None else ('CONNECTED' if v >= 1.0 else 'DISCONNECTED'))
+        self._connection_color_name = f'qbittorrent_connection_color_{self.id}'
+        register_color_rule(self._connection_color_name)(
+            lambda v: None if v is None else ('online' if v >= 1.0 else 'failed'))
+
+        self._speed_format_name = f'qbittorrent_speed_{self.id}'
+        register_item_formatter(self._speed_format_name)(self._speed_text)
+        self._torrents_format_name = f'qbittorrent_torrents_{self.id}'
+        register_item_formatter(self._torrents_format_name)(self._torrents_text)
+
+        self._stalled_color_name = f'qbittorrent_stalled_color_{self.id}'
+        register_color_rule(self._stalled_color_name)(self._stalled_color)
+        self._errored_color_name = f'qbittorrent_errored_color_{self.id}'
+        register_color_rule(self._errored_color_name)(
+            lambda v: None if v is None else ('failed' if int(v) else 'online'))
+
+    @staticmethod
+    def _speed_text(values: Dict[str, Any]) -> str:
+        dl, up = values.get('dl_speed_bytes'), values.get('up_speed_bytes')
+        if dl is None or up is None:
+            return '--'
+        return f'↓ {_format_rate(dl)}  ↑ {_format_rate(up)}'
+
+    @staticmethod
+    def _torrents_text(values: Dict[str, Any]) -> str:
+        total = values.get('torrents_total')
+        if total is None:
+            return '--'
+        text = f'{int(total)}'
+        downloading = values.get('torrents_downloading')
+        if downloading is not None:
+            text += f' ({int(downloading)} active)'
+        return text
+
+    def _stalled_color(self, v: Optional[float]) -> Optional[str]:
+        if v is None:
+            return None
+        count = int(v)
+        if count >= self.stalled_threshold:
+            return 'failed'
+        if count >= self.stalled_warning:
+            return 'warning'
+        return 'online'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'connection_card': {'metric': 'connected', 'title': 'CONNECTION',
+                                    'format': self._connection_format_name, 'color': self._connection_color_name},
+                'speed_card': {'title': 'TRANSFER', 'metrics': ['dl_speed_bytes', 'up_speed_bytes'],
+                              'format_fn': self._speed_format_name},
+                'torrents_card': {'title': 'TORRENTS', 'metrics': ['torrents_total', 'torrents_downloading'],
+                                  'format_fn': self._torrents_format_name},
+                'stalled_card': {'metric': 'torrents_stalled', 'title': 'STALLED', 'format': 'int',
+                                 'color': self._stalled_color_name},
+                'errored_card': {'metric': 'torrents_errored', 'title': 'ERRORED', 'format': 'int',
+                                 'color': self._errored_color_name},
+            },
+            'chart': {'metric': 'dl_speed_bytes', 'title': 'DOWNLOAD SPEED (B/s)'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.spec import FORMATTERS
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
-        )
-
-        stalled_warning = int(self.config.get('stalled_warning', 3))
-        stalled_threshold = int(self.config.get('stalled_threshold', 10))
-
-        page = self.ui.page(metric_names=[
-            'connected', 'dl_speed_bytes', 'up_speed_bytes', 'torrents_total',
-            'torrents_downloading', 'torrents_stalled', 'torrents_errored',
-        ])
-
-        def _connection_text(v):
-            if v is None:
-                return '--'
-            return 'CONNECTED' if v >= 1.0 else 'DISCONNECTED'
-
-        _int_or_dash = FORMATTERS['int']
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('connection_card'):
-            connection_label = info_card('CONNECTION', '--').bind_text_from(
-                page.model, ('metrics', 'connected'), backward=_connection_text)
-        with layout.cell('speed_card'):
-            speed_label = info_card('TRANSFER', '--')
-        with layout.cell('torrents_card'):
-            torrents_label = info_card('TORRENTS', '--')
-        with layout.cell('stalled_card'):
-            stalled_label = info_card('STALLED', '--').bind_text_from(
-                page.model, ('metrics', 'torrents_stalled'), backward=_int_or_dash)
-        with layout.cell('errored_card'):
-            errored_label = info_card('ERRORED', '--').bind_text_from(
-                page.model, ('metrics', 'torrents_errored'), backward=_int_or_dash)
-        with layout.cell('chart'):
-            history_chart(page, 'DOWNLOAD SPEED (B/s)', self.id, 'dl_speed_bytes')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_cards():
-            metrics = page.model.metrics
-            connected   = metrics.get('connected')
-            dl          = metrics.get('dl_speed_bytes')
-            up          = metrics.get('up_speed_bytes')
-            total       = metrics.get('torrents_total')
-            downloading = metrics.get('torrents_downloading')
-            stalled     = metrics.get('torrents_stalled')
-            errored     = metrics.get('torrents_errored')
-
-            if connected is not None:
-                on = connected >= 1.0
-                connection_label.style(
-                    f'color: {STATUS_COLORS["online" if on else "failed"]}')
-            if dl is not None and up is not None:
-                speed_label.text = (
-                    f'↓ {_format_rate(dl)}  ↑ {_format_rate(up)}')
-            if total is not None:
-                text = f'{int(total)}'
-                if downloading is not None:
-                    text += f' ({int(downloading)} active)'
-                torrents_label.text = text
-            if stalled is not None:
-                count = int(stalled)
-                if count >= stalled_threshold:
-                    colour = STATUS_COLORS['failed']
-                elif count >= stalled_warning:
-                    colour = STATUS_COLORS['warning']
-                else:
-                    colour = STATUS_COLORS['online']
-                stalled_label.style(f'color: {colour}')
-            if errored is not None:
-                count = int(errored)
-                errored_label.style(
-                    f'color: {STATUS_COLORS["failed" if count else "online"]}')
-
-        page.on_refresh(update_cards)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

@@ -1,6 +1,5 @@
 import os
 import shlex
-import asyncio
 from typing import Any, Dict, List, Optional, Union
 
 from vigil.collector.plugin_base import CollectorPlugin
@@ -124,9 +123,52 @@ class ServiceListCollectorPlugin(CollectorPlugin):
         if action_id == 'daemon_reload':
             return ActionPlan('sudo systemctl daemon-reload')
 
+        if action_id == 'view_status':
+            if not service_name:
+                return CollectResult.failed('view_status missing service_name')
+            return ActionPlan(f'sudo systemctl status {shlex.quote(service_name)} --no-pager')
+
+        if action_id == 'view_unit_file':
+            if not service_name:
+                return CollectResult.failed('view_unit_file missing service_name')
+            return ActionPlan(f'sudo systemctl cat {shlex.quote(service_name)}')
+
+        if action_id == 'write_unit_file':
+            if not service_name:
+                return CollectResult.failed('write_unit_file missing service_name')
+            import base64
+            content_b64 = base64.b64encode(kwargs.get('content', '').encode('utf-8')).decode('ascii')
+            allowed_write_paths = tuple(self.config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
+            allowed_checks = ' || '.join(
+                f'"$P" = {shlex.quote(p)} || case "$P" in {shlex.quote(p + os.sep)}*) true;; *) false;; esac'
+                for p in allowed_write_paths
+            )
+            cmd = (
+                f"P=$(systemctl show -p FragmentPath --value {shlex.quote(service_name)}); "
+                "if [ -z \"$P\" ] || [ \"$P\" = 'n/a' ]; then echo 'Unit file path unavailable' >&2; exit 1; fi; "
+                f"if ! ( {allowed_checks} ); then echo \"Write path not allowed: $P\" >&2; exit 1; fi; "
+                f"echo {shlex.quote(content_b64)} | base64 -d | sudo tee \"$P\" > /dev/null"
+            )
+            return ActionPlan(cmd)
+
         return None
 
     def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
+        if action_id == 'view_status':
+            if result.exit_code != 0:
+                return CollectResult.failed(result.stderr.strip() or 'Unable to fetch service status')
+            return CollectResult(success=True, metadata={'content': result.stdout})
+
+        if action_id == 'view_unit_file':
+            if result.exit_code != 0:
+                return CollectResult.failed(result.stderr.strip() or 'Unable to read unit file')
+            return CollectResult(success=True, metadata={'content': result.stdout})
+
+        if action_id == 'write_unit_file':
+            if result.exit_code != 0:
+                return CollectResult.failed(result.stderr.strip() or 'Unable to write unit file')
+            return CollectResult(logs=[('Unit file written successfully', 'INFO')], success=True)
+
         if result.exit_code != 0:
             command = action_id.replace('_service', '') if action_id != 'daemon_reload' else 'daemon-reload'
             service_name = kwargs.get('service_name')
@@ -139,244 +181,89 @@ class ServiceListUIPlugin(UIPlugin):
         super().__init__(name, config, db, collector_client)
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
 
+        from vigil.web.ui.spec import register_enabled_predicate
+        self._edit_predicate_name = f'service_list_edit_{self.id}'
+        register_enabled_predicate(self._edit_predicate_name)(lambda p: p.allow_unit_file_edit)
+
+    @property
+    def _service_count_text(self) -> str:
+        count_metric = self.storage.latest_metric('services_total')
+        if count_metric is not None:
+            return str(int(count_metric.value))
+        return str(len(self.storage.latest_snapshot(default=[])))
+
+    @property
+    def UI_SPEC(self):
+        row_actions = [
+            {'id': 'start_service', 'icon': 'play_arrow', 'color': 'positive',
+             'tooltip': 'Start Service', 'kind': 'dispatch', 'action_id': 'start_service',
+             'params': {'service_name': 'unit'}},
+            {'id': 'stop_service', 'icon': 'stop', 'color': 'warning',
+             'tooltip': 'Stop Service', 'kind': 'dispatch', 'action_id': 'stop_service',
+             'params': {'service_name': 'unit'}},
+            {'id': 'restart_service', 'icon': 'replay', 'color': 'primary',
+             'tooltip': 'Restart Service', 'kind': 'dispatch', 'action_id': 'restart_service',
+             'params': {'service_name': 'unit'}},
+            {'id': 'enable_service', 'icon': 'toggle_on', 'color': 'secondary',
+             'tooltip': 'Enable on Boot', 'kind': 'dispatch', 'action_id': 'enable_service',
+             'params': {'service_name': 'unit'}},
+            {'id': 'disable_service', 'icon': 'toggle_off', 'color': 'secondary',
+             'tooltip': 'Disable on Boot', 'kind': 'dispatch', 'action_id': 'disable_service',
+             'params': {'service_name': 'unit'}},
+            {'id': 'view_status', 'icon': 'info', 'color': 'info',
+             'tooltip': 'View Status', 'kind': 'dialog', 'dialog': 'view_status'},
+            {'id': 'view_file', 'icon': 'article', 'color': 'secondary',
+             'tooltip': 'View Unit File', 'kind': 'dialog', 'dialog': 'view_unit_file'},
+            {'id': 'edit_file', 'icon': 'edit', 'color': 'secondary',
+             'tooltip': 'Edit Unit File', 'kind': 'dialog', 'dialog': 'edit_unit_file',
+             'visible_if': self._edit_predicate_name},
+        ]
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'count_card': {'title': 'SERVICES', 'value_attr': '_service_count_text'},
+            },
+            'buttons': {
+                'reload_card': [
+                    {'id': 'daemon_reload', 'label': 'Reload Daemon', 'icon': 'refresh',
+                     'color': 'secondary', 'kind': 'dispatch'},
+                ],
+            },
+            'tables': {
+                'table': {
+                    'row_key': 'unit',
+                    'columns': [
+                        {'name': 'unit', 'label': 'Unit', 'field': 'unit', 'sortable': True, 'align': 'left'},
+                        {'name': 'load', 'label': 'Load', 'field': 'load', 'sortable': True, 'align': 'left'},
+                        {'name': 'active', 'label': 'Active', 'field': 'active', 'sortable': True, 'align': 'left'},
+                        {'name': 'sub', 'label': 'Sub', 'field': 'sub', 'sortable': True, 'align': 'left'},
+                        {'name': 'enabled', 'label': 'Enabled', 'field': 'enabled', 'sortable': True, 'align': 'left'},
+                        {'name': 'description', 'label': 'Description', 'field': 'description',
+                         'sortable': True, 'align': 'left'},
+                    ],
+                    'row_actions': row_actions,
+                },
+            },
+            'filters': {
+                'table': {'placeholder': 'Filter services',
+                          'fields': ['unit', 'load', 'active', 'sub', 'enabled', 'description']},
+            },
+            'dialogs': {
+                'view_status': {'kind': 'read', 'title': 'Status: {row[unit]}',
+                                'action_id': 'view_status', 'params': {'service_name': 'unit'},
+                                'render': 'text'},
+                'view_unit_file': {'kind': 'read', 'title': 'Unit File: {row[unit]}',
+                                   'action_id': 'view_unit_file', 'params': {'service_name': 'unit'},
+                                   'render': 'textarea_readonly'},
+                'edit_unit_file': {'kind': 'edit', 'title': 'Edit Unit File: {row[unit]}',
+                                   'load_action_id': 'view_unit_file', 'load_params': {'service_name': 'unit'},
+                                   'save_action_id': 'write_unit_file', 'save_params': {'service_name': 'unit'},
+                                   'save_content_kwarg': 'content',
+                                   'success_message': 'Unit file written successfully'},
+            },
+            'events': {'title': 'PLUGIN EVENTS'},
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page()
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-
-        with layout.cell('count_card'):
-            self._count_label = info_card('SERVICES', '--')
-
-        with layout.cell('reload_card'):
-            ui.button('Reload Daemon', on_click=lambda: asyncio.create_task(self._reload_daemon()), color='secondary').props('flat')
-
-        with layout.cell('table'):
-            search_in = ui.input('Filter services').props('outlined dense clearable').classes('w-full mb-4')
-            columns = [
-                {'name': 'unit',        'label': 'Unit',        'field': 'unit',        'sortable': True,  'align': 'left'},
-                {'name': 'load',        'label': 'Load',        'field': 'load',        'sortable': True,  'align': 'left'},
-                {'name': 'active',      'label': 'Active',      'field': 'active',      'sortable': True,  'align': 'left'},
-                {'name': 'sub',         'label': 'Sub',         'field': 'sub',         'sortable': True,  'align': 'left'},
-                {'name': 'enabled',     'label': 'Enabled',     'field': 'enabled',     'sortable': True,  'align': 'left'},
-                {'name': 'description', 'label': 'Description', 'field': 'description', 'sortable': True,  'align': 'left'},
-                {'name': 'actions',     'label': '',           'field': 'actions',     'sortable': False, 'align': 'center'},
-            ]
-
-            table = ui.table(columns=columns, rows=[], row_key='unit').classes('w-full text-sm')
-            table.add_slot('body-cell-actions', '''
-<q-td :props="props" class="q-pa-none">
-  <div class="row items-center q-gutter-xs">
-    <q-btn dense flat icon="play_arrow" color="positive" size="sm"
-           @click="$parent.$emit('start_service', props.row)"
-           title="Start Service" />
-    <q-btn dense flat icon="stop" color="warning" size="sm"
-           @click="$parent.$emit('stop_service', props.row)"
-           title="Stop Service" />
-    <q-btn dense flat icon="replay" color="primary" size="sm"
-           @click="$parent.$emit('restart_service', props.row)"
-           title="Restart Service" />
-    <q-btn dense flat icon="toggle_on" color="secondary" size="sm"
-           @click="$parent.$emit('enable_service', props.row)"
-           title="Enable on Boot" />
-    <q-btn dense flat icon="toggle_off" color="secondary" size="sm"
-           @click="$parent.$emit('disable_service', props.row)"
-           title="Disable on Boot" />
-    <q-btn dense flat icon="info" color="info" size="sm"
-           @click="$parent.$emit('view_status', props.row)"
-           title="View Status" />
-    <q-btn dense flat icon="article" color="secondary" size="sm"
-           @click="$parent.$emit('view_file', props.row)"
-           title="View Unit File" />
-    ''' + ('' if not self.allow_unit_file_edit else '''
-    <q-btn dense flat icon="edit" color="secondary" size="sm"
-           @click="$parent.$emit('edit_file', props.row)"
-           title="Edit Unit File" />
-    ''') + '''
-  </div>
-</q-td>
-''')
-
-            def update_table():
-                filter_term = (search_in.value or '').strip().lower()
-                rows = []
-                for service in self.storage.latest_snapshot(default=[]):
-                    if filter_term:
-                        haystack = ' '.join(
-                            str(service.get(key, '')).lower()
-                            for key in ('unit', 'load', 'active', 'sub', 'enabled', 'description')
-                        )
-                        if filter_term not in haystack:
-                            continue
-                    rows.append(service)
-                table.rows = rows
-                table.update()
-
-            async def do_row_action(e, action: str):
-                service_name = (e.args or {}).get('unit')
-                if not service_name:
-                    return
-                if action == 'view_status':
-                    await self._show_status(service_name)
-                    return
-                if action == 'view_file':
-                    await self._show_unit_file(service_name)
-                    return
-                if action == 'edit_file':
-                    await self._edit_unit_file(service_name)
-                    return
-                action_id = f'{action}_service'
-                success = await self.on_action(action_id, service_name=service_name)
-                ui.notify(
-                    f'{action.replace("_", " ").title()} {"succeeded" if success else "failed"}',
-                    type='positive' if success else 'negative'
-                )
-
-            table.on('start_service', lambda e: asyncio.create_task(do_row_action(e, 'start')))
-            table.on('stop_service', lambda e: asyncio.create_task(do_row_action(e, 'stop')))
-            table.on('restart_service', lambda e: asyncio.create_task(do_row_action(e, 'restart')))
-            table.on('enable_service', lambda e: asyncio.create_task(do_row_action(e, 'enable')))
-            table.on('disable_service', lambda e: asyncio.create_task(do_row_action(e, 'disable')))
-            table.on('view_status', lambda e: asyncio.create_task(do_row_action(e, 'view_status')))
-            table.on('view_file', lambda e: asyncio.create_task(do_row_action(e, 'view_file')))
-            if self.allow_unit_file_edit:
-                table.on('edit_file', lambda e: asyncio.create_task(do_row_action(e, 'edit_file')))
-
-            def update():
-                count_metric = self.storage.latest_metric('services_total')
-                self._count_label.text = (
-                    str(int(count_metric.value)) if count_metric
-                    else str(len(self.storage.latest_snapshot(default=[])))
-                )
-                update_table()
-
-            search_in.on('update:modelValue', lambda e: update())
-            page.on_refresh(update)
-            update()
-
-        with layout.cell('events'):
-            self.ui.events_table(page, title='PLUGIN EVENTS')
-
-        page.start()
-
-    async def _show_status(self, service_name: str):
-        from nicegui import ui
-
-        status, stdout, stderr = await self.network.execute_raw(
-            f'sudo systemctl status {shlex.quote(service_name)} --no-pager'
-        )
-        if status != 0:
-            ui.notify(stderr or 'Unable to fetch service status', type='negative')
-            return
-
-        with ui.dialog() as dialog:
-            ui.dialog_title(f'Status: {service_name}')
-            ui.markdown('''
-```text
-''')
-            ui.label(stdout).classes('font-mono text-xs').style('white-space: pre-wrap;')
-            ui.markdown('''
-```''')
-            ui.button('Close', on_click=dialog.close).props('flat')
-        dialog.open()
-
-    async def _show_unit_file(self, service_name: str):
-        from nicegui import ui
-
-        ok, content = await self._read_unit_file(service_name)
-        if not ok:
-            ui.notify(content, type='negative')
-            return
-
-        with ui.dialog() as dialog:
-            ui.dialog_title(f'Unit File: {service_name}')
-            ui.textarea(content, readonly=True, auto_grow=True).classes('w-full')
-            ui.button('Close', on_click=dialog.close).props('flat')
-        dialog.open()
-
-    async def _edit_unit_file(self, service_name: str):
-        from nicegui import ui
-
-        if not self.allow_unit_file_edit:
-            ui.notify('Unit file editing is disabled', type='negative')
-            return
-
-        ok, content = await self._read_unit_file(service_name)
-        if not ok:
-            ui.notify(content, type='negative')
-            return
-
-        with ui.dialog() as dialog:
-            ui.dialog_title(f'Edit Unit File: {service_name}')
-            editor = ui.textarea(content, auto_grow=True).classes('w-full h-96')
-            with ui.row().classes('justify-end gap-2 mt-4'):
-                ui.button('Cancel', on_click=dialog.close).props('flat')
-
-                async def save():
-                    save_ok, message = await self._write_unit_file(service_name, editor.value)
-                    ui.notify(message, type='positive' if save_ok else 'negative')
-                    if save_ok:
-                        dialog.close()
-
-                ui.button('Save', on_click=save).props('flat primary')
-        dialog.open()
-
-    async def _reload_daemon(self):
-        from nicegui import ui
-
-        success = await self.on_action('daemon_reload')
-        ui.notify('Daemon reloaded' if success else 'Daemon reload failed', type='positive' if success else 'negative')
-
-    async def _read_unit_file(self, service_name: str) -> tuple[bool, str]:
-        status, stdout, stderr = await self.network.execute_raw(
-            f'sudo systemctl cat {shlex.quote(service_name)}'
-        )
-        if status != 0:
-            return False, stderr.strip() or 'Unable to read unit file'
-        return True, stdout
-
-    async def _write_unit_file(self, service_name: str, content: str) -> tuple[bool, str]:
-        ok, path_or_error = await self._resolve_unit_path(service_name)
-        if not ok:
-            return False, path_or_error
-
-        path = path_or_error
-        if not self._is_write_path_allowed(path):
-            return False, f'Write path not allowed: {path}'
-
-        cmd = (
-            "sudo python3 - <<'PY'\n"
-            "from pathlib import Path\n"
-            f"Path({shlex.quote(path)}).write_text({shlex.quote(content)}, encoding='utf-8')\n"
-            "PY"
-        )
-        status, _, stderr = await self.network.execute_raw(cmd)
-        if status != 0:
-            return False, stderr.strip() or 'Unable to write unit file'
-        return True, 'Unit file written successfully'
-
-    async def _resolve_unit_path(self, service_name: str) -> tuple[bool, str]:
-        status, stdout, stderr = await self.network.execute_raw(
-            f'systemctl show -p FragmentPath --value {shlex.quote(service_name)}'
-        )
-        if status != 0:
-            return False, stderr.strip() or 'Unable to resolve unit file path'
-
-        path = stdout.strip()
-        if not path or path == 'n/a':
-            return False, 'Unit file path unavailable'
-        return True, path
-
-    def _is_write_path_allowed(self, path: str) -> bool:
-        allowed_write_paths = tuple(self.config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
-        normalized = os.path.abspath(path)
-        return any(
-            normalized == os.path.abspath(allowed) or
-            normalized.startswith(os.path.abspath(allowed) + os.sep)
-            for allowed in allowed_write_paths
-        )
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

@@ -188,6 +188,12 @@ class FilesystemsUIPlugin(UIPlugin):
         self.inode_warning   = int(config.get('inode_warning',   85))
         self.inode_threshold = int(config.get('inode_threshold', 95))
 
+        from vigil.web.ui.spec import register_item_color_rule, register_item_formatter
+        self._color_rule_name = f'filesystems_level_{self.id}'
+        register_item_color_rule(self._color_rule_name)(self._item_color)
+        self._format_fn_name = f'filesystems_text_{self.id}'
+        register_item_formatter(self._format_fn_name)(self._item_text)
+
     def _inode_level_for(self, pct: float) -> str:
         if pct >= self.inode_threshold:
             return 'failed'
@@ -202,74 +208,58 @@ class FilesystemsUIPlugin(UIPlugin):
             return 'warning'
         return 'online'
 
+    def _item_level(self, item: Dict[str, Any]) -> str:
+        level = self._level_for(item.get('used_pct') or 0.0)
+        ipct = item.get('inodes_pct')
+        if ipct is not None:
+            ilevel = self._inode_level_for(ipct)
+            if _RANK_UI[ilevel] > _RANK_UI[level]:
+                level = ilevel
+        return level
+
+    def _item_color(self, item: Dict[str, Any]) -> str:
+        return self._item_level(item)
+
+    def _item_text(self, item: Dict[str, Any]) -> str:
+        val = item.get('used_pct') or 0.0
+        text = f'{val:.0f}%'
+        ipct = item.get('inodes_pct')
+        if ipct is not None and self._inode_level_for(ipct) != 'online':
+            text += f'  ·  inodes {ipct:.0f}%'
+        return text
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'count_card': {'title': 'FILESYSTEMS', 'value_attr': '_filesystem_count'},
+                'worst_card': {
+                    'metric': 'worst_used_pct', 'title': 'WORST USAGE', 'format': 'percent0_plain_dash',
+                },
+                'filesystems': {
+                    'repeat': {
+                        'source': 'metrics_prefix',
+                        'fields': [
+                            {'name': 'used_pct', 'prefix': 'fs_', 'suffix': '_used_pct'},
+                            {'name': 'inodes_pct', 'prefix': 'fs_', 'suffix': '_inodes_pct'},
+                        ],
+                        'item_format_fn': self._format_fn_name,
+                        'item_color_by': self._color_rule_name,
+                        'label_transform': 'slashes',
+                        'container': 'cards',
+                        'empty_text': 'No filesystems found',
+                    },
+                },
+            },
+            'events': True,
+        }
+
+    @property
+    def _filesystem_count(self) -> str:
+        from vigil.web.ui.components import _scan_metric_family
+        return str(len(_scan_metric_family(self, 'fs_', '_used_pct', set(), 200)))
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.core.data.database import Metric
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page(metric_names=[])
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('count_card'):
-            count_label = info_card('FILESYSTEMS', '--')
-        with layout.cell('worst_card'):
-            worst_label = info_card('WORST USAGE', '--')
-        with layout.cell('filesystems'):
-            fs_container = ui.element('div').style(
-                'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
-            )
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update():
-            fs_pct: Dict[str, float] = {}
-            fs_inodes: Dict[str, float] = {}
-            for row in (
-                Metric.select()
-                .where(
-                    (Metric.collector == self.id) &
-                    (Metric.metric_name.startswith('fs_')) &
-                    ((Metric.metric_name.endswith('_used_pct')) |
-                     (Metric.metric_name.endswith('_inodes_pct')))
-                )
-                .order_by(Metric.timestamp.desc())
-                .limit(400)
-            ):
-                target = fs_inodes if row.metric_name.endswith('_inodes_pct') else fs_pct
-                key = (row.metric_name.removeprefix('fs_')
-                                      .removesuffix('_inodes_pct')
-                                      .removesuffix('_used_pct'))
-                if key not in target:
-                    target[key] = row.value
-
-            fs_container.clear()
-            with fs_container:
-                for key in sorted(fs_pct):
-                    val = fs_pct[key]
-                    display = key.replace('_', '/')
-                    display = '/' + display if display != 'root' else '/'
-                    level = self._level_for(val)
-                    text = f'{val:.0f}%'
-                    ipct = fs_inodes.get(key)
-                    if ipct is not None:
-                        ilevel = self._inode_level_for(ipct)
-                        if ilevel != 'online':
-                            text += f'  ·  inodes {ipct:.0f}%'
-                            if _RANK_UI[ilevel] > _RANK_UI[level]:
-                                level = ilevel
-                    lbl = info_card(display, text)
-                    lbl.style(f'color: {STATUS_COLORS[level]}')
-
-            worst_m = self.storage.latest_metric('worst_used_pct')
-            if worst_m is not None:
-                worst_label.text = f'{worst_m.value:.0f}%'
-                worst_label.style(f'color: {STATUS_COLORS[self._level_for(worst_m.value)]}')
-            count_label.text = str(len(fs_pct))
-
-        page.on_refresh(update)
-        update()
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

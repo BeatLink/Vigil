@@ -93,34 +93,22 @@ class NetworkUsageCollectorPlugin(CollectorPlugin):
 
 
 class NetworkUsageUIPlugin(UIPlugin):
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'iface_card': {'title': 'INTERFACE', 'value': self.config.get('interface') or 'Detecting...'},
+                'rx_card': {'metric': 'rx_kbps', 'title': 'DOWNLOAD', 'format': 'kbps_rate'},
+                'tx_card': {'metric': 'tx_kbps', 'title': 'UPLOAD', 'format': 'kbps_rate'},
+            },
+            'charts': {
+                'rx_chart': {'metric': 'rx_kbps', 'title': 'DOWNLOAD HISTORY (KB/s)'},
+                'tx_chart': {'metric': 'tx_kbps', 'title': 'UPLOAD HISTORY (KB/s)'},
+            },
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.spec import FORMATTERS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page(metric_names=['rx_kbps', 'tx_kbps'])
-
-        configured_interface = self.config.get('interface')
-        _rate_or_dash = FORMATTERS['kbps_rate']
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('iface_card'):
-            info_card('INTERFACE', configured_interface or 'Detecting...')
-        with layout.cell('rx_card'):
-            info_card('DOWNLOAD', '-- KB/s').bind_text_from(
-                page.model, ('metrics', 'rx_kbps'), backward=_rate_or_dash)
-        with layout.cell('tx_card'):
-            info_card('UPLOAD', '-- KB/s').bind_text_from(
-                page.model, ('metrics', 'tx_kbps'), backward=_rate_or_dash)
-        with layout.cell('rx_chart'):
-            history_chart(page, 'DOWNLOAD HISTORY (KB/s)', self.id, 'rx_kbps')
-        with layout.cell('tx_chart'):
-            history_chart(page, 'UPLOAD HISTORY (KB/s)', self.id, 'tx_kbps')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

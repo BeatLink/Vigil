@@ -74,47 +74,34 @@ class ConnectionsCollectorPlugin(CollectorPlugin):
 
 
 class ConnectionsUIPlugin(UIPlugin):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.total_warning   = int(self.config.get('total_warning',   500))
+        self.total_threshold = int(self.config.get('total_threshold', 1000))
+
+        from vigil.web.ui.spec import register_color_rule, threshold_color
+        self._total_color_name = f'connections_total_{self.id}'
+        register_color_rule(self._total_color_name)(
+            threshold_color(warning=self.total_warning, threshold=self.total_threshold))
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'total_card': {'metric': 'total', 'title': 'TOTAL', 'format': 'int_rounded',
+                               'color': self._total_color_name},
+                'established_card': {'metric': 'established', 'title': 'ESTABLISHED', 'format': 'int_rounded'},
+                'listen_card': {'metric': 'listen', 'title': 'LISTENING', 'format': 'int_rounded'},
+                'timewait_card': {'metric': 'time_wait', 'title': 'TIME_WAIT', 'format': 'int_rounded'},
+            },
+            'charts': {
+                'total_chart': {'metric': 'total', 'title': 'TOTAL CONNECTIONS'},
+                'established_chart': {'metric': 'established', 'title': 'ESTABLISHED'},
+            },
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.spec import FORMATTERS
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        total_warning   = int(self.config.get('total_warning',   500))
-        total_threshold = int(self.config.get('total_threshold', 1000))
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page(metric_names=['total', 'established', 'listen', 'time_wait'])
-
-        _int_or_dash = FORMATTERS['int_rounded']
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('total_card'):
-            total_label = info_card('TOTAL', '--').bind_text_from(
-                page.model, ('metrics', 'total'), backward=_int_or_dash)
-        with layout.cell('established_card'):
-            info_card('ESTABLISHED', '--').bind_text_from(
-                page.model, ('metrics', 'established'), backward=_int_or_dash)
-        with layout.cell('listen_card'):
-            info_card('LISTENING', '--').bind_text_from(
-                page.model, ('metrics', 'listen'), backward=_int_or_dash)
-        with layout.cell('timewait_card'):
-            info_card('TIME_WAIT', '--').bind_text_from(
-                page.model, ('metrics', 'time_wait'), backward=_int_or_dash)
-        with layout.cell('total_chart'):
-            history_chart(page, 'TOTAL CONNECTIONS', self.id, 'total')
-        with layout.cell('established_chart'):
-            history_chart(page, 'ESTABLISHED', self.id, 'established')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_color():
-            total = page.model.metrics.get('total')
-            if total is not None:
-                total_label.style(f'color: {STATUS_COLORS[_level_for(total, total_warning, total_threshold)]}')
-
-        page.on_refresh(update_color)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

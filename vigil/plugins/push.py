@@ -71,37 +71,31 @@ class PushCollectorPlugin(CollectorPlugin):
 
 
 class PushUIPlugin(UIPlugin):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.max_age = int(self.config.get('max_age', self.interval * 2))
+
+    @property
+    def _last_heartbeat_text(self) -> str:
+        last = self.storage.latest_metric('last_push_epoch')
+        if last is None:
+            return 'Never'
+        return format_age(int(time.time() - last.value))
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'status_card': {'metric': 'reported_up', 'title': 'LAST REPORTED STATUS',
+                                'on_text': 'UP', 'off_text': 'DOWN'},
+                'lastbeat_card': {'title': 'LAST HEARTBEAT', 'value_attr': '_last_heartbeat_text',
+                                  'refresh': True},
+                'maxage_card': {'title': 'MAX AGE', 'value': format_duration(self.max_age)},
+            },
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-
-        max_age = int(self.config.get('max_age', self.interval * 2))
-
-        page = self.ui.page()
-
-        with layout.cell('status_card'):
-            self.ui.status_card(
-                page,
-                metric_name='reported_up',
-                title='LAST REPORTED STATUS',
-                on_text='UP',
-                off_text='DOWN'
-            )
-        with layout.cell('lastbeat_card'):
-            lastbeat_label = info_card('LAST HEARTBEAT', 'Never')
-        with layout.cell('maxage_card'):
-            info_card('MAX AGE', format_duration(max_age))
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update():
-            last = self.storage.latest_metric('last_push_epoch')
-            if last is not None:
-                age = int(time.time() - last.value)
-                lastbeat_label.text = format_age(age)
-
-        page.on_refresh(update)
-        update()
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

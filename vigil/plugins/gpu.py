@@ -96,84 +96,57 @@ class GpuCollectorPlugin(CollectorPlugin):
 
 
 class GpuUIPlugin(UIPlugin):
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+        self.util_warning   = int(config.get('util_warning',   85))
+        self.util_threshold = int(config.get('util_threshold', 95))
+        self.mem_warning    = int(config.get('mem_warning',    85))
+        self.mem_threshold  = int(config.get('mem_threshold',  95))
+        self.temp_warning   = int(config.get('temp_warning',   80))
+        self.temp_threshold = int(config.get('temp_threshold', 90))
+
+        from vigil.web.ui.spec import register_item_color_rule, register_color_rule, threshold_color
+        self._util_color_rule_name = f'gpu_util_{self.id}'
+        register_item_color_rule(self._util_color_rule_name)(
+            lambda item: _level_for(item.get('value') or 0.0, self.util_warning, self.util_threshold))
+        self._util_card_color_name = f'gpu_util_card_{self.id}'
+        register_color_rule(self._util_card_color_name)(
+            threshold_color(warning=self.util_warning, threshold=self.util_threshold))
+        self._mem_card_color_name = f'gpu_mem_card_{self.id}'
+        register_color_rule(self._mem_card_color_name)(
+            threshold_color(warning=self.mem_warning, threshold=self.mem_threshold))
+        self._temp_card_color_name = f'gpu_temp_card_{self.id}'
+        register_color_rule(self._temp_card_color_name)(
+            threshold_color(warning=self.temp_warning, threshold=self.temp_threshold))
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'util_card': {'metric': 'gpu_util', 'title': 'GPU', 'format': 'percent0',
+                              'color': self._util_card_color_name},
+                'mem_card': {'metric': 'gpu_mem_pct', 'title': 'VRAM', 'format': 'percent0',
+                            'color': self._mem_card_color_name},
+                'temp_card': {'metric': 'gpu_temp', 'title': 'TEMP', 'format': 'temp_c0',
+                             'color': self._temp_card_color_name},
+                'gpus': {
+                    'repeat': {
+                        'source': 'metrics_prefix',
+                        'metrics_prefix': 'gpu', 'metrics_suffix': '_util',
+                        'metrics_exclude': ['gpu_util'],
+                        'item_format': 'percent0',
+                        'item_color_by': self._util_color_rule_name,
+                        'item_label_prefix': 'GPU ',
+                        'container': 'cards',
+                        'empty_text': 'No GPUs found',
+                    },
+                },
+            },
+            'chart': {'metric': 'gpu_util', 'title': 'GPU UTILIZATION (%)'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.core.data.database import Metric
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.spec import FORMATTERS
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(
-            self.config,
-            _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
-        )
-        page = self.ui.page(metric_names=['gpu_util', 'gpu_mem_pct', 'gpu_temp'])
-
-        util_warning   = int(self.config.get('util_warning',   85))
-        util_threshold = int(self.config.get('util_threshold', 95))
-        mem_warning    = int(self.config.get('mem_warning',    85))
-        mem_threshold  = int(self.config.get('mem_threshold',  95))
-        temp_warning   = int(self.config.get('temp_warning',   80))
-        temp_threshold = int(self.config.get('temp_threshold', 90))
-
-        _pct_or_dash = FORMATTERS['percent0']
-        _temp_or_dash = FORMATTERS['temp_c0']
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('util_card'):
-            util_label = info_card('GPU', '-- %').bind_text_from(
-                page.model, ('metrics', 'gpu_util'), backward=_pct_or_dash)
-        with layout.cell('mem_card'):
-            mem_label = info_card('VRAM', '-- %').bind_text_from(
-                page.model, ('metrics', 'gpu_mem_pct'), backward=_pct_or_dash)
-        with layout.cell('temp_card'):
-            temp_label = info_card('TEMP', '--').bind_text_from(
-                page.model, ('metrics', 'gpu_temp'), backward=_temp_or_dash)
-        with layout.cell('gpus'):
-            gpu_container = ui.element('div').style(
-                'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
-            )
-        with layout.cell('chart'):
-            history_chart(page, 'GPU UTILIZATION (%)', self.id, 'gpu_util')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update():
-            util = page.model.metrics.get('gpu_util')
-            mem  = page.model.metrics.get('gpu_mem_pct')
-            temp = page.model.metrics.get('gpu_temp')
-            if util is not None:
-                util_label.style(f"color: {STATUS_COLORS[_level_for(util, util_warning, util_threshold)]}")
-            if mem is not None:
-                mem_label.style(f"color: {STATUS_COLORS[_level_for(mem, mem_warning, mem_threshold)]}")
-            if temp is not None:
-                temp_label.style(f"color: {STATUS_COLORS[_level_for(temp, temp_warning, temp_threshold)]}")
-
-            gpu_util: Dict[str, float] = {}
-            for row in (
-                Metric.select()
-                .where(
-                    (Metric.collector == self.id) &
-                    (Metric.metric_name.startswith('gpu')) &
-                    (Metric.metric_name.endswith('_util')) &
-                    (Metric.metric_name != 'gpu_util')
-                )
-                .order_by(Metric.timestamp.desc())
-                .limit(100)
-            ):
-                if row.metric_name not in gpu_util:
-                    gpu_util[row.metric_name] = row.value
-
-            gpu_container.clear()
-            with gpu_container:
-                for metric_name in sorted(gpu_util):
-                    val = gpu_util[metric_name]
-                    idx = metric_name.removeprefix('gpu').removesuffix('_util')
-                    lbl = info_card(f'GPU {idx}', f'{val:.0f}%')
-                    lbl.style(f'color: {STATUS_COLORS[_level_for(val, util_warning, util_threshold)]}')
-
-        page.on_refresh(update)
-        update()
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

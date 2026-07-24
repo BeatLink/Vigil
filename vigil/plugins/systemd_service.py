@@ -179,11 +179,43 @@ class SystemdCollectorPlugin(CollectorPlugin):
             'disable_service': 'disable',
         }
         command = command_map.get(action_id)
-        if command is None:
-            return None
-        return ActionPlan(f"sudo systemctl {command} {self.service_name}")
+        if command is not None:
+            return ActionPlan(f"sudo systemctl {command} {self.service_name}")
+
+        if action_id == 'daemon_reload':
+            return ActionPlan('sudo systemctl daemon-reload')
+
+        if action_id == 'view_unit_file':
+            return ActionPlan(f"sudo systemctl cat {shlex.quote(self.service_name)}")
+
+        if action_id == 'write_unit_file':
+            import base64
+            content_b64 = base64.b64encode(kwargs.get('content', '').encode('utf-8')).decode('ascii')
+            allowed_checks = ' || '.join(
+                f'"$P" = {shlex.quote(p)} || case "$P" in {shlex.quote(p + os.sep)}*) true;; *) false;; esac'
+                for p in self.allowed_write_paths
+            )
+            cmd = (
+                f"P=$(systemctl show -p FragmentPath --value {shlex.quote(self.service_name)}); "
+                "if [ -z \"$P\" ] || [ \"$P\" = 'n/a' ]; then echo 'Unit file path unavailable' >&2; exit 1; fi; "
+                f"if ! ( {allowed_checks} ); then echo \"Write path not allowed: $P\" >&2; exit 1; fi; "
+                f"echo {shlex.quote(content_b64)} | base64 -d | sudo tee \"$P\" > /dev/null"
+            )
+            return ActionPlan(cmd)
+
+        return None
 
     def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
+        if action_id in ('view_unit_file',):
+            if result.exit_code != 0:
+                return CollectResult.failed(result.stderr.strip() or 'Unable to read unit file')
+            return CollectResult(success=True, metadata={'content': result.stdout})
+
+        if action_id == 'write_unit_file':
+            if result.exit_code != 0:
+                return CollectResult.failed(result.stderr.strip() or 'Unable to write unit file')
+            return CollectResult(logs=[('Unit file written successfully', 'INFO')], success=True)
+
         if result.exit_code != 0:
             command_map = {
                 'restart_service': 'restart',
@@ -196,7 +228,24 @@ class SystemdCollectorPlugin(CollectorPlugin):
         return True
 
 
+_UNIT_FILE_DIALOGS = {
+    'view_unit_file': {'kind': 'read', 'title': 'Unit File: {plugin.service_name}',
+                       'action_id': 'view_unit_file', 'params': {}, 'render': 'textarea_readonly'},
+    'edit_unit_file': {'kind': 'edit', 'title': 'Edit Unit File: {plugin.service_name}',
+                       'load_action_id': 'view_unit_file', 'load_params': {},
+                       'save_action_id': 'write_unit_file', 'save_params': {}, 'save_content_kwarg': 'content',
+                       'success_message': 'Unit file written successfully'},
+}
+
+
 class SystemdUIPlugin(UIPlugin):
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
+        super().__init__(name, config, db, collector_client)
+
+        from vigil.web.ui.spec import register_enabled_predicate
+        self._edit_predicate_name = f'systemd_edit_{self.id}'
+        register_enabled_predicate(self._edit_predicate_name)(lambda p: p.allow_unit_file_edit)
+
     @property
     def service_name(self):
         return self.config.get('service_name')
@@ -210,121 +259,27 @@ class SystemdUIPlugin(UIPlugin):
         return bool(self.config.get('allow_unit_file_edit', False))
 
     @property
-    def allowed_write_paths(self):
-        return tuple(self.config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
+    def UI_SPEC(self):
+        return {'dialogs': _UNIT_FILE_DIALOGS}
 
-    async def _resolve_unit_path(self) -> tuple[bool, str]:
-        status, stdout, stderr = await self.network.execute_raw(
-            f"systemctl show -p FragmentPath --value {shlex.quote(self.service_name)}"
-        )
-        if status != 0:
-            return False, stderr.strip() or 'Unable to resolve unit file path'
-
-        path = stdout.strip()
-        if not path or path == 'n/a':
-            return False, 'Unit file path unavailable'
-        return True, path
-
-    def _is_write_path_allowed(self, path: str) -> bool:
-        normalized = os.path.abspath(path)
-        return any(
-            normalized == os.path.abspath(allowed) or
-            normalized.startswith(os.path.abspath(allowed) + os.sep)
-            for allowed in self.allowed_write_paths
-        )
-
-    async def _read_unit_file(self) -> tuple[bool, str]:
-        status, stdout, stderr = await self.network.execute_raw(
-            f"sudo systemctl cat {shlex.quote(self.service_name)}"
-        )
-        if status != 0:
-            return False, stderr.strip() or 'Unable to read unit file'
-        return True, stdout
-
-    async def _write_unit_file(self, content: str) -> tuple[bool, str]:
-        ok, path_or_error = await self._resolve_unit_path()
-        if not ok:
-            return False, path_or_error
-
-        path = path_or_error
-        if not self._is_write_path_allowed(path):
-            return False, f'Write path not allowed: {path}'
-
-        cmd = (
-            "sudo python3 - <<'PY'\n"
-            "from pathlib import Path\n"
-            f"Path({shlex.quote(path)}).write_text({shlex.quote(content)}, encoding='utf-8')\n"
-            "PY"
-        )
-        status, _, stderr = await self.network.execute_raw(cmd)
-        if status != 0:
-            return False, stderr.strip() or 'Unable to write unit file'
-        return True, 'Unit file written successfully'
-
-    async def _run_systemctl_command(self, command: str) -> bool:
-        status, _, stderr = await self.network.execute_raw(
-            f"sudo systemctl {command} {self.service_name if command != 'daemon-reload' else ''}".strip()
-        )
-        return status == 0
+    def _unit_file_buttons_spec(self) -> List[Dict[str, Any]]:
+        return [
+            {'id': 'view_unit_file', 'label': 'View Unit File', 'icon': 'article',
+             'color': 'primary', 'kind': 'dialog', 'dialog': 'view_unit_file'},
+            {'id': 'daemon_reload', 'label': 'Reload Daemon', 'icon': 'refresh',
+             'color': 'secondary', 'kind': 'dispatch'},
+            {'id': 'edit_unit_file', 'label': 'Edit Unit File', 'icon': 'edit',
+             'color': 'secondary', 'kind': 'dialog', 'dialog': 'edit_unit_file',
+             'visible_if': self._edit_predicate_name},
+        ]
 
     def _render_unit_file_controls(self):
         from nicegui import ui
+        from vigil.web.ui.components import render_buttons
 
         with ui.card().classes('p-4 h-full'):
             ui.label('Unit File').classes('font-bold mb-2')
-            with ui.row().classes('gap-2 mb-2'):
-                ui.button('View Unit File', on_click=self._show_unit_file, color='primary').props('flat')
-                ui.button('Reload Daemon', on_click=self._reload_daemon, color='secondary').props('flat')
-                if self.allow_unit_file_edit:
-                    ui.button('Edit Unit File', on_click=self._edit_unit_file, color='secondary').props('flat')
-
-    async def _show_unit_file(self):
-        from nicegui import ui
-
-        ui.spinner().style('display: block')
-        ok, content = await self._read_unit_file()
-        ui.spinner().delete()
-        if not ok:
-            ui.notify(content, type='negative')
-            return
-
-        with ui.dialog() as dialog:
-            ui.dialog_title('Unit File')
-            ui.label(self.service_name).classes('text-sm text-slate-500 mb-2')
-            ui.textarea(content, readonly=True, auto_grow=True).classes('w-full')
-            ui.button('Close', on_click=dialog.close).props('flat')
-        dialog.open()
-
-    async def _edit_unit_file(self):
-        from nicegui import ui
-
-        ok, content = await self._read_unit_file()
-        if not ok:
-            ui.notify(content, type='negative')
-            return
-
-        with ui.dialog() as dialog:
-            ui.dialog_title('Edit Unit File')
-            ui.label(self.service_name).classes('text-sm text-slate-500 mb-2')
-            editor = ui.textarea(content, auto_grow=True).classes('w-full h-96')
-            with ui.row().classes('justify-end gap-2 mt-4'):
-                ui.button('Cancel', on_click=dialog.close).props('flat')
-                async def save():
-                    new_content = editor.value
-                    save_ok, message = await self._write_unit_file(new_content)
-                    ui.notify(message, type='positive' if save_ok else 'negative')
-                    if save_ok:
-                        dialog.close()
-                ui.button('Save', on_click=save).props('flat primary')
-        dialog.open()
-
-    async def _reload_daemon(self):
-        from nicegui import ui
-
-        success = await self._run_systemctl_command('daemon-reload')
-        ui.notify('Daemon reloaded' if success else 'Daemon reload failed',
-                  type='positive' if success else 'negative')
-
+            render_buttons(self, self._unit_file_buttons_spec())
 
     def render_ui(self, context: str = 'page'):
         if self.max_age is not None:
@@ -333,7 +288,6 @@ class SystemdUIPlugin(UIPlugin):
             self._render_continuous_ui(context)
 
     def _render_continuous_ui(self, context: str = 'page'):
-        from nicegui import ui
         from vigil.core.data.database import StatusHistory
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card
@@ -373,7 +327,6 @@ class SystemdUIPlugin(UIPlugin):
 
     def _render_oneshot_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.data.database import Metric
         from vigil.web.ui.theme import STATUS_COLORS
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card

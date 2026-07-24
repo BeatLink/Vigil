@@ -64,11 +64,14 @@ def create_internal_app(engine: Any) -> FastAPI:
         if plugin is None:
             return JSONResponse({'error': 'not found'}, status_code=404)
         try:
-            success = await engine.dispatch_action(plugin, req.action_id, **req.kwargs)
+            success, metadata = await engine.dispatch_action(plugin, req.action_id, **req.kwargs)
         except Exception as e:
             logging.error(f"internal_api: action {req.action_id!r} on {monitor_id!r} failed: {e}")
             return JSONResponse({'error': str(e)}, status_code=500)
-        return JSONResponse({'success': bool(success)})
+        payload = {'success': bool(success)}
+        if metadata and 'content' in metadata:
+            payload['content'] = metadata['content']
+        return JSONResponse(payload)
 
     @app.post('/internal/poll/{monitor_id}')
     async def poll(monitor_id: str):

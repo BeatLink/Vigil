@@ -28,6 +28,19 @@ class CollectorClient:
             logging.error(f"collector action {action_id!r} on {monitor_id!r} failed: {e}")
             return False
 
+    async def action_with_output(self, monitor_id: str, action_id: str,
+                                 kwargs: Dict[str, Any]) -> Tuple[bool, str]:
+        try:
+            resp = await self._client.post(
+                f'/internal/action/{monitor_id}', json={'action_id': action_id, 'kwargs': kwargs},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return bool(data.get('success')), str(data.get('content') or '')
+        except httpx.HTTPError as e:
+            logging.error(f"collector action {action_id!r} on {monitor_id!r} failed: {e}")
+            return False, str(e)
+
     async def poll(self, monitor_id: str) -> bool:
         try:
             resp = await self._client.post(f'/internal/poll/{monitor_id}')

@@ -1,4 +1,4 @@
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
@@ -124,50 +124,61 @@ class PortsCollectorPlugin(CollectorPlugin):
 
 
 class PortsUIPlugin(UIPlugin):
+    @property
+    def _checks(self) -> List[Dict[str, Any]]:
+        return _named_checks(self.config.get('checks', []))
+
+    def _check_counts(self) -> Optional[Tuple[int, int]]:
+        checks = self._checks
+        if not checks:
+            return None
+        up = down = 0
+        for check in checks:
+            m = self.storage.latest_metric(f"{check['metric']}_up")
+            if m is None:
+                continue
+            if m.value >= 1.0:
+                up += 1
+            else:
+                down += 1
+        return (up, down) if up + down else None
+
+    @property
+    def _up_text(self) -> str:
+        counts = self._check_counts()
+        if counts is None:
+            return '--'
+        up, down = counts
+        return f'{up}/{up + down}'
+
+    @property
+    def _down_text(self) -> str:
+        counts = self._check_counts()
+        return '--' if counts is None else str(counts[1])
+
+    @property
+    def _down_color(self) -> Optional[str]:
+        counts = self._check_counts()
+        if counts is None:
+            return None
+        return 'failed' if counts[1] else 'online'
+
+    @property
+    def _chart_items(self) -> List[Tuple[str, str]]:
+        return [(f"{check['name']} LATENCY (ms)", f"{check['metric']}_latency_ms") for check in self._checks]
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'up_card': {'title': 'REACHABLE', 'value_attr': '_up_text', 'refresh': True},
+                'down_card': {'title': 'DOWN', 'value_attr': '_down_text', 'color_attr': '_down_color'},
+            },
+            'dynamic_charts': {'widget': 'charts', 'items_attr': '_chart_items'},
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page()
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('up_card'):
-            up_label = info_card('REACHABLE', '--')
-        with layout.cell('down_card'):
-            down_label = info_card('DOWN', '--')
-        checks = _named_checks(self.config.get('checks', []))
-
-        with layout.cell('charts'):
-            for check in checks:
-                history_chart(page, f"{check['name']} LATENCY (ms)", self.id, f"{check['metric']}_latency_ms")
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update_cards():
-            if not checks:
-                return
-            up = 0
-            down = 0
-            for check in checks:
-                m = self.storage.latest_metric(f"{check['metric']}_up")
-                if m is None:
-                    continue
-                if m.value >= 1.0:
-                    up += 1
-                else:
-                    down += 1
-            total = up + down
-            if total == 0:
-                return
-            up_label.text = f'{up}/{total}'
-            down_label.text = f'{down}'
-            down_label.style(f'color: {STATUS_COLORS["failed" if down else "online"]}')
-
-        page.on_refresh(update_cards)
-        update_cards()
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

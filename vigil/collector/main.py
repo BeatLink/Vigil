@@ -5,7 +5,7 @@ import inspect
 import random
 import sys
 import time
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.collector.orchestration.network_orchestrator import SSHConnectionPool
 from vigil.collector.orchestration.types import JobPlan
@@ -166,36 +166,40 @@ class VigilEngine:
             self._last_collected[plugin.id] = time.monotonic()
             self._collecting[plugin.id] = False
 
-    async def dispatch_action(self, plugin: CollectorPlugin, action_id: str, **kwargs) -> bool:
+    async def dispatch_action(self, plugin: CollectorPlugin, action_id: str, **kwargs) -> Tuple[bool, Optional[Dict[str, str]]]:
+        """Returns (success, metadata). metadata is the applied CollectResult's
+        .metadata dict when one was applied (e.g. carrying 'content' for
+        read-style dialog actions), else None. Plain bool outcomes (the
+        common write/dispatch case) return (bool, None)."""
         from vigil.collector.orchestration.types import CollectResult, LocalActionPlan
 
         plan = plugin.plan_action(action_id, **kwargs)
         if plan is None:
-            return False
+            return False, None
         if isinstance(plan, CollectResult):
             plugin.storage.apply(plan)
-            return plan.success
+            return plan.success, (plan.metadata or None)
         if isinstance(plan, JobPlan):
             on_line = plugin.job_on_line(action_id, **kwargs)
             _, status = await plugin.network.run_job_plan(plan, on_line=on_line)
             outcome = plugin.interpret_job(action_id, status, **kwargs)
             if isinstance(outcome, CollectResult):
                 plugin.storage.apply(outcome)
-                return outcome.success
-            return outcome
+                return outcome.success, (outcome.metadata or None)
+            return bool(outcome), None
         if isinstance(plan, LocalActionPlan):
             local_result = await plugin.local_io.run(plan.call)
             outcome = plugin.interpret_local_action(action_id, local_result, **kwargs)
             if isinstance(outcome, CollectResult):
                 plugin.storage.apply(outcome)
-                return outcome.success
-            return outcome
+                return outcome.success, (outcome.metadata or None)
+            return bool(outcome), None
         result = await plugin.network.execute(plan)
         outcome = plugin.interpret_action(action_id, result, **kwargs)
         if isinstance(outcome, CollectResult):
             plugin.storage.apply(outcome)
-            return outcome.success
-        return outcome
+            return outcome.success, (outcome.metadata or None)
+        return bool(outcome), None
 
     async def _monitor_loop(self, plugin: CollectorPlugin):
         await asyncio.sleep(random.uniform(0, STARTUP_JITTER_SECONDS))

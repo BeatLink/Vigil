@@ -102,7 +102,14 @@ class FoldersUIPlugin(UIPlugin):
         super().__init__(name, config, db, collector_client)
         self.folders = config.get('folders', []) or []
 
-    def _level_for(self, gb: float, folder: Dict[str, Any]) -> str:
+        from vigil.web.ui.spec import register_item_color_rule
+        self._by_key = {_sanitize(f.get('path', '')): f for f in self.folders if f.get('path')}
+        self._color_rule_name = f'folders_threshold_{self.id}'
+        register_item_color_rule(self._color_rule_name)(self._item_color)
+
+    def _item_color(self, item: Dict[str, Any]) -> str:
+        gb = item.get('value') or 0.0
+        folder = self._by_key.get(item.get('key', ''), {})
         threshold = folder.get('threshold')
         warning = folder.get('warning')
         if threshold is not None and gb >= float(threshold):
@@ -111,60 +118,29 @@ class FoldersUIPlugin(UIPlugin):
             return 'warning'
         return 'online'
 
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'count_card': {'title': 'FOLDERS', 'value': str(len(self.folders))},
+                'worst_card': {'metric': 'worst_folder_gb', 'title': 'LARGEST', 'format': 'bytes_gb'},
+                'folders': {
+                    'repeat': {
+                        'source': 'metrics_prefix',
+                        'metrics_prefix': 'folder_', 'metrics_suffix': '_gb',
+                        'metrics_exclude': ['worst_folder_gb'],
+                        'item_format': 'bytes_gb',
+                        'item_color_by': self._color_rule_name,
+                        'label_transform': 'slashes',
+                        'container': 'cards',
+                        'empty_text': 'No folders configured',
+                    },
+                },
+            },
+            'events': True,
+        }
+
     def render_ui(self, context: str = 'page'):
-        from nicegui import ui
-        from vigil.core.data.database import Metric
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
-        from vigil.web.ui.spec import FORMATTERS
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page(metric_names=['worst_folder_gb'])
-
-        by_key = {_sanitize(f.get('path', '')): f for f in self.folders if f.get('path')}
-
-        _gb_or_dash = FORMATTERS['bytes_gb']
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('count_card'):
-            info_card('FOLDERS', str(len(self.folders)))
-        with layout.cell('worst_card'):
-            info_card('LARGEST', '--').bind_text_from(
-                page.model, ('metrics', 'worst_folder_gb'), backward=_gb_or_dash)
-        with layout.cell('folders'):
-            folder_container = ui.element('div').style(
-                'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
-            )
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update():
-            folder_gb: Dict[str, float] = {}
-            for row in (
-                Metric.select()
-                .where(
-                    (Metric.collector == self.id) &
-                    (Metric.metric_name.startswith('folder_')) &
-                    (Metric.metric_name.endswith('_gb')) &
-                    (Metric.metric_name != 'worst_folder_gb')
-                )
-                .order_by(Metric.timestamp.desc())
-                .limit(200)
-            ):
-                if row.metric_name not in folder_gb:
-                    folder_gb[row.metric_name] = row.value
-
-            folder_container.clear()
-            with folder_container:
-                for metric_name in sorted(folder_gb):
-                    key = metric_name.removeprefix('folder_').removesuffix('_gb')
-                    val = folder_gb[metric_name]
-                    folder = by_key.get(key, {})
-                    lbl = info_card(key.replace('_', '/'), _format_gb(val))
-                    lbl.style(f'color: {STATUS_COLORS[self._level_for(val, folder)]}')
-
-        page.on_refresh(update)
-        update()
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

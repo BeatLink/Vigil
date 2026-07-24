@@ -71,46 +71,34 @@ class MemoryUsageUIPlugin(UIPlugin):
         self.memory_warning   = int(config.get('memory_warning',   75))
         self.memory_threshold = int(config.get('memory_threshold', 90))
 
-        from vigil.web.ui.spec import register_color_rule, threshold_color
+        from vigil.web.ui.spec import register_color_rule, threshold_color, register_item_formatter
         self._color_rule_name = f'memory_usage_threshold_{self.id}'
         register_color_rule(self._color_rule_name)(
             threshold_color(warning=self.memory_warning, threshold=self.memory_threshold))
+        self._used_format_name = f'memory_usage_used_{self.id}'
+        register_item_formatter(self._used_format_name)(self._format_used)
+
+    @staticmethod
+    def _format_used(values: Dict[str, Any]) -> str:
+        used, total = values.get('memory_used_gb'), values.get('memory_total_gb')
+        if used is None or total is None:
+            return '--'
+        return f'{_fmt_gb(used)} / {_fmt_gb(total)}'
+
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'mem_pct_card': {'metric': 'memory_pct', 'title': 'MEMORY', 'format': 'percent1_plain_dash',
+                                 'color': self._color_rule_name},
+                'mem_used_card': {'title': 'MEM USED', 'metrics': ['memory_used_gb', 'memory_total_gb'],
+                                  'format_fn': self._used_format_name},
+            },
+            'chart': {'metric': 'memory_pct', 'title': 'MEMORY USAGE (%)'},
+            'events': True,
+        }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card, history_chart
-        from vigil.web.ui.spec import FORMATTERS, COLOR_RULES
-        from vigil.web.ui.theme import STATUS_COLORS
-
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page(metric_names=['memory_pct', 'memory_used_gb', 'memory_total_gb'])
-
-        pct_formatter = FORMATTERS['percent1_plain_dash']
-        color_rule = COLOR_RULES[self._color_rule_name]
-
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('mem_pct_card'):
-            mem_pct_label = info_card('MEMORY', pct_formatter(None)).bind_text_from(
-                page.model, ('metrics', 'memory_pct'), backward=pct_formatter)
-        with layout.cell('mem_used_card'):
-            mem_used_label = info_card('MEM USED', '--')
-        with layout.cell('chart'):
-            history_chart(page, 'MEMORY USAGE (%)', self.id, 'memory_pct')
-        with layout.cell('events'):
-            self.ui.events_table(page)
-
-        def update():
-            value = page.model.metrics.get('memory_pct')
-            if value is not None:
-                state = color_rule(value)
-                if state is not None:
-                    mem_pct_label.style(f'color: {STATUS_COLORS[state]}')
-
-            mem_used  = page.model.metrics.get('memory_used_gb')
-            mem_total = page.model.metrics.get('memory_total_gb')
-            if mem_used is not None and mem_total is not None:
-                mem_used_label.text = f'{_fmt_gb(mem_used)} / {_fmt_gb(mem_total)}'
-
-        page.on_refresh(update)
-        page.start()
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)

@@ -88,48 +88,50 @@ class CloudCollectorPlugin(CollectorPlugin):
 
 
 class CloudUIPlugin(UIPlugin):
-    def render_ui(self, context: str = 'page'):
-        from nicegui import ui
+    def _cloud_fields(self) -> Dict[str, str]:
         import json
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
+        raw = self.storage.get_setting(f"cloud:{self.id}")
+        if not raw:
+            return {}
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return {}
 
-        layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.ui.page()
+    @property
+    def _provider_text(self) -> str:
+        fields = self._cloud_fields()
+        if not fields:
+            return 'NONE'
+        return str(fields.get('provider', '--')).upper()
 
-        with layout.cell('host_card'):
-            self.ui.host_card()
-        with layout.cell('provider_card'):
-            provider_label = info_card('PROVIDER', '--')
-        with layout.cell('type_card'):
-            type_label = info_card('INSTANCE TYPE', '--')
-        with layout.cell('detail'):
-            detail_container = ui.element('div').style(
-                'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
-            )
-        with layout.cell('events'):
-            self.ui.events_table(page)
+    @property
+    def _instance_type_text(self) -> str:
+        return str(self._cloud_fields().get('instance_type', '--'))
 
-        def update():
-            raw = self.storage.get_setting(f"cloud:{self.id}")
-            if not raw:
-                provider_label.text = 'NONE'
-                return
-            try:
-                fields = json.loads(raw)
-            except Exception:
-                return
-            provider_label.text = str(fields.get('provider', '--')).upper()
-            type_label.text = str(fields.get('instance_type', '--'))
-            detail_container.clear()
-            with detail_container:
-                for key in ('instance_id', 'region', 'az', 'zone'):
-                    if fields.get(key):
-                        info_card(key.replace('_', ' ').upper(), str(fields[key]))
+    @property
+    def UI_SPEC(self):
+        return {
+            'layout': _DEFAULT_LAYOUT,
+            'cards': {
+                'provider_card': {'title': 'PROVIDER', 'value_attr': '_provider_text'},
+                'type_card': {'title': 'INSTANCE TYPE', 'value_attr': '_instance_type_text'},
+                'detail': {
+                    'repeat': {
+                        'source': 'setting',
+                        'setting_key': 'cloud:{plugin_id}',
+                        'dict_fields': ['instance_id', 'region', 'az', 'zone'],
+                        'container': 'cards',
+                        'empty_text': 'No cloud metadata',
+                    },
+                },
+            },
+            'events': True,
+        }
 
-        page.on_refresh(update)
-        update()
-        page.start()
+    def render_ui(self, context: str = 'page'):
+        from vigil.web.ui.spec import generic_render
+        generic_render(self, context)
 
 
 def _parse_kv(text: str) -> Dict[str, str]:
