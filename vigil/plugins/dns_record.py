@@ -1,10 +1,10 @@
-import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import dns.exception
 import dns.resolver
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
@@ -24,101 +24,117 @@ def _answer_to_str(record_type: str, rdata) -> str:
 
 
 class DnsRecordCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.domain = config.get('domain')
         self.record_type = str(config.get('record_type', 'A')).upper()
         self.resolver_addr = config.get('resolver')
         self.port = int(config.get('port', 53))
-        self.timeout = float(config.get('timeout', 5))
+        self.dns_timeout = float(config.get('timeout', 5))
         expected = config.get('expected')
         self.expected: Optional[List[str]] = (
             [str(v).rstrip('.') for v in expected] if expected else None
         )
         self.target = self.domain or self.name
 
+    def commands(self) -> List[Command]:
+        return []
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        return CollectResult()
+
     def _make_resolver(self) -> "dns.resolver.Resolver":
         resolver = dns.resolver.Resolver(configure=self.resolver_addr is None)
         if self.resolver_addr:
             resolver.nameservers = [self.resolver_addr]
         resolver.port = self.port
-        resolver.timeout = self.timeout
-        resolver.lifetime = self.timeout
+        resolver.timeout = self.dns_timeout
+        resolver.lifetime = self.dns_timeout
         return resolver
 
-    async def on_collect(self):
-        if not self.domain:
-            self.db_logger.write("No 'domain' configured", level="ERROR")
-            self.set_status('failed')
-            return
-
+    def _query(self):
         try:
-            answers = await asyncio.to_thread(self._query)
+            resolver = self._make_resolver()
+            return ('ok', resolver.resolve(self.domain, self.record_type))
         except dns.resolver.NXDOMAIN:
-            self.db_logger.write(f"{self.domain} does not exist (NXDOMAIN)", level="ERROR")
-            self.db_metrics.metric('resolved', 0.0)
-            self.set_status('failed')
-            return
+            return ('nxdomain', None)
         except dns.resolver.NoAnswer:
-            self.db_logger.write(
-                f"{self.domain} has no {self.record_type} record", level="ERROR"
-            )
-            self.db_metrics.metric('resolved', 0.0)
-            self.set_status('failed')
-            return
+            return ('no_answer', None)
         except dns.exception.Timeout:
-            self.db_logger.write(
-                f"Query for {self.domain} ({self.record_type}) timed out after {self.timeout}s",
-                level="ERROR"
-            )
-            self.db_metrics.metric('resolved', 0.0)
-            self.set_status('failed')
-            return
+            return ('timeout', None)
         except dns.exception.DNSException as e:
-            self.db_logger.write(f"DNS query failed: {e}", level="ERROR")
-            self.db_metrics.metric('resolved', 0.0)
-            self.set_status('failed')
-            return
+            return ('dns_error', str(e))
 
+    def local_call(self) -> Optional[Callable[[], Any]]:
+        if not self.domain:
+            return lambda: ('no_domain', None)
+        return self._query
+
+    def parse_local(self, result: Any) -> CollectResult:
+        kind, payload = result
+
+        if kind == 'no_domain':
+            return CollectResult.failed("No 'domain' configured")
+        if kind == 'nxdomain':
+            return CollectResult(
+                metrics={'resolved': 0.0},
+                logs=[(f"{self.domain} does not exist (NXDOMAIN)", "ERROR")],
+                status='failed',
+            )
+        if kind == 'no_answer':
+            return CollectResult(
+                metrics={'resolved': 0.0},
+                logs=[(f"{self.domain} has no {self.record_type} record", "ERROR")],
+                status='failed',
+            )
+        if kind == 'timeout':
+            return CollectResult(
+                metrics={'resolved': 0.0},
+                logs=[(
+                    f"Query for {self.domain} ({self.record_type}) timed out after {self.dns_timeout}s",
+                    "ERROR",
+                )],
+                status='failed',
+            )
+        if kind == 'dns_error':
+            return CollectResult(
+                metrics={'resolved': 0.0},
+                logs=[(f"DNS query failed: {payload}", "ERROR")],
+                status='failed',
+            )
+
+        answers = payload
         values = [_answer_to_str(self.record_type, r) for r in answers]
         ttl = answers.rrset.ttl if answers.rrset is not None else None
 
-        self.db_metrics.metric('resolved', 1.0)
+        import json
+        metrics = {'resolved': 1.0}
         if ttl is not None:
-            self.db_metrics.metric('ttl', float(ttl))
-        self._store_values(values)
+            metrics['ttl'] = float(ttl)
+        settings = {f"dns_record:{self.id}": json.dumps(values)}
 
         if self.expected is not None:
             unexpected = [v for v in values if v not in self.expected]
             if unexpected:
-                self.db_logger.write(
-                    f"{self.domain} ({self.record_type}) resolved to {values}, "
-                    f"expected one of {self.expected}",
-                    level="ERROR"
+                metrics['matches_expected'] = 0.0
+                return CollectResult(
+                    metrics=metrics,
+                    logs=[(
+                        f"{self.domain} ({self.record_type}) resolved to {values}, "
+                        f"expected one of {self.expected}",
+                        "ERROR",
+                    )],
+                    status='failed',
+                    settings=settings,
                 )
-                self.db_metrics.metric('matches_expected', 0.0)
-                self.set_status('failed')
-                return
-            self.db_metrics.metric('matches_expected', 1.0)
+            metrics['matches_expected'] = 1.0
 
-        self.db_logger.write(
-            f"{self.domain} ({self.record_type}) -> {values} (TTL {ttl})", level="INFO"
+        return CollectResult(
+            metrics=metrics,
+            logs=[(f"{self.domain} ({self.record_type}) -> {values} (TTL {ttl})", "INFO")],
+            status='online',
+            settings=settings,
         )
-        self.set_status('online')
-
-    def _query(self):
-        resolver = self._make_resolver()
-        return resolver.resolve(self.domain, self.record_type)
-
-    def _store_values(self, values: List[str]):
-        import json
-        try:
-            self.db.set_setting(f"dns_record:{self.id}", json.dumps(values))
-        except Exception:
-            pass
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class DnsRecordUIPlugin(UIPlugin):
@@ -138,10 +154,10 @@ class DnsRecordUIPlugin(UIPlugin):
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=[])
+        page = self.ui.page(metric_names=[])
 
         with layout.cell('status_card'):
-            self.internal_modules['ui']['status_card'](
+            self.ui.status_card(
                 page,
                 metric_name='resolved',
                 title='RESOLUTION',
@@ -157,14 +173,14 @@ class DnsRecordUIPlugin(UIPlugin):
                 'display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%'
             )
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update():
-            ttl = self.latest_metric('ttl')
+            ttl = self.storage.latest_metric('ttl')
             if ttl is not None:
                 ttl_label.text = f'{int(ttl.value)}s'
 
-            raw = self.db.get_setting(f"dns_record:{self.id}")
+            raw = self.storage.get_setting(f"dns_record:{self.id}")
             answer_container.clear()
             if not raw:
                 return

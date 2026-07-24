@@ -4,6 +4,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.push import PushCollectorPlugin
+from vigil.collector.orchestration.types import CollectResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -30,32 +31,32 @@ def _cfg(**extra):
 
 
 class TestPushCollection:
-    async def test_never_pushed_is_failed(self, make_plugin):
+    async def test_never_pushed_is_failed(self, make_plugin, run_cycle):
         p = make_plugin(PushCollectorPlugin, _cfg())
-        await p.on_collect()
+        run_cycle(p)
         assert _latest_status("test-push") == "failed"
 
-    async def test_recent_push_is_online(self, make_plugin):
+    async def test_recent_push_is_online(self, make_plugin, run_cycle):
         p = make_plugin(PushCollectorPlugin, _cfg(max_age=120))
         p.record_push(status="up")
-        await p.on_collect()
+        run_cycle(p)
         assert _latest_status("test-push") == "online"
 
-    async def test_stale_push_is_failed(self, make_plugin):
+    async def test_stale_push_is_failed(self, make_plugin, run_cycle):
         p = make_plugin(PushCollectorPlugin, _cfg(max_age=60))
         p.record_push(status="up")
-        p.db_metrics.metric("last_push_epoch", time.time() - 120)
-        await p.on_collect()
+        p.storage.apply(CollectResult(metrics={"last_push_epoch": time.time() - 120}))
+        run_cycle(p)
         assert _latest_status("test-push") == "failed"
 
     async def test_default_max_age_is_double_interval(self, make_plugin):
         p = make_plugin(PushCollectorPlugin, _cfg(interval=30))
         assert p.max_age == 60
 
-    async def test_reported_down_within_max_age_is_failed(self, make_plugin):
+    async def test_reported_down_within_max_age_is_failed(self, make_plugin, run_cycle):
         p = make_plugin(PushCollectorPlugin, _cfg(max_age=120))
         p.record_push(status="down", msg="disk full")
-        await p.on_collect()
+        run_cycle(p)
         assert _latest_status("test-push") == "failed"
 
 
@@ -90,4 +91,4 @@ class TestRecordPush:
 class TestPushActions:
     async def test_on_action_always_returns_false(self, make_plugin):
         p = make_plugin(PushCollectorPlugin, _cfg())
-        assert await p.on_action("anything") is False
+        assert p.plan_action("anything") is None

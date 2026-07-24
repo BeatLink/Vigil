@@ -103,46 +103,44 @@ class TestLevelFor:
         assert _level_for(95.0, 70.0, 85.0) == 'failed'
 
 
+def _result(exit_code, stdout, stderr=""):
+    from vigil.collector.orchestration.types import CmdResult
+    return CmdResult(exit_code, stdout, stderr)
+
+
 class TestCpuUsageCollection:
-    async def test_below_warning_sets_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _make_output(_CPU1_50, _CPU2_50), ""))
-        await plugin.on_collect()
+    async def test_below_warning_sets_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(0, _make_output(_CPU1_50, _CPU2_50)))
         assert _latest_status() == "online"
 
-    async def test_above_warning_sets_warning(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _make_output(_CPU1_75, _CPU2_75), ""))
-        await plugin.on_collect()
+    async def test_above_warning_sets_warning(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(0, _make_output(_CPU1_75, _CPU2_75)))
         assert _latest_status() == "warning"
 
-    async def test_above_failed_threshold_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _make_output(_CPU1_90, _CPU2_90), ""))
-        await plugin.on_collect()
+    async def test_above_failed_threshold_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(0, _make_output(_CPU1_90, _CPU2_90)))
         assert _latest_status() == "failed"
 
-    async def test_cpu_pct_metric_recorded(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _make_output(_CPU1_50, _CPU2_50), ""))
-        await plugin.on_collect()
+    async def test_cpu_pct_metric_recorded(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(0, _make_output(_CPU1_50, _CPU2_50)))
         assert _latest_metric("cpu_pct") == pytest.approx(50.0)
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(-1, "", "timeout"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(-1, "", "timeout"))
         assert _latest_status() == "failed"
 
-    async def test_only_one_cpu_sample_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "cpu  100 0 0 900 0 0 0 0\n", ""))
-        await plugin.on_collect()
+    async def test_only_one_cpu_sample_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(0, "cpu  100 0 0 900 0 0 0 0\n"))
         assert _latest_status() == "failed"
 
-    async def test_custom_thresholds_respected(self, make_plugin):
+    async def test_custom_thresholds_respected(self, make_plugin, run_cycle):
         cfg = {**BASE_CFG, "name": "test-cpu-custom", "id": "test-cpu-custom",
                "cpu_warning": 40, "cpu_threshold": 50}
         p = make_plugin(CpuUsageCollectorPlugin, cfg)
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _make_output(_CPU1_50, _CPU2_50), ""))
-        await p.on_collect()
+        run_cycle(p, lambda c: _result(0, _make_output(_CPU1_50, _CPU2_50)))
         assert _latest_status("test-cpu-custom") == "failed"
 
 
 class TestCpuUsageActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

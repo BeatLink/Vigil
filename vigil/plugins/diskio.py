@@ -1,6 +1,7 @@
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _SECTOR_BYTES = 512
@@ -62,55 +63,44 @@ _DEFAULT_LAYOUT = [
 
 
 class DiskIoCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.device: Optional[str] = config.get('device')
-        self._active_device: Optional[str] = self.device
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(
-            "cat /proc/diskstats && sleep 1 && echo '---SNAP---' && cat /proc/diskstats"
-        )
+    def commands(self) -> List[Command]:
+        return [Command("cat /proc/diskstats && sleep 1 && echo '---SNAP---' && cat /proc/diskstats")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to read /proc/diskstats: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to read /proc/diskstats: {stderr}")
 
         halves = stdout.split('---SNAP---')
         if len(halves) < 2:
-            self.db_logger.write("Unexpected /proc/diskstats output format", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed("Unexpected /proc/diskstats output format")
 
         s1 = _parse_diskstats(halves[0])
         s2 = _parse_diskstats(halves[1])
 
         device = self.device or _auto_detect_device(s1, s2)
         if not device:
-            self.db_logger.write("No usable disk device found", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed("No usable disk device found")
 
         if device not in s1 or device not in s2:
-            self.db_logger.write(f"Device '{device}' not found in /proc/diskstats", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Device '{device}' not found in /proc/diskstats")
 
         read_kbps = max(0.0, (s2[device][0] - s1[device][0]) * _SECTOR_BYTES / 1024)
         write_kbps = max(0.0, (s2[device][1] - s1[device][1]) * _SECTOR_BYTES / 1024)
 
-        self._active_device = device
-        self.db.set_setting(f"diskio:{self.id}:active_device", device)
-        self.db_metrics.metric('read_kbps', read_kbps)
-        self.db_metrics.metric('write_kbps', write_kbps)
-        self.db_logger.write(
-            f"Disk {device}: read {_format_rate(read_kbps)}, write {_format_rate(write_kbps)}",
-            level="INFO"
+        return CollectResult(
+            metrics={'read_kbps': read_kbps, 'write_kbps': write_kbps},
+            logs=[(
+                f"Disk {device}: read {_format_rate(read_kbps)}, write {_format_rate(write_kbps)}",
+                "INFO",
+            )],
+            status='online',
+            settings={f"diskio:{self.id}:active_device": device},
         )
-        self.set_status('online')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class DiskIoUIPlugin(UIPlugin):
@@ -122,13 +112,13 @@ class DiskIoUIPlugin(UIPlugin):
         from vigil.web.ui.spec import FORMATTERS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['read_kbps', 'write_kbps'])
+        page = self.ui.page(metric_names=['read_kbps', 'write_kbps'])
 
-        active_device = self.db.get_setting(f"diskio:{self.id}:active_device") or self.config.get('device')
+        active_device = self.storage.get_setting(f"diskio:{self.id}:active_device") or self.config.get('device')
         _rate_or_dash = FORMATTERS['kbps_rate']
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('device_card'):
             device_label = info_card('DEVICE', active_device or 'Detecting...')
         with layout.cell('read_card'):
@@ -142,10 +132,10 @@ class DiskIoUIPlugin(UIPlugin):
         with layout.cell('write_chart'):
             history_chart(page, 'WRITE THROUGHPUT (KB/s)', self.id, 'write_kbps')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update_device():
-            device = self.db.get_setting(f"diskio:{self.id}:active_device")
+            device = self.storage.get_setting(f"diskio:{self.id}:active_device")
             if device:
                 device_label.text = device
 

@@ -1,6 +1,7 @@
-from typing import Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
@@ -25,25 +26,22 @@ _DEFAULT_LAYOUT = [
 
 
 class InterruptsCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.irq_warning   = int(config.get('irq_warning',   20000))
         self.irq_threshold = int(config.get('irq_threshold', 50000))
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(
-            "cat /proc/stat && sleep 1 && echo '---SNAP---' && cat /proc/stat"
-        )
+    def commands(self) -> List[Command]:
+        return [Command("cat /proc/stat && sleep 1 && echo '---SNAP---' && cat /proc/stat")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to read /proc/stat: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to read /proc/stat: {stderr}")
 
         halves = stdout.split('---SNAP---')
         if len(halves) < 2:
-            self.db_logger.write("Unexpected /proc/stat output format", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed("Unexpected /proc/stat output format")
 
         intr1 = _extract_counter(halves[0], 'intr')
         intr2 = _extract_counter(halves[1], 'intr')
@@ -51,26 +49,24 @@ class InterruptsCollectorPlugin(CollectorPlugin):
         ctxt2 = _extract_counter(halves[1], 'ctxt')
 
         if intr1 is None or intr2 is None:
-            self.db_logger.write("Could not read 'intr' from /proc/stat", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed("Could not read 'intr' from /proc/stat")
 
         irq_rate = max(0.0, float(intr2 - intr1))
-        self.db_metrics.metric('irq_per_sec', irq_rate)
+        metrics = {'irq_per_sec': irq_rate}
 
         if ctxt1 is not None and ctxt2 is not None:
-            self.db_metrics.metric('ctxt_per_sec', max(0.0, float(ctxt2 - ctxt1)))
+            metrics['ctxt_per_sec'] = max(0.0, float(ctxt2 - ctxt1))
 
         overall = _level_for(irq_rate, self.irq_warning, self.irq_threshold)
         log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
-        self.db_logger.write(
-            f"{irq_rate:.0f} interrupts/sec (warn {self.irq_warning} / fail {self.irq_threshold})",
-            level=log_level
+        return CollectResult(
+            metrics=metrics,
+            logs=[(
+                f"{irq_rate:.0f} interrupts/sec (warn {self.irq_warning} / fail {self.irq_threshold})",
+                log_level,
+            )],
+            status=overall,
         )
-        self.set_status(overall)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class InterruptsUIPlugin(UIPlugin):
@@ -91,13 +87,13 @@ class InterruptsUIPlugin(UIPlugin):
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['irq_per_sec', 'ctxt_per_sec'])
+        page = self.ui.page(metric_names=['irq_per_sec', 'ctxt_per_sec'])
 
         rate_formatter = FORMATTERS['count_comma_rounded']
         color_rule = COLOR_RULES[self._color_rule_name]
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('irq_card'):
             irq_label = info_card('INTERRUPTS/S', rate_formatter(None)).bind_text_from(
                 page.model, ('metrics', 'irq_per_sec'), backward=rate_formatter)
@@ -109,7 +105,7 @@ class InterruptsUIPlugin(UIPlugin):
         with layout.cell('ctxt_chart'):
             history_chart(page, 'CONTEXT SWITCHES / SEC', self.id, 'ctxt_per_sec')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update_color():
             irq = page.model.metrics.get('irq_per_sec')

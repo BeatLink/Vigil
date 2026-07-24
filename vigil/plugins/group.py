@@ -1,10 +1,9 @@
 import json
-import logging
-from typing import Dict, Any, List
+from typing import Any, Callable, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
-from vigil.core.data.database import Setting
 
 SEVERITY_ORDER = {
     'online': 0,
@@ -15,29 +14,31 @@ SEVERITY_ORDER = {
 
 
 class GroupCollectorPlugin(CollectorPlugin):
-    async def on_collect(self):
-        aggregated_status = self._get_aggregated_status()
-        self.set_status(aggregated_status)
-        logging.debug(f"Group '{self.name}' aggregated status: {aggregated_status}")
+    def commands(self) -> List[Command]:
+        return []
 
-    def _get_aggregated_status(self) -> str:
-        statuses = self.db.latest_statuses()
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        return CollectResult()
+
+    def local_call(self) -> Optional[Callable[[], Any]]:
+        return lambda: self.db.latest_statuses()
+
+    def _aggregate_status(self, statuses: Dict[str, str]) -> str:
         current_max_severity = SEVERITY_ORDER['online']
 
         for child in self.children:
             child_status = statuses.get(child.id, 'offline')
             child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['offline'])
-
             if child_severity > current_max_severity:
                 current_max_severity = child_severity
 
-        for status, severity in SEVERITY_ORDER.items():
-            if severity == current_max_severity:
-                return status
-        return 'offline'
+        return next(
+            (status for status, severity in SEVERITY_ORDER.items() if severity == current_max_severity),
+            'offline',
+        )
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+    def parse_local(self, result: Any) -> CollectResult:
+        return CollectResult(status=self._aggregate_status(result))
 
 
 class GroupUIPlugin(UIPlugin):
@@ -51,19 +52,16 @@ class GroupUIPlugin(UIPlugin):
         return f'group_expanded_{self.id}'
 
     def _load_expanded(self) -> Dict[str, bool]:
+        raw = self.storage.get_setting(self._setting_key())
+        if raw is None:
+            return {}
         try:
-            with Setting._meta.database.connection_context():
-                row = Setting.get(Setting.key == self._setting_key())
-                return json.loads(row.value)
-        except Setting.DoesNotExist:
+            return json.loads(raw)
+        except (ValueError, TypeError):
             return {}
 
     def _save_expanded(self):
-        with Setting._meta.database.connection_context():
-            Setting.insert(
-                key=self._setting_key(),
-                value=json.dumps(self._expanded)
-            ).on_conflict_replace().execute()
+        self.db.set_setting(self._setting_key(), json.dumps(self._expanded))
 
 
     def render_ui(self, context: str = 'page'):

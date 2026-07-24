@@ -1,6 +1,7 @@
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
@@ -39,12 +40,11 @@ _DEFAULT_LAYOUT = [
 
 
 class WifiCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.interface: Optional[str] = config.get('interface')
         self.quality_warning   = float(config.get('quality_warning',   40))
         self.quality_threshold = float(config.get('quality_threshold', 20))
-        self._active_interface: Optional[str] = self.interface
 
     def _level_for_quality(self, quality: float) -> str:
         if quality <= self.quality_threshold:
@@ -53,42 +53,31 @@ class WifiCollectorPlugin(CollectorPlugin):
             return 'warning'
         return 'online'
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(
-            "cat /proc/net/wireless"
-        )
+    def commands(self) -> List[Command]:
+        return [Command("cat /proc/net/wireless")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to read /proc/net/wireless: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to read /proc/net/wireless: {stderr}")
 
         stats = _parse_wireless(stdout)
         iface = self.interface or _auto_detect_interface(stats)
         if not iface:
-            self.db_logger.write("No wireless interface found", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed("No wireless interface found")
 
         if iface not in stats:
-            self.db_logger.write(f"Interface '{iface}' not found in /proc/net/wireless", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Interface '{iface}' not found in /proc/net/wireless")
 
         quality, signal = stats[iface]
-        self._active_interface = iface
-        self.db_metrics.metric('link_quality', quality)
-        self.db_metrics.metric('signal_dbm', signal)
-
         overall = self._level_for_quality(quality)
         log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
-        self.db_logger.write(
-            f"{iface}: link quality {quality:.0f}, signal {signal:.0f} dBm",
-            level=log_level
+        return CollectResult(
+            metrics={'link_quality': quality, 'signal_dbm': signal},
+            logs=[(f"{iface}: link quality {quality:.0f}, signal {signal:.0f} dBm", log_level)],
+            status=overall,
+            settings={f"wifi:{self.id}:active_interface": iface},
         )
-        self.set_status(overall)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class WifiUIPlugin(UIPlugin):
@@ -97,7 +86,6 @@ class WifiUIPlugin(UIPlugin):
         self.interface: Optional[str] = self.config.get('interface')
         self.quality_warning   = float(self.config.get('quality_warning',   40))
         self.quality_threshold = float(self.config.get('quality_threshold', 20))
-        self._active_interface: Optional[str] = self.interface
 
     def _level_for_quality(self, quality: float) -> str:
         if quality <= self.quality_threshold:
@@ -112,7 +100,9 @@ class WifiUIPlugin(UIPlugin):
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['link_quality', 'signal_dbm'])
+        page = self.ui.page(metric_names=['link_quality', 'signal_dbm'])
+
+        active_interface = self.storage.get_setting(f"wifi:{self.id}:active_interface") or self.interface
 
         def _quality_or_dash(v):
             return '--' if v is None else f'{v:.0f}'
@@ -121,9 +111,9 @@ class WifiUIPlugin(UIPlugin):
             return '-- dBm' if v is None else f'{v:.0f} dBm'
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('iface_card'):
-            iface_label = info_card('INTERFACE', self._active_interface or 'Detecting...')
+            iface_label = info_card('INTERFACE', active_interface or 'Detecting...')
         with layout.cell('quality_card'):
             quality_label = info_card('LINK QUALITY', '--').bind_text_from(
                 page.model, ('metrics', 'link_quality'), backward=_quality_or_dash)
@@ -135,11 +125,12 @@ class WifiUIPlugin(UIPlugin):
         with layout.cell('signal_chart'):
             history_chart(page, 'SIGNAL (dBm)', self.id, 'signal_dbm')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update_iface_and_color():
-            if self._active_interface:
-                iface_label.text = self._active_interface
+            device = self.storage.get_setting(f"wifi:{self.id}:active_interface")
+            if device:
+                iface_label.text = device
             quality = page.model.metrics.get('link_quality')
             if quality is not None:
                 quality_label.style(f'color: {STATUS_COLORS[self._level_for_quality(quality)]}')

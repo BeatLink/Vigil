@@ -146,7 +146,7 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
                         if 'metric' in c and name != 'status_card']
         if chart_spec:
             metric_names.append(chart_spec['metric'])
-        page = plugin.page(metric_names=metric_names)
+        page = plugin.ui.page(metric_names=metric_names)
 
     color_updates = []
 
@@ -198,12 +198,12 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
 
     if 'host_card' in _flatten_layout(layout_rows):
         with layout.cell('host_card'):
-            plugin.internal_modules['ui']['host_card']()
+            plugin.ui.host_card()
 
     if 'status_card' in cards:
         sc = cards['status_card']
         with layout.cell('status_card'):
-            plugin.internal_modules['ui']['status_card'](
+            plugin.ui.status_card(
                 page,
                 metric_name=sc['metric'],
                 title=sc.get('title', 'STATUS'),
@@ -218,12 +218,12 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
 
     if show_events:
         with layout.cell('events'):
-            plugin.internal_modules['ui']['events_table'](page)
+            plugin.ui.events_table(page)
 
     if show_logs:
         logs_kwargs = show_logs if isinstance(show_logs, dict) else {}
         with layout.cell('logs'):
-            plugin.internal_modules['ui']['logs_table'](page, **logs_kwargs)
+            plugin.ui.logs_table(page, **logs_kwargs)
 
     if color_updates:
         def _update_all_colors():

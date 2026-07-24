@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.disk_space import DiskSpaceCollectorPlugin, _format_gb
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -68,107 +68,68 @@ class TestFormatGb:
 
 
 class TestDiskSpaceCollection:
-    async def test_below_threshold_sets_online(self, plugin):
+    async def test_below_threshold_sets_online(self, plugin, run_cycle):
         GB = 1024 ** 3
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _df_line(100 * GB, 50 * GB, 50 * GB, 50), "")
-        )
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, _df_line(100 * GB, 50 * GB, 50 * GB, 50), ""))
         assert _latest_status() == "online"
 
-    async def test_at_threshold_sets_failed(self, plugin):
+    async def test_at_threshold_sets_failed(self, plugin, run_cycle):
         GB = 1024 ** 3
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _df_line(100 * GB, 90 * GB, 10 * GB, 90), "")
-        )
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, _df_line(100 * GB, 90 * GB, 10 * GB, 90), ""))
         assert _latest_status() == "failed"
 
-    async def test_above_threshold_sets_failed(self, plugin):
+    async def test_above_threshold_sets_failed(self, plugin, run_cycle):
         GB = 1024 ** 3
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _df_line(100 * GB, 95 * GB, 5 * GB, 95), "")
-        )
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, _df_line(100 * GB, 95 * GB, 5 * GB, 95), ""))
         assert _latest_status() == "failed"
 
-    async def test_custom_threshold_respected(self, storage_plugin):
+    async def test_custom_threshold_respected(self, storage_plugin, run_cycle):
         GB = 1024 ** 3
-        storage_plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _df_line(100 * GB, 85 * GB, 15 * GB, 85), "")
-        )
-        await storage_plugin.on_collect()
+        run_cycle(storage_plugin, lambda c: CmdResult(0, _df_line(100 * GB, 85 * GB, 15 * GB, 85), ""))
         assert _latest_status("test-disk-storage") == "failed"
 
-    async def test_used_pct_metric_recorded(self, plugin):
+    async def test_used_pct_metric_recorded(self, plugin, run_cycle):
         GB = 1024 ** 3
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _df_line(100 * GB, 42 * GB, 58 * GB, 42), "")
-        )
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, _df_line(100 * GB, 42 * GB, 58 * GB, 42), ""))
         assert _latest_metric("test-disk", "used_pct") == pytest.approx(42.0)
 
-    async def test_size_gb_metric_recorded(self, plugin):
+    async def test_size_gb_metric_recorded(self, plugin, run_cycle):
         GB = 1024 ** 3
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _df_line(200 * GB, 100 * GB, 100 * GB, 50), "")
-        )
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, _df_line(200 * GB, 100 * GB, 100 * GB, 50), ""))
         assert _latest_metric("test-disk", "size_gb") == pytest.approx(200.0)
 
-    async def test_used_gb_metric_recorded(self, plugin):
+    async def test_used_gb_metric_recorded(self, plugin, run_cycle):
         GB = 1024 ** 3
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _df_line(200 * GB, 75 * GB, 125 * GB, 37), "")
-        )
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, _df_line(200 * GB, 75 * GB, 125 * GB, 37), ""))
         assert _latest_metric("test-disk", "used_gb") == pytest.approx(75.0)
 
-    async def test_avail_gb_metric_recorded(self, plugin):
+    async def test_avail_gb_metric_recorded(self, plugin, run_cycle):
         GB = 1024 ** 3
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _df_line(200 * GB, 75 * GB, 125 * GB, 37), "")
-        )
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, _df_line(200 * GB, 75 * GB, 125 * GB, 37), ""))
         assert _latest_metric("test-disk", "avail_gb") == pytest.approx(125.0)
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(-1, "", "connection refused")
-        )
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_malformed_output_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "unexpected garbage", "")
-        )
-        await plugin.on_collect()
+    async def test_malformed_output_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "unexpected garbage", ""))
         assert _latest_status() == "failed"
 
-    async def test_empty_output_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "", "")
-        )
-        await plugin.on_collect()
+    async def test_empty_output_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "", ""))
         assert _latest_status() == "failed"
 
-    async def test_no_metrics_written_on_ssh_failure(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(-1, "", "timeout")
-        )
-        await plugin.on_collect()
+    async def test_no_metrics_written_on_ssh_failure(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "timeout"))
         assert _latest_metric("test-disk", "used_pct") is None
 
-    async def test_fractional_percent_parsed(self, plugin):
+    async def test_fractional_percent_parsed(self, plugin, run_cycle):
         GB = 1024 ** 3
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _df_line(100 * GB, 33 * GB, 67 * GB, 33), "")
-        )
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, _df_line(100 * GB, 33 * GB, 67 * GB, 33), ""))
         assert _latest_metric("test-disk", "used_pct") == pytest.approx(33.0)
 
 
 class TestDiskSpaceActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

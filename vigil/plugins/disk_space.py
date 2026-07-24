@@ -1,5 +1,6 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 from vigil.core.common.plugin_utils import format_bytes as _format_gb
@@ -14,19 +15,18 @@ _DEFAULT_LAYOUT = [
 
 
 class DiskSpaceCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.path = config.get('path', '/')
         self.threshold = int(config.get('threshold', 90))
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(
-            f"df --output=size,used,avail,pcent -B1 '{self.path}' | tail -1"
-        )
+    def commands(self) -> List[Command]:
+        return [Command(f"df --output=size,used,avail,pcent -B1 '{self.path}' | tail -1")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"df failed for '{self.path}': {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"df failed for '{self.path}': {stderr}")
 
         try:
             fields = stdout.strip().split()
@@ -35,30 +35,30 @@ class DiskSpaceCollectorPlugin(CollectorPlugin):
             avail_bytes = int(fields[2])
             used_pct = float(fields[3].rstrip('%'))
         except (IndexError, ValueError) as e:
-            self.db_logger.write(f"Failed to parse df output '{stdout.strip()}': {e}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to parse df output '{stdout.strip()}': {e}")
 
         size_gb  = size_bytes  / (1024 ** 3)
         used_gb  = used_bytes  / (1024 ** 3)
         avail_gb = avail_bytes / (1024 ** 3)
 
-        self.db_metrics.metric('used_pct',  used_pct)
-        self.db_metrics.metric('size_gb',   size_gb)
-        self.db_metrics.metric('used_gb',   used_gb)
-        self.db_metrics.metric('avail_gb',  avail_gb)
+        metrics = {
+            'used_pct': used_pct,
+            'size_gb': size_gb,
+            'used_gb': used_gb,
+            'avail_gb': avail_gb,
+        }
 
         level = 'WARNING' if used_pct >= self.threshold else 'INFO'
-        self.db_logger.write(
-            f"{self.path}: {used_pct:.1f}% used "
-            f"({_format_gb(used_gb)} of {_format_gb(size_gb)}, "
-            f"{_format_gb(avail_gb)} free, threshold {self.threshold}%)",
-            level=level
+        return CollectResult(
+            metrics=metrics,
+            logs=[(
+                f"{self.path}: {used_pct:.1f}% used "
+                f"({_format_gb(used_gb)} of {_format_gb(size_gb)}, "
+                f"{_format_gb(avail_gb)} free, threshold {self.threshold}%)",
+                level,
+            )],
+            status='failed' if used_pct >= self.threshold else 'online',
         )
-        self.set_status('failed' if used_pct >= self.threshold else 'online')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class DiskSpaceUIPlugin(UIPlugin):

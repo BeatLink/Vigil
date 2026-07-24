@@ -1,9 +1,9 @@
 import json
-from unittest.mock import AsyncMock
 
 import pytest
 
 from vigil.plugins.syncthing import SyncthingCollectorPlugin
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -37,21 +37,21 @@ def plugin(make_plugin):
     return make_plugin(SyncthingCollectorPlugin, BASE_CFG)
 
 
-def _mock_calls(plugin, config=None, folder_statuses=None, connections=None, watched_folders=None):
+def _collect_twice(plugin, run_cycle, config=None, folder_statuses=None, connections=None,
+                   watched_folders=None):
+    """First cycle discovers folder IDs (config + connections only); second
+    cycle fetches per-folder status for the folders discovered in cycle 1 —
+    mirrors the one-cycle-lag behavior of the cached-folder-IDs design."""
     cfg = config if config is not None else _CONFIG
     watched = watched_folders if watched_folders is not None else [f["id"] for f in cfg["folders"]]
-    responses = [json.dumps(cfg)]
     fs = folder_statuses or {"docs": _folder_status(), "photos": _folder_status()}
-    for folder_id in watched:
-        responses.append(json.dumps(fs[folder_id]))
-    responses.append(json.dumps(connections if connections is not None else _connections()))
+    conn = connections if connections is not None else _connections()
 
-    calls = iter(responses)
+    run_cycle(plugin, lambda c: CmdResult(0, json.dumps(cfg), ""))
 
-    async def fake_fetch(script):
-        return (0, next(calls), "")
-
-    plugin.ssh_collector.fetch_output = AsyncMock(side_effect=fake_fetch)
+    responses = [CmdResult(0, json.dumps(cfg), ""), CmdResult(0, json.dumps(conn), "")]
+    responses += [CmdResult(0, json.dumps(fs[folder_id]), "") for folder_id in watched]
+    return run_cycle(plugin, lambda c, _it=iter(responses): next(_it))
 
 
 def _latest_status(plugin_id: str = "test-syncthing") -> str | None:
@@ -71,63 +71,60 @@ def _latest_metric(metric: str, name: str = "test-syncthing") -> float | None:
 
 
 class TestSyncthingCollection:
-    async def test_all_idle_connected_sets_online(self, plugin):
-        _mock_calls(plugin)
-        await plugin.on_collect()
+    async def test_all_idle_connected_sets_online(self, plugin, run_cycle):
+        _collect_twice(plugin, run_cycle)
         assert _latest_status() == "online"
 
-    async def test_folder_error_state_sets_failed(self, plugin):
-        _mock_calls(plugin, folder_statuses={
+    async def test_folder_error_state_sets_failed(self, plugin, run_cycle):
+        _collect_twice(plugin, run_cycle, folder_statuses={
             "docs": _folder_status(state="error"),
             "photos": _folder_status(),
         })
-        await plugin.on_collect()
         assert _latest_status() == "failed"
 
-    async def test_idle_with_needed_files_sets_failed(self, plugin):
-        _mock_calls(plugin, folder_statuses={
+    async def test_idle_with_needed_files_sets_failed(self, plugin, run_cycle):
+        _collect_twice(plugin, run_cycle, folder_statuses={
             "docs": _folder_status(state="idle", need_files=5, need_bytes=1000),
             "photos": _folder_status(),
         })
-        await plugin.on_collect()
         assert _latest_status() == "failed"
 
-    async def test_pull_errors_set_warning(self, plugin):
-        _mock_calls(plugin, folder_statuses={
+    async def test_pull_errors_set_warning(self, plugin, run_cycle):
+        _collect_twice(plugin, run_cycle, folder_statuses={
             "docs": _folder_status(pull_errors=2),
             "photos": _folder_status(),
         })
-        await plugin.on_collect()
         assert _latest_status() == "warning"
 
-    async def test_disconnected_device_sets_warning(self, plugin):
-        _mock_calls(plugin, connections=_connections(connected=False))
-        await plugin.on_collect()
+    async def test_disconnected_device_sets_warning(self, plugin, run_cycle):
+        _collect_twice(plugin, run_cycle, connections=_connections(connected=False))
         assert _latest_status() == "warning"
 
-    async def test_invalid_folder_sets_failed(self, plugin):
-        _mock_calls(plugin, folder_statuses={
+    async def test_invalid_folder_sets_failed(self, plugin, run_cycle):
+        _collect_twice(plugin, run_cycle, folder_statuses={
             "docs": _folder_status(invalid="path missing"),
             "photos": _folder_status(),
         })
-        await plugin.on_collect()
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_on_config_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_on_config_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_folder_filter_excludes_others(self, make_plugin):
+    async def test_first_cycle_discovers_folders(self, plugin, run_cycle):
+        result = run_cycle(plugin, lambda c: CmdResult(0, json.dumps(_CONFIG), ""))
+        assert result.status == "warning"
+        assert plugin._cached_folder_ids == ["docs", "photos"]
+
+    async def test_folder_filter_excludes_others(self, make_plugin, run_cycle):
         p = make_plugin(SyncthingCollectorPlugin, {**BASE_CFG, "folders": ["docs"]})
-        _mock_calls(p, watched_folders=["docs"], folder_statuses={
+        _collect_twice(p, run_cycle, watched_folders=["docs"], folder_statuses={
             "docs": _folder_status(),
             "photos": _folder_status(state="error"),
         })
-        await p.on_collect()
         assert _latest_status("test-syncthing") == "online"
 
 
 class TestSyncthingActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

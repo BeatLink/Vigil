@@ -1,5 +1,6 @@
 from typing import Dict, Any, List
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import format_bytes as _format_gb
 
@@ -61,8 +62,8 @@ _DEFAULT_LAYOUT = [
 
 
 class FilesystemsCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.warning   = int(config.get('warning',   80))
         self.threshold = int(config.get('threshold', 90))
         self.inode_warning   = int(config.get('inode_warning',   85))
@@ -83,12 +84,13 @@ class FilesystemsCollectorPlugin(CollectorPlugin):
             return 'warning'
         return 'online'
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(_build_cmd())
+    def commands(self) -> List[Command]:
+        return [Command(_build_cmd())]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0 and not stdout.strip():
-            self.db_logger.write(f"df failed: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"df failed: {stderr}")
 
         sections = stdout.split(_SNAP)
         inode_pct = _parse_inodes(sections[1]) if len(sections) > 1 else {}
@@ -110,10 +112,10 @@ class FilesystemsCollectorPlugin(CollectorPlugin):
             filesystems.append((mountpoint, used_pct, size_bytes, used_bytes))
 
         if not filesystems:
-            self.db_logger.write("No real filesystems found", level="WARNING")
-            self.set_status('offline')
-            return
+            return CollectResult.failed("No real filesystems found", level="WARNING", status='offline')
 
+        metrics: Dict[str, float] = {}
+        logs: List[tuple] = []
         worst = 0.0
         worst_inode = 0.0
         overall = 'online'
@@ -126,43 +128,43 @@ class FilesystemsCollectorPlugin(CollectorPlugin):
 
         for mountpoint, used_pct, size_bytes, _used in filesystems:
             key = _sanitize(mountpoint)
-            self.db_metrics.metric(f'fs_{key}_used_pct', used_pct)
-            self.db_metrics.metric(f'fs_{key}_size_gb', size_bytes / (1024 ** 3))
+            metrics[f'fs_{key}_used_pct'] = used_pct
+            metrics[f'fs_{key}_size_gb'] = size_bytes / (1024 ** 3)
             worst = max(worst, used_pct)
             level = self._level_for(used_pct)
             _escalate(level)
             if level != 'online':
-                self.db_logger.write(
+                logs.append((
                     f"{mountpoint}: {used_pct:.0f}% used ({_format_gb(size_bytes / (1024**3))})",
-                    level="ERROR" if level == 'failed' else "WARNING"
-                )
+                    "ERROR" if level == 'failed' else "WARNING",
+                ))
 
             if mountpoint in inode_pct:
                 ipct = inode_pct[mountpoint]
-                self.db_metrics.metric(f'fs_{key}_inodes_pct', ipct)
+                metrics[f'fs_{key}_inodes_pct'] = ipct
                 worst_inode = max(worst_inode, ipct)
                 ilevel = self._inode_level_for(ipct)
                 _escalate(ilevel)
                 if ilevel != 'online':
-                    self.db_logger.write(
+                    logs.append((
                         f"{mountpoint}: {ipct:.0f}% of inodes used — writes may fail "
                         f"with ENOSPC despite free space",
-                        level="ERROR" if ilevel == 'failed' else "WARNING"
-                    )
+                        "ERROR" if ilevel == 'failed' else "WARNING",
+                    ))
 
             if readonly.get(mountpoint):
                 ro_mounts.append(mountpoint)
                 ro_level = 'failed' if self.readonly_is_failure else 'warning'
                 _escalate(ro_level)
-                self.db_logger.write(
+                logs.append((
                     f"{mountpoint}: mounted READ-ONLY — usage figures are stale; "
                     f"the kernel may have remounted it after an I/O error",
-                    level="ERROR" if ro_level == 'failed' else "WARNING"
-                )
+                    "ERROR" if ro_level == 'failed' else "WARNING",
+                ))
 
-        self.db_metrics.metric('worst_used_pct', worst)
-        self.db_metrics.metric('worst_inodes_pct', worst_inode)
-        self.db_metrics.metric('readonly_count', float(len(ro_mounts)))
+        metrics['worst_used_pct'] = worst
+        metrics['worst_inodes_pct'] = worst_inode
+        metrics['readonly_count'] = float(len(ro_mounts))
 
         summary = (f"{len(filesystems)} filesystem(s), worst {worst:.0f}% "
                    f"(warn {self.warning}% / fail {self.threshold}%)")
@@ -170,14 +172,12 @@ class FilesystemsCollectorPlugin(CollectorPlugin):
             summary += f", worst inodes {worst_inode:.0f}%"
         if ro_mounts:
             summary += f", {len(ro_mounts)} read-only: {', '.join(ro_mounts)}"
-        self.db_logger.write(
+        logs.append((
             summary,
-            level="INFO" if overall == 'online' else "WARNING" if overall == 'warning' else "ERROR"
-        )
-        self.set_status(overall)
+            "INFO" if overall == 'online' else "WARNING" if overall == 'warning' else "ERROR",
+        ))
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(metrics=metrics, logs=logs, status=overall)
 
 
 class FilesystemsUIPlugin(UIPlugin):
@@ -210,10 +210,10 @@ class FilesystemsUIPlugin(UIPlugin):
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=[])
+        page = self.ui.page(metric_names=[])
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('count_card'):
             count_label = info_card('FILESYSTEMS', '--')
         with layout.cell('worst_card'):
@@ -223,7 +223,7 @@ class FilesystemsUIPlugin(UIPlugin):
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update():
             fs_pct: Dict[str, float] = {}
@@ -264,7 +264,7 @@ class FilesystemsUIPlugin(UIPlugin):
                     lbl = info_card(display, text)
                     lbl.style(f'color: {STATUS_COLORS[level]}')
 
-            worst_m = self.latest_metric('worst_used_pct')
+            worst_m = self.storage.latest_metric('worst_used_pct')
             if worst_m is not None:
                 worst_label.text = f'{worst_m.value:.0f}%'
                 worst_label.style(f'color: {STATUS_COLORS[self._level_for(worst_m.value)]}')

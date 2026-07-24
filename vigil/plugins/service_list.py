@@ -1,9 +1,10 @@
 import os
 import shlex
 import asyncio
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
@@ -20,58 +21,54 @@ _DEFAULT_UNIT_FILE_WRITE_PATHS = (
 )
 
 
+_LIST_UNITS_CMD = (
+    'systemctl list-units --type=service --all '
+    '--no-legend --no-pager --plain'
+)
+_LIST_UNIT_FILES_CMD = (
+    'systemctl list-unit-files --type=service --all '
+    '--no-legend --no-pager'
+)
+
+
 class ServiceListCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.max_logs = int(config.get('lines', 10))
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
-        self.allowed_write_paths = tuple(config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
-        self._services: List[Dict[str, Any]] = []
 
-    async def on_collect(self):
-        await self._collect_services()
+    def commands(self) -> List[Command]:
+        return [Command(_LIST_UNITS_CMD), Command(_LIST_UNIT_FILES_CMD)]
 
-    async def _collect_services(self):
-        list_units_cmd = (
-            'systemctl list-units --type=service --all '
-            '--no-legend --no-pager --plain'
-        )
-        status, stdout, stderr = await self.ssh_collector.fetch_output(list_units_cmd)
-        if status != 0:
-            self.db_logger.write(f'Collection failed: {stderr}', level='ERROR')
-            self.set_status('failed')
-            return
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        units_result, unit_files_result = results
 
-        services = self._parse_unit_list(stdout)
+        if units_result.exit_code != 0:
+            return CollectResult.failed(f'Collection failed: {units_result.stderr}')
 
-        list_unit_files_cmd = (
-            'systemctl list-unit-files --type=service --all '
-            '--no-legend --no-pager'
-        )
-        status2, stdout2, stderr2 = await self.ssh_collector.fetch_output(list_unit_files_cmd)
-        if status2 != 0:
-            self.db_logger.write(f'Unit-file collection failed: {stderr2}', level='ERROR')
-            self.set_status('failed')
-            return
+        services = self._parse_unit_list(units_result.stdout)
 
-        enabled_map = self._parse_unit_file_list(stdout2)
+        if unit_files_result.exit_code != 0:
+            return CollectResult.failed(f'Unit-file collection failed: {unit_files_result.stderr}')
+
+        enabled_map = self._parse_unit_file_list(unit_files_result.stdout)
         for service in services:
             service['enabled'] = enabled_map.get(service['unit'], 'unknown')
 
-        self._services = services
         total = len(services)
         active = sum(1 for s in services if s['active'] == 'active')
         failed = sum(1 for s in services if s['active'] == 'failed')
 
-        self.db_metrics.metric('services_total', float(total))
-        self.db_metrics.metric('services_active', float(active))
-        self.db_metrics.metric('services_failed', float(failed))
-        self.db_logger.snapshot(services)
-        self.db_logger.write(
-            f'Collected {total} services, {active} active, {failed} failed',
-            level='INFO'
+        return CollectResult(
+            metrics={
+                'services_total': float(total),
+                'services_active': float(active),
+                'services_failed': float(failed),
+            },
+            snapshot=services,
+            logs=[(f'Collected {total} services, {active} active, {failed} failed', 'INFO')],
+            status='online',
         )
-        self.set_status('online')
 
     @staticmethod
     def _parse_unit_list(stdout: str) -> List[Dict[str, Any]]:
@@ -106,63 +103,6 @@ class ServiceListCollectorPlugin(CollectorPlugin):
             enabled_map[unit_file] = state
         return enabled_map
 
-    async def _resolve_unit_path(self, service_name: str) -> tuple[bool, str]:
-        status, stdout, stderr = await self.ssh_controller.execute_action(
-            f'systemctl show -p FragmentPath --value {shlex.quote(service_name)}'
-        )
-        if status != 0:
-            return False, stderr.strip() or 'Unable to resolve unit file path'
-
-        path = stdout.strip()
-        if not path or path == 'n/a':
-            return False, 'Unit file path unavailable'
-        return True, path
-
-    def _is_write_path_allowed(self, path: str) -> bool:
-        normalized = os.path.abspath(path)
-        return any(
-            normalized == os.path.abspath(allowed) or
-            normalized.startswith(os.path.abspath(allowed) + os.sep)
-            for allowed in self.allowed_write_paths
-        )
-
-    async def _read_unit_file(self, service_name: str) -> tuple[bool, str]:
-        status, stdout, stderr = await self.ssh_controller.execute_action(
-            f'sudo systemctl cat {shlex.quote(service_name)}'
-        )
-        if status != 0:
-            return False, stderr.strip() or 'Unable to read unit file'
-        return True, stdout
-
-    async def _write_unit_file(self, service_name: str, content: str) -> tuple[bool, str]:
-        ok, path_or_error = await self._resolve_unit_path(service_name)
-        if not ok:
-            return False, path_or_error
-
-        path = path_or_error
-        if not self._is_write_path_allowed(path):
-            return False, f'Write path not allowed: {path}'
-
-        cmd = (
-            "sudo python3 - <<'PY'\n"
-            "from pathlib import Path\n"
-            f"Path({shlex.quote(path)}).write_text({shlex.quote(content)}, encoding='utf-8')\n"
-            "PY"
-        )
-        status, _, stderr = await self.ssh_controller.execute_action(cmd)
-        if status != 0:
-            return False, stderr.strip() or 'Unable to write unit file'
-        return True, 'Unit file written successfully'
-
-    async def _run_systemctl_command(self, command: str, service_name: Optional[str] = None) -> bool:
-        target = f' {shlex.quote(service_name)}' if service_name and command != 'daemon-reload' else ''
-        status, _, stderr = await self.ssh_controller.execute_action(
-            f'sudo systemctl {command}{target}'.strip()
-        )
-        if status != 0:
-            self.db_logger.write(f'systemctl {command} failed for {service_name}: {stderr}', level='ERROR')
-        return status == 0
-
     def get_actions(self) -> List[Dict[str, str]]:
         return [
             {
@@ -173,19 +113,25 @@ class ServiceListCollectorPlugin(CollectorPlugin):
             },
         ]
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
+    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, CollectResult]]:
         service_name = kwargs.get('service_name')
         if action_id in ('start_service', 'stop_service', 'restart_service', 'enable_service', 'disable_service'):
             if not service_name:
-                self.db_logger.write('Service action missing service_name', level='ERROR')
-                return False
+                return CollectResult.failed('Service action missing service_name')
             command = action_id.replace('_service', '')
-            return await self._run_systemctl_command(command, service_name)
+            return ActionPlan(f'sudo systemctl {command} {shlex.quote(service_name)}')
 
         if action_id == 'daemon_reload':
-            return await self._run_systemctl_command('daemon-reload')
+            return ActionPlan('sudo systemctl daemon-reload')
 
-        return False
+        return None
+
+    def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
+        if result.exit_code != 0:
+            command = action_id.replace('_service', '') if action_id != 'daemon_reload' else 'daemon-reload'
+            service_name = kwargs.get('service_name')
+            return CollectResult.failed(f'systemctl {command} failed for {service_name}: {result.stderr}')
+        return True
 
 
 class ServiceListUIPlugin(UIPlugin):
@@ -199,10 +145,10 @@ class ServiceListUIPlugin(UIPlugin):
         from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page()
+        page = self.ui.page()
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
 
         with layout.cell('count_card'):
             self._count_label = info_card('SERVICES', '--')
@@ -259,7 +205,7 @@ class ServiceListUIPlugin(UIPlugin):
             def update_table():
                 filter_term = (search_in.value or '').strip().lower()
                 rows = []
-                for service in self.latest_snapshot(default=[]):
+                for service in self.storage.latest_snapshot(default=[]):
                     if filter_term:
                         haystack = ' '.join(
                             str(service.get(key, '')).lower()
@@ -302,10 +248,10 @@ class ServiceListUIPlugin(UIPlugin):
                 table.on('edit_file', lambda e: asyncio.create_task(do_row_action(e, 'edit_file')))
 
             def update():
-                count_metric = self.latest_metric('services_total')
+                count_metric = self.storage.latest_metric('services_total')
                 self._count_label.text = (
                     str(int(count_metric.value)) if count_metric
-                    else str(len(self.latest_snapshot(default=[])))
+                    else str(len(self.storage.latest_snapshot(default=[])))
                 )
                 update_table()
 
@@ -314,14 +260,14 @@ class ServiceListUIPlugin(UIPlugin):
             update()
 
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page, title='PLUGIN EVENTS')
+            self.ui.events_table(page, title='PLUGIN EVENTS')
 
         page.start()
 
     async def _show_status(self, service_name: str):
         from nicegui import ui
 
-        status, stdout, stderr = await self.ssh_controller.execute_action(
+        status, stdout, stderr = await self.network.execute_raw(
             f'sudo systemctl status {shlex.quote(service_name)} --no-pager'
         )
         if status != 0:
@@ -387,7 +333,7 @@ class ServiceListUIPlugin(UIPlugin):
         ui.notify('Daemon reloaded' if success else 'Daemon reload failed', type='positive' if success else 'negative')
 
     async def _read_unit_file(self, service_name: str) -> tuple[bool, str]:
-        status, stdout, stderr = await self.ssh_controller.execute_action(
+        status, stdout, stderr = await self.network.execute_raw(
             f'sudo systemctl cat {shlex.quote(service_name)}'
         )
         if status != 0:
@@ -409,13 +355,13 @@ class ServiceListUIPlugin(UIPlugin):
             f"Path({shlex.quote(path)}).write_text({shlex.quote(content)}, encoding='utf-8')\n"
             "PY"
         )
-        status, _, stderr = await self.ssh_controller.execute_action(cmd)
+        status, _, stderr = await self.network.execute_raw(cmd)
         if status != 0:
             return False, stderr.strip() or 'Unable to write unit file'
         return True, 'Unit file written successfully'
 
     async def _resolve_unit_path(self, service_name: str) -> tuple[bool, str]:
-        status, stdout, stderr = await self.ssh_controller.execute_action(
+        status, stdout, stderr = await self.network.execute_raw(
             f'systemctl show -p FragmentPath --value {shlex.quote(service_name)}'
         )
         if status != 0:

@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.gpu import GpuCollectorPlugin
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -46,60 +46,45 @@ def _latest_metric(metric, name="test-gpu"):
 
 
 class TestGpuCollection:
-    async def test_idle_gpu_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output([(0, 10, 1000, 8000, 45)]), ""))
-        await plugin.on_collect()
+    async def test_idle_gpu_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output([(0, 10, 1000, 8000, 45)]), ""))
         assert _latest_status() == "online"
         assert _latest_metric("gpu_util") == pytest.approx(10.0)
         assert _latest_metric("gpu_mem_pct") == pytest.approx(12.5)
         assert _latest_metric("gpu_temp") == pytest.approx(45.0)
 
-    async def test_high_util_warning(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output([(0, 88, 1000, 8000, 50)]), ""))
-        await plugin.on_collect()
+    async def test_high_util_warning(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output([(0, 88, 1000, 8000, 50)]), ""))
         assert _latest_status() == "warning"
 
-    async def test_hot_gpu_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output([(0, 10, 1000, 8000, 92)]), ""))
-        await plugin.on_collect()
+    async def test_hot_gpu_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output([(0, 10, 1000, 8000, 92)]), ""))
         assert _latest_status() == "failed"
 
-    async def test_full_vram_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output([(0, 10, 7800, 8000, 50)]), ""))
-        await plugin.on_collect()
+    async def test_full_vram_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output([(0, 10, 7800, 8000, 50)]), ""))
         assert _latest_status() == "failed"
 
-    async def test_worst_of_multiple_gpus(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output([(0, 10, 1000, 8000, 50),
-                                           (1, 99, 1000, 8000, 50)]), ""))
-        await plugin.on_collect()
+    async def test_worst_of_multiple_gpus(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output([(0, 10, 1000, 8000, 50),
+                                                                (1, 99, 1000, 8000, 50)]), ""))
         assert _latest_status() == "failed"
         assert _latest_metric("gpu_util") == pytest.approx(99.0)
         assert _latest_metric("gpu1_util") == pytest.approx(99.0)
 
-    async def test_nvidia_smi_missing_offline(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(127, "", "bash: nvidia-smi: command not found"))
-        await plugin.on_collect()
+    async def test_nvidia_smi_missing_offline(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(127, "", "bash: nvidia-smi: command not found"))
         assert _latest_status() == "offline"
 
-    async def test_no_devices_offline(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(9, "", "No devices were found"))
-        await plugin.on_collect()
+    async def test_no_devices_offline(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(9, "", "No devices were found"))
         assert _latest_status() == "offline"
 
-    async def test_generic_failure_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "some driver error"))
-        await plugin.on_collect()
+    async def test_generic_failure_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "some driver error"))
         assert _latest_status() == "failed"
 
 
 class TestGpuActions:
-    async def test_on_action_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+    async def test_on_action_returns_none(self, plugin):
+        assert plugin.plan_action("anything") is None

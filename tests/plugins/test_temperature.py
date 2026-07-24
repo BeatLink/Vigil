@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.temperature import TemperatureCollectorPlugin, _level_for
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -62,62 +63,47 @@ class TestLevelFor:
 
 
 class TestTemperatureCollection:
-    async def test_below_warning_sets_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output(_TEMPS_ONLINE), ""))
-        await plugin.on_collect()
+    async def test_below_warning_sets_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output(_TEMPS_ONLINE), ""))
         assert _latest_status() == "online"
 
-    async def test_above_warning_sets_warning(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output(_TEMPS_WARNING), ""))
-        await plugin.on_collect()
+    async def test_above_warning_sets_warning(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output(_TEMPS_WARNING), ""))
         assert _latest_status() == "warning"
 
-    async def test_above_threshold_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output(_TEMPS_FAILED), ""))
-        await plugin.on_collect()
+    async def test_above_threshold_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output(_TEMPS_FAILED), ""))
         assert _latest_status() == "failed"
 
-    async def test_temp_c_metric_recorded(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output(_TEMPS_ONLINE), ""))
-        await plugin.on_collect()
+    async def test_temp_c_metric_recorded(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output(_TEMPS_ONLINE), ""))
         assert _latest_metric("temp_c") == pytest.approx(45.0)
 
-    async def test_takes_maximum_zone(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output([30_000, 75_000, 60_000]), ""))
-        await plugin.on_collect()
+    async def test_takes_maximum_zone(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output([30_000, 75_000, 60_000]), ""))
         assert _latest_metric("temp_c") == pytest.approx(75.0)
 
-    async def test_no_thermal_zones_sets_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "", ""))
-        await plugin.on_collect()
+    async def test_no_thermal_zones_sets_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "", ""))
         assert _latest_status() == "online"
         assert _latest_metric("temp_c") is None
 
-    async def test_no_thermal_zones_does_not_store_metric(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "", ""))
-        await plugin.on_collect()
+    async def test_no_thermal_zones_does_not_store_metric(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "", ""))
         assert _latest_metric("temp_c") is None
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(-1, "", "timeout"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "timeout"))
         assert _latest_status() == "failed"
 
-    async def test_custom_thresholds_respected(self, make_plugin):
+    async def test_custom_thresholds_respected(self, make_plugin, run_cycle):
         cfg = {**BASE_CFG, "name": "test-temp-custom", "id": "test-temp-custom",
                "temp_warning": 30, "temp_threshold": 40}
         p = make_plugin(TemperatureCollectorPlugin, cfg)
-        p.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output(_TEMPS_ONLINE), ""))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, _make_output(_TEMPS_ONLINE), ""))
         assert _latest_status("test-temp-custom") == "failed"
 
 
 class TestTemperatureActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

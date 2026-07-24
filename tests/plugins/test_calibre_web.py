@@ -1,8 +1,7 @@
-from unittest.mock import AsyncMock
-
 import pytest
 
 from vigil.plugins.calibre_web import CalibreWebCollectorPlugin, _SEP, _looks_like_opds, _parse_response
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -22,9 +21,8 @@ def plugin(make_plugin):
     return make_plugin(CalibreWebCollectorPlugin, BASE_CFG)
 
 
-def _respond(plugin, status=200, body=_OPDS_BODY):
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(0, f"{body}\n{_SEP}{status}", ""))
+def _result(status=200, body=_OPDS_BODY, time_total="0.05"):
+    return CmdResult(0, f"{body}\n{_SEP}{status} {time_total}", "")
 
 
 def _latest_status(plugin_id: str = "test-calibre-web") -> str | None:
@@ -45,9 +43,10 @@ class TestLooksLikeOpds:
 
 class TestParseResponse:
     def test_splits_body_and_status(self):
-        body, status = _parse_response(f"{_OPDS_BODY}\n{_SEP}200")
+        body, status, elapsed_ms = _parse_response(f"{_OPDS_BODY}\n{_SEP}200 0.05")
         assert status == 200
         assert "feed" in body
+        assert elapsed_ms == pytest.approx(50.0)
 
     def test_missing_separator_raises(self):
         with pytest.raises(ValueError):
@@ -55,27 +54,23 @@ class TestParseResponse:
 
 
 class TestCalibreWebCollection:
-    async def test_valid_feed_sets_online(self, plugin):
-        _respond(plugin, status=200, body=_OPDS_BODY)
-        await plugin.on_collect()
+    async def test_valid_feed_sets_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(status=200, body=_OPDS_BODY))
         assert _latest_status() == "online"
 
-    async def test_login_page_with_200_sets_failed(self, plugin):
-        _respond(plugin, status=200, body="<html><body>Please log in</body></html>")
-        await plugin.on_collect()
+    async def test_login_page_with_200_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(status=200, body="<html><body>Please log in</body></html>"))
         assert _latest_status() == "failed"
 
-    async def test_401_sets_failed(self, plugin):
-        _respond(plugin, status=401, body="")
-        await plugin.on_collect()
+    async def test_401_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(status=401, body=""))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
 
 class TestCalibreWebActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

@@ -13,6 +13,7 @@ from vigil.plugins.pihole import (
     _format_age,
     _parse_response,
 )
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -56,9 +57,8 @@ def plugin(make_plugin):
     return make_plugin(PiholeCollectorPlugin, BASE_CFG)
 
 
-def _respond(plugin, summary=None, blocking="enabled"):
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(0, _response(summary, blocking), ""))
+def _respond(plugin, run_cycle, summary=None, blocking="enabled"):
+    return run_cycle(plugin, lambda c: CmdResult(0, _response(summary, blocking), ""))
 
 
 def _latest_status(plugin_id: str = "test-pihole") -> str | None:
@@ -135,114 +135,95 @@ class TestParseResponse:
 
 
 class TestPiholeCollection:
-    async def test_healthy_sets_online(self, plugin):
-        _respond(plugin)
-        await plugin.on_collect()
+    async def test_healthy_sets_online(self, plugin, run_cycle):
+        _respond(plugin, run_cycle)
         assert _latest_status() == "online"
 
-    async def test_block_rate_metric_recorded(self, plugin):
-        _respond(plugin)
-        await plugin.on_collect()
+    async def test_block_rate_metric_recorded(self, plugin, run_cycle):
+        _respond(plugin, run_cycle)
         assert _latest_metric("block_rate_pct") == pytest.approx(16.1)
 
-    async def test_core_metrics_recorded(self, plugin):
-        _respond(plugin)
-        await plugin.on_collect()
+    async def test_core_metrics_recorded(self, plugin, run_cycle):
+        _respond(plugin, run_cycle)
         assert _latest_metric("queries_total") == 237819
         assert _latest_metric("gravity_domains") == 347306
         assert _latest_metric("clients_active") == 16
         assert _latest_metric("blocking_enabled") == 1.0
 
-    async def test_computes_block_rate_when_absent(self, plugin):
+    async def test_computes_block_rate_when_absent(self, plugin, run_cycle):
         s = _summary(total=1000, blocked=250)
         del s["queries"]["percent_blocked"]
-        _respond(plugin, s)
-        await plugin.on_collect()
+        _respond(plugin, run_cycle, s)
         assert _latest_metric("block_rate_pct") == pytest.approx(25.0)
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_garbage_response_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "<html>404</html>", ""))
-        await plugin.on_collect()
+    async def test_garbage_response_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "<html>404</html>", ""))
         assert _latest_status() == "failed"
 
 
 class TestBlockRateThresholds:
-    async def test_low_block_rate_sets_warning(self, plugin):
-        _respond(plugin, _summary(total=10000, blocked=300, percent=3.0))
-        await plugin.on_collect()
+    async def test_low_block_rate_sets_warning(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _summary(total=10000, blocked=300, percent=3.0))
         assert _latest_status() == "warning"
 
-    async def test_collapsed_block_rate_sets_failed(self, plugin):
-        _respond(plugin, _summary(total=10000, blocked=20, percent=0.2))
-        await plugin.on_collect()
+    async def test_collapsed_block_rate_sets_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _summary(total=10000, blocked=20, percent=0.2))
         assert _latest_status() == "failed"
 
-    async def test_low_query_volume_is_not_judged(self, plugin):
-        _respond(plugin, _summary(total=5, blocked=0, percent=0.0))
-        await plugin.on_collect()
+    async def test_low_query_volume_is_not_judged(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _summary(total=5, blocked=0, percent=0.0))
         assert _latest_status() == "online"
 
-    async def test_threshold_boundary_is_not_failed(self, plugin):
-        _respond(plugin, _summary(total=10000, blocked=100, percent=1.0))
-        await plugin.on_collect()
+    async def test_threshold_boundary_is_not_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _summary(total=10000, blocked=100, percent=1.0))
         assert _latest_status() == "warning"
 
 
 class TestGravityHealth:
-    async def test_empty_gravity_sets_failed(self, plugin):
-        _respond(plugin, _summary(domains=0))
-        await plugin.on_collect()
+    async def test_empty_gravity_sets_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _summary(domains=0))
         assert _latest_status() == "failed"
 
-    async def test_stale_gravity_sets_warning(self, plugin):
+    async def test_stale_gravity_sets_warning(self, plugin, run_cycle):
         old = time.time() - (86400 * 30)
-        _respond(plugin, _summary(last_update=old))
-        await plugin.on_collect()
+        _respond(plugin, run_cycle, _summary(last_update=old))
         assert _latest_status() == "warning"
 
-    async def test_fresh_gravity_stays_online(self, plugin):
-        _respond(plugin, _summary(last_update=time.time() - 3600))
-        await plugin.on_collect()
+    async def test_fresh_gravity_stays_online(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _summary(last_update=time.time() - 3600))
         assert _latest_status() == "online"
 
-    async def test_gravity_age_metric_recorded(self, plugin):
-        _respond(plugin, _summary(last_update=time.time() - 7200))
-        await plugin.on_collect()
+    async def test_gravity_age_metric_recorded(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _summary(last_update=time.time() - 7200))
         assert _latest_metric("gravity_age_seconds") == pytest.approx(7200, abs=60)
 
-    async def test_never_updated_sets_warning(self, plugin):
+    async def test_never_updated_sets_warning(self, plugin, run_cycle):
         s = _summary()
         del s["gravity"]["last_update"]
-        _respond(plugin, s)
-        await plugin.on_collect()
+        _respond(plugin, run_cycle, s)
         assert _latest_status() == "warning"
 
 
 class TestBlockingDisabled:
-    async def test_disabled_blocking_sets_failed(self, plugin):
-        _respond(plugin, blocking="disabled")
-        await plugin.on_collect()
+    async def test_disabled_blocking_sets_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, blocking="disabled")
         assert _latest_status() == "failed"
 
-    async def test_disabled_blocking_recorded_as_metric(self, plugin):
-        _respond(plugin, blocking="disabled")
-        await plugin.on_collect()
+    async def test_disabled_blocking_recorded_as_metric(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, blocking="disabled")
         assert _latest_metric("blocking_enabled") == 0.0
 
-    async def test_disabled_outranks_healthy_block_rate(self, plugin):
-        _respond(plugin, _summary(percent=16.1), blocking="disabled")
-        await plugin.on_collect()
+    async def test_disabled_outranks_healthy_block_rate(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _summary(percent=16.1), blocking="disabled")
         assert _latest_status() == "failed"
 
-    async def test_worst_condition_wins(self, plugin):
+    async def test_worst_condition_wins(self, plugin, run_cycle):
         old = time.time() - (86400 * 30)
-        _respond(plugin, _summary(domains=0, last_update=old))
-        await plugin.on_collect()
+        _respond(plugin, run_cycle, _summary(domains=0, last_update=old))
         assert _latest_status() == "failed"
 
 
@@ -291,31 +272,29 @@ class TestPiholeActions:
         assert "disable" not in blob
 
     async def test_unknown_action_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None
 
     async def test_enable_blocking_success(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        assert await plugin.on_action("enable_blocking") is True
-        script = plugin.ssh_controller.execute_action.call_args[0][0]
-        assert "/api/dns/blocking" in script
-        assert '"blocking": true' in script
+        plan = plugin.plan_action("enable_blocking")
+        assert "/api/dns/blocking" in plan.command
+        assert '"blocking": true' in plan.command
+        outcome = plugin.interpret_action("enable_blocking", CmdResult(0, "", ""))
+        assert outcome.success is True
 
     async def test_enable_blocking_failure(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(1, "", "connection refused"))
-        assert await plugin.on_action("enable_blocking") is False
+        outcome = plugin.interpret_action("enable_blocking", CmdResult(1, "", "connection refused"))
+        assert outcome.success is False
 
     async def test_update_gravity_success(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        assert await plugin.on_action("update_gravity") is True
-        script = plugin.ssh_controller.execute_action.call_args[0][0]
-        assert "/api/action/gravity" in script
+        plan = plugin.plan_action("update_gravity")
+        assert "/api/action/gravity" in plan.command
+        outcome = plugin.interpret_action("update_gravity", CmdResult(0, "", ""))
+        assert outcome.success is True
 
     async def test_update_gravity_failure(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(1, "", "timed out"))
-        assert await plugin.on_action("update_gravity") is False
+        outcome = plugin.interpret_action("update_gravity", CmdResult(1, "", "timed out"))
+        assert outcome.success is False
 
     async def test_update_gravity_uses_gravity_timeout(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        await plugin.on_action("update_gravity")
-        _, kwargs = plugin.ssh_controller.execute_action.call_args
-        assert kwargs.get("timeout") == plugin.gravity_timeout
+        plan = plugin.plan_action("update_gravity")
+        assert plan.timeout == plugin.gravity_timeout

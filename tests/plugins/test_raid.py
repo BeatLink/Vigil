@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.raid import RaidCollectorPlugin
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -58,35 +59,30 @@ def plugin(make_plugin):
 
 
 class TestRaidCollection:
-    async def test_clean_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _CLEAN, ""))
-        await plugin.on_collect()
+    async def test_clean_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _CLEAN, ""))
         assert _latest_status() == "online"
         assert _latest_metric("arrays_total") == pytest.approx(1.0)
         assert _latest_metric("arrays_degraded") == pytest.approx(0.0)
 
-    async def test_degraded_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _DEGRADED, ""))
-        await plugin.on_collect()
+    async def test_degraded_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _DEGRADED, ""))
         assert _latest_status() == "failed"
         assert _latest_metric("arrays_degraded") == pytest.approx(1.0)
 
-    async def test_recovering_warning(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _RECOVERING, ""))
-        await plugin.on_collect()
+    async def test_recovering_warning(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _RECOVERING, ""))
         assert _latest_status() == "warning"
 
-    async def test_no_arrays_offline(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _EMPTY, ""))
-        await plugin.on_collect()
+    async def test_no_arrays_offline(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _EMPTY, ""))
         assert _latest_status() == "offline"
 
-    async def test_read_failure_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "no such file"))
-        await plugin.on_collect()
+    async def test_read_failure_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "no such file"))
         assert _latest_status() == "failed"
 
 
 class TestRaidActions:
     async def test_on_action_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

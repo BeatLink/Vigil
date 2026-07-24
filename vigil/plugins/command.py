@@ -1,7 +1,8 @@
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Any, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
@@ -18,10 +19,10 @@ _DEFAULT_LAYOUT_PLAIN = [
 
 
 class CommandCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.command = config.get('command')
-        self.timeout = int(config.get('timeout', 30))
+        self.command_timeout = int(config.get('timeout', 30))
         pattern = config.get('pattern')
         self.pattern = re.compile(pattern) if pattern else None
         self.warning   = config.get('warning')
@@ -38,46 +39,46 @@ class CommandCollectorPlugin(CollectorPlugin):
             return _level_for(-value, -float(self.warning), -float(self.threshold))
         return _level_for(value, float(self.warning), float(self.threshold))
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         if not self.command:
-            self.db_logger.write("No 'command' configured", level="ERROR")
-            self.set_status('failed')
-            return
+            return []
+        wrapped = f"timeout {self.command_timeout} sh -c {_shquote(self.command)}"
+        return [Command(wrapped)]
 
-        wrapped = f"timeout {self.timeout} sh -c {_shquote(self.command)}"
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(wrapped)
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        if not self.command:
+            return CollectResult.failed("No 'command' configured")
+
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         if ret == 124:
-            self.db_logger.write(f"Command timed out after {self.timeout}s", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Command timed out after {self.command_timeout}s")
 
-        self.db_metrics.metric('exit_code', float(ret))
+        metrics = {'exit_code': float(ret)}
         out_snippet = (stdout or stderr).strip()
-        self.db_logger.write(
+        logs = [(
             f"exit={ret} {out_snippet[:200]}" if out_snippet else f"exit={ret}",
-            level="INFO" if ret == 0 else "ERROR"
-        )
+            "INFO" if ret == 0 else "ERROR",
+        )]
 
         if self.pattern is not None:
             value = self._extract_value(stdout)
             if value is None:
-                self.db_logger.write(
-                    f"Pattern {self.pattern.pattern!r} did not match a number in output", level="ERROR"
-                )
-                self.set_status('failed')
-                return
-            self.db_metrics.metric('value', value)
+                logs.append((
+                    f"Pattern {self.pattern.pattern!r} did not match a number in output", "ERROR"
+                ))
+                return CollectResult(metrics=metrics, logs=logs, status='failed')
+            metrics['value'] = value
             overall = self._level_for_value(value)
             log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
-            self.db_logger.write(f"{self.value_label}: {value}{self.value_unit} -> {overall}", level=log_level)
-            self.set_status(overall)
-            return
+            logs.append((f"{self.value_label}: {value}{self.value_unit} -> {overall}", log_level))
+            return CollectResult(metrics=metrics, logs=logs, status=overall)
 
         if ret == 0:
-            self.set_status('online')
+            status = 'online'
         else:
-            self.set_status('warning' if self.nonzero_is_warning else 'failed')
+            status = 'warning' if self.nonzero_is_warning else 'failed'
+        return CollectResult(metrics=metrics, logs=logs, status=status)
 
     def _extract_value(self, stdout: str) -> Optional[float]:
         m = self.pattern.search(stdout or '')
@@ -88,9 +89,6 @@ class CommandCollectorPlugin(CollectorPlugin):
             return float(raw)
         except (ValueError, TypeError):
             return None
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class CommandUIPlugin(UIPlugin):
@@ -118,7 +116,7 @@ class CommandUIPlugin(UIPlugin):
         base = _DEFAULT_LAYOUT_METRIC if has_value else _DEFAULT_LAYOUT_PLAIN
         layout = PluginLayout(self.config, base if context == 'page' else make_inline_layout(base))
         metric_names = ['exit_code'] + (['value'] if has_value else [])
-        page = self.page(metric_names=metric_names)
+        page = self.ui.page(metric_names=metric_names)
 
         _exit_text = FORMATTERS['int']
 
@@ -126,7 +124,7 @@ class CommandUIPlugin(UIPlugin):
             return '--' if v is None else f'{v:g}{value_unit}'
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('exit_card'):
             exit_label = info_card('EXIT CODE', '--').bind_text_from(
                 page.model, ('metrics', 'exit_code'), backward=_exit_text)
@@ -137,7 +135,7 @@ class CommandUIPlugin(UIPlugin):
             with layout.cell('chart'):
                 history_chart(page, value_label, self.id, 'value')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update_colors():
             code = page.model.metrics.get('exit_code')

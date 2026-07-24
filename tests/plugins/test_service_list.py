@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock
 from vigil.plugins.service_list import ServiceListCollectorPlugin
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric, flush_writes
 
 CFG = {
@@ -37,28 +38,27 @@ class TestServiceListPlugin:
     def plugin(self, make_plugin):
         return make_plugin(ServiceListCollectorPlugin, CFG)
 
-    async def test_collects_services_and_metrics(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
-            (0, SERVICE_LIST_OUTPUT, ""),
-            (0, UNIT_FILE_OUTPUT, ""),
-        ])
-        await plugin.on_collect()
+    async def test_collects_services_and_metrics(self, plugin, run_cycle):
+        outputs = [
+            CmdResult(0, SERVICE_LIST_OUTPUT, ""),
+            CmdResult(0, UNIT_FILE_OUTPUT, ""),
+        ]
+        run_cycle(plugin, lambda c, _it=iter(outputs): next(_it))
         assert _latest_metric("services_total") == pytest.approx(3.0)
         assert _latest_metric("services_active") == pytest.approx(2.0)
         assert _latest_metric("services_failed") == pytest.approx(0.0)
 
     async def test_start_service_action(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        assert await plugin.on_action("start_service", service_name="nginx.service") is True
-        plugin.ssh_controller.execute_action.assert_called_once_with(
-            "sudo systemctl start nginx.service"
-        )
+        plan = plugin.plan_action("start_service", service_name="nginx.service")
+        assert plan.command == "sudo systemctl start nginx.service"
+        assert plugin.interpret_action("start_service", CmdResult(0, "", "")) is True
 
     async def test_view_status_action_fails_without_service(self, plugin):
-        assert await plugin.on_action("view_status") is False
+        plan = plugin.plan_action("view_status")
+        assert plan is None
 
     async def test_unknown_action_returns_false(self, plugin):
-        assert await plugin.on_action("nuke_service", service_name="nginx.service") is False
+        assert plugin.plan_action("nuke_service", service_name="nginx.service") is None
 
     def test_get_actions_returns_reload(self, plugin):
         actions = {a['action_id'] for a in plugin.get_actions()}

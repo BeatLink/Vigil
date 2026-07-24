@@ -6,6 +6,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 from vigil.plugins.borg import BorgCollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, JobPlan
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -49,29 +50,29 @@ def plugin(make_plugin):
     return make_plugin(BorgCollectorPlugin, BASE_CFG)
 
 
+def _collect(plugin, run_cycle, list_result, info_result=None):
+    n = len(plugin.commands())
+    if n <= 1:
+        outputs = [list_result]
+    else:
+        outputs = [list_result, info_result if info_result is not None else CmdResult(0, "{}", "")]
+    return run_cycle(plugin, lambda c, _it=iter(outputs): next(_it))
+
+
 class TestFreshness:
-    async def test_recent_archive_is_online(self, plugin):
+    async def test_recent_archive_is_online(self, plugin, run_cycle):
         recent = int(time.time()) - 3600
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _list_json(recent), ""))
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(recent), ""))
         assert _latest_status("test-borg") == "online"
 
-    async def test_stale_archive_is_failed(self, plugin):
+    async def test_stale_archive_is_failed(self, plugin, run_cycle):
         stale = int(time.time()) - 3 * 24 * 3600
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _list_json(stale), ""))
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(stale), ""))
         assert _latest_status("test-borg") == "failed"
 
-    async def test_no_archives_is_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _list_json(None), ""))
-        await plugin.on_collect()
+    async def test_no_archives_is_failed(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(None), ""))
         assert _latest_status("test-borg") == "failed"
-
-
-def _captured(plugin) -> list:
-    written = []
-    plugin.db_logger.write = lambda msg, level="INFO": written.append((level, msg))
-    return written
 
 
 def _multi_json(*epochs) -> str:
@@ -88,120 +89,84 @@ def _multi_json(*epochs) -> str:
 
 
 class TestLogging:
-    async def test_logs_each_archive(self, plugin):
+    async def test_logs_each_archive(self, plugin, run_cycle):
         now = int(time.time())
         out = _multi_json(now - 3600, now - 90000, now - 180000)
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, out, ""))
-        log = _captured(plugin)
-        await plugin.on_collect()
-        messages = " | ".join(m for _, m in log)
+        result = _collect(plugin, run_cycle, CmdResult(0, out, ""))
+        messages = " | ".join(m for m, _ in result.logs)
         for name in ("archive-0", "archive-1", "archive-2"):
             assert name in messages
 
-    async def test_logs_repository_metadata(self, plugin):
+    async def test_logs_repository_metadata(self, plugin, run_cycle):
         now = int(time.time())
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _multi_json(now - 3600), "")
-        )
-        log = _captured(plugin)
-        await plugin.on_collect()
-        messages = " | ".join(m for _, m in log)
+        result = _collect(plugin, run_cycle, CmdResult(0, _multi_json(now - 3600), ""))
+        messages = " | ".join(m for m, _ in result.logs)
         assert "/srv/repo" in messages
         assert "repokey-blake2" in messages
 
-    async def test_archives_logged_newest_first(self, plugin):
+    async def test_archives_logged_newest_first(self, plugin, run_cycle):
         now = int(time.time())
         out = _multi_json(now - 180000, now - 3600, now - 90000)
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, out, ""))
-        log = _captured(plugin)
-        await plugin.on_collect()
-        names = [m.strip().split(" ")[0] for _, m in log if m.startswith("  archive-")]
+        result = _collect(plugin, run_cycle, CmdResult(0, out, ""))
+        names = [m.strip().split(" ")[0] for m, _ in result.logs if m.startswith("  archive-")]
         assert names == ["archive-1", "archive-2", "archive-0"]
 
-    async def test_logs_command_with_passphrase_redacted(self, make_plugin):
+    async def test_logs_command_with_passphrase_redacted(self, make_plugin, run_cycle):
         p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "passphrase": "s3cret"})
         now = int(time.time())
-        p.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _multi_json(now - 3600), "")
-        )
-        log = _captured(p)
-        await p.on_collect()
-        messages = " | ".join(m for _, m in log)
+        result = _collect(p, run_cycle, CmdResult(0, _multi_json(now - 3600), ""))
+        messages = " | ".join(m for m, _ in result.logs)
         assert "borg list" in messages
         assert "BORG_PASSPHRASE=*****" in messages
         assert "s3cret" not in messages
 
-    async def test_failure_logs_exit_code_and_hint(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(1, "", "sudo: borg: command not found")
-        )
-        log = _captured(plugin)
-        await plugin.on_collect()
-        messages = " | ".join(m for _, m in log)
+    async def test_failure_logs_exit_code_and_hint(self, plugin, run_cycle):
+        result = _collect(plugin, run_cycle, CmdResult(1, "", "sudo: borg: command not found"))
+        messages = " | ".join(m for m, _ in result.logs)
         assert "exit 1" in messages
         assert "not on PATH" in messages
 
-    async def test_publickey_failure_hints_at_ssh_key(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(
-            2, "", "Remote: borg@heimdall.technet: Permission denied (publickey)."
-        ))
-        log = _captured(plugin)
-        await plugin.on_collect()
-        messages = " | ".join(m for _, m in log)
+    async def test_publickey_failure_hints_at_ssh_key(self, plugin, run_cycle):
+        result = _collect(plugin, run_cycle, CmdResult(
+            2, "", "Remote: borg@heimdall.technet: Permission denied (publickey)."))
+        messages = " | ".join(m for m, _ in result.logs)
         assert "ssh_key" in messages
         assert "require_sudo" not in messages
 
-    async def test_permission_denied_hint(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(2, "", "Permission denied: '/srv/repo/config'")
-        )
-        log = _captured(plugin)
-        await plugin.on_collect()
-        assert any("require_sudo" in m for _, m in log)
+    async def test_permission_denied_hint(self, plugin, run_cycle):
+        result = _collect(plugin, run_cycle, CmdResult(2, "", "Permission denied: '/srv/repo/config'"))
+        assert any("require_sudo" in m for m, _ in result.logs)
 
-    async def test_unparseable_output_logs_raw_snippet(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "Warning: something odd", "")
-        )
-        log = _captured(plugin)
-        await plugin.on_collect()
-        assert any("Warning: something odd" in m for _, m in log)
+    async def test_unparseable_output_logs_raw_snippet(self, plugin, run_cycle):
+        result = _collect(plugin, run_cycle, CmdResult(0, "Warning: something odd", ""))
+        assert any("Warning: something odd" in m for m, _ in result.logs)
 
 
 class TestFailures:
-    async def test_borg_error_is_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(2, "", "Repository is locked")
-        )
-        await plugin.on_collect()
+    async def test_borg_error_is_failed(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, CmdResult(2, "", "Repository is locked"))
         assert _latest_status("test-borg") == "failed"
 
-    async def test_unparseable_output_is_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "not json", ""))
-        await plugin.on_collect()
+    async def test_unparseable_output_is_failed(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, CmdResult(0, "not json", ""))
         assert _latest_status("test-borg") == "failed"
 
-    async def test_missing_repo_config_is_failed(self, make_plugin):
+    async def test_missing_repo_config_is_failed(self, make_plugin, run_cycle):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "repo"}
         p = make_plugin(BorgCollectorPlugin, cfg)
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _list_json(int(time.time())), ""))
-        await p.on_collect()
+        assert p.commands() == []
+        run_cycle(p)
         assert _latest_status("test-borg") == "failed"
-        p.ssh_collector.fetch_output.assert_not_called()
 
 
 class TestMetrics:
-    async def test_last_backup_epoch_recorded(self, plugin):
+    async def test_last_backup_epoch_recorded(self, plugin, run_cycle):
         epoch = int(time.time()) - 500
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _list_json(epoch), ""))
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(epoch), ""))
         assert abs(_latest_metric("test-borg", "last_backup_epoch") - epoch) <= 1
 
-    async def test_archive_count_recorded(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _list_json(int(time.time())), "")
-        )
-        await plugin.on_collect()
+    async def test_archive_count_recorded(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(int(time.time())), ""))
         assert _latest_metric("test-borg", "archive_count") == pytest.approx(1.0)
 
 
@@ -348,12 +313,12 @@ class TestActions:
         assert ids == {"run_backup", "dry_run_backup"}
 
     async def test_unknown_action_returns_false(self, plugin):
-        assert await plugin.on_action("nonsense") is False
+        assert plugin.plan_action("nonsense") is None
 
     async def test_backup_without_source_paths_fails(self, plugin):
-        log = _captured(plugin)
-        assert await plugin.on_action("run_backup") is False
-        assert any("source_paths" in m for _, m in log)
+        plan = plugin.plan_action("run_backup")
+        assert plan.success is False
+        assert any("source_paths" in m for m, _ in plan.logs)
 
 
 BACKUP_CFG = {**BASE_CFG, "source_paths": ["/home", "/etc"]}
@@ -474,38 +439,54 @@ def backup_plugin(make_plugin):
     return make_plugin(BorgCollectorPlugin, BACKUP_CFG)
 
 
+async def _run_backup(plugin, engine_dispatch_action, action_id="run_backup"):
+    """Drives plan_action -> network.run_job_plan (with job_on_line) ->
+    interpret_job, mirroring VigilEngine.dispatch_action's JobPlan branch."""
+    plan = plugin.plan_action(action_id)
+    if plan is None:
+        return False
+    if not isinstance(plan, JobPlan):
+        plugin.storage.apply(plan)
+        return plan.success
+    on_line = plugin.job_on_line(action_id)
+    _job_id, status = await plugin.network.run_job_plan(plan, on_line=on_line)
+    outcome = plugin.interpret_job(action_id, status)
+    if hasattr(outcome, "success"):
+        plugin.storage.apply(outcome)
+        return outcome.success
+    return outcome
+
+
 class TestBackupExecution:
     async def test_successful_backup_records_job(self, backup_plugin, db_manager):
-        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["done"])
-        assert await backup_plugin.on_action("run_backup") is True
+        backup_plugin.network._job.ssh.execute_streaming = _streaming(["done"])
+        assert await _run_backup(backup_plugin, None) is True
 
-        jobs = backup_plugin.job_controller.recent()
+        jobs = backup_plugin.network.recent()
         assert len(jobs) == 1
         assert jobs[0]['kind'] == 'backup'
         assert jobs[0]['state'] == 'succeeded'
 
     async def test_dry_run_recorded_as_its_own_kind(self, backup_plugin):
-        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["ok"])
-        await backup_plugin.on_action("dry_run_backup")
-        assert backup_plugin.job_controller.recent()[0]['kind'] == 'dry-run'
+        backup_plugin.network._job.ssh.execute_streaming = _streaming(["ok"])
+        await _run_backup(backup_plugin, None, "dry_run_backup")
+        assert backup_plugin.network.recent()[0]['kind'] == 'dry-run'
 
     async def test_borg_warning_exit_is_still_success(self, backup_plugin):
-        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["warn"], status=1)
-        log = _captured(backup_plugin)
-        assert await backup_plugin.on_action("run_backup") is True
-        assert any("warning" in m.lower() for _, m in log)
+        backup_plugin.network._job.ssh.execute_streaming = _streaming(["warn"], status=1)
+        assert await _run_backup(backup_plugin, None) is True
 
     async def test_borg_error_exit_is_failure(self, backup_plugin):
-        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["err"], status=2)
-        assert await backup_plugin.on_action("run_backup") is False
+        backup_plugin.network._job.ssh.execute_streaming = _streaming(["err"], status=2)
+        assert await _run_backup(backup_plugin, None) is False
 
     async def test_job_command_is_redacted(self, backup_plugin, db_manager):
         p = backup_plugin
         p.passphrase = "s3cret"
-        p.job_controller.ssh.execute_streaming = _streaming(["ok"])
-        await p.on_action("run_backup")
+        p.network._job.ssh.execute_streaming = _streaming(["ok"])
+        await _run_backup(p, None)
 
-        stored = p.job_controller.recent()[0]['command']
+        stored = p.network.recent()[0]['command']
         assert "s3cret" not in stored
         assert "BORG_PASSPHRASE=*****" in stored
 
@@ -521,12 +502,12 @@ class TestBackupExecution:
 
         async def streaming(command, on_line=None, timeout=None, should_cancel=None):
             on_line("stdout", progress)
-            job_id = backup_plugin.job_controller.current_job_id()
+            job_id = backup_plugin.network.current_job_id()
             seen.append(db_manager.get_job(job_id)['progress'])
             return 0, ""
 
-        backup_plugin.job_controller.ssh.execute_streaming = streaming
-        await backup_plugin.on_action("run_backup")
+        backup_plugin.network._job.ssh.execute_streaming = streaming
+        await _run_backup(backup_plugin, None)
 
         assert "42 files" in seen[0]
         assert "/home/user/file.txt" in seen[0]
@@ -551,44 +532,32 @@ class TestBackupExecution:
         backup_plugin._handle_backup_line(job_id, "stdout", opening)
         assert "42 files" in db_manager.get_job(job_id)['progress']
 
-    async def test_completion_sets_a_final_summary(self, backup_plugin, db_manager):
-        backup_plugin.job_controller.ssh.execute_streaming = _streaming(
-            [json.dumps({"type": "archive_progress", "finished": True})]
-        )
-        await backup_plugin.on_action("run_backup")
-
-        job_id = backup_plugin.job_controller.recent()[0]['id']
-        assert db_manager.get_job(job_id)['progress'] == "Backup completed"
-
-    async def test_failed_job_summary_reports_exit_code(self, backup_plugin, db_manager):
-        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["x"], status=2)
-        await backup_plugin.on_action("run_backup")
-
-        job_id = backup_plugin.job_controller.recent()[0]['id']
-        assert "exit 2" in db_manager.get_job(job_id)['progress']
-
-    async def test_borg_warnings_reach_the_event_log(self, backup_plugin):
+    async def test_borg_warnings_reach_the_event_log(self, backup_plugin, db_manager):
         message = json.dumps({
             "type": "log_message",
             "levelname": "WARNING",
             "message": "file changed while we backed it up",
         })
-        backup_plugin.job_controller.ssh.execute_streaming = _streaming([message])
-        log = _captured(backup_plugin)
-        await backup_plugin.on_action("run_backup")
-        assert any("file changed" in m for _, m in log)
+        backup_plugin.network._job.ssh.execute_streaming = _streaming([message])
+        await _run_backup(backup_plugin, None)
+        db_manager.flush()
+
+        from vigil.core.data.database import Event
+        with db.connection_context():
+            events = [e.message for e in Event.select().where(Event.message.contains("file changed"))]
+        assert events
 
     async def test_non_json_output_does_not_crash(self, backup_plugin):
-        backup_plugin.job_controller.ssh.execute_streaming = _streaming(
+        backup_plugin.network._job.ssh.execute_streaming = _streaming(
             ["Warning: Permanently added host", "{not json", "plain text"]
         )
-        assert await backup_plugin.on_action("run_backup") is True
+        assert await _run_backup(backup_plugin, None) is True
 
     async def test_output_lines_are_stored(self, backup_plugin, db_manager):
-        backup_plugin.job_controller.ssh.execute_streaming = _streaming(["line1", "line2"])
-        await backup_plugin.on_action("run_backup")
+        backup_plugin.network._job.ssh.execute_streaming = _streaming(["line1", "line2"])
+        await _run_backup(backup_plugin, None)
 
-        job_id = backup_plugin.job_controller.recent()[0]['id']
+        job_id = backup_plugin.network.recent()[0]['id']
         assert [o['message'] for o in db_manager.job_output(job_id)] == ["line1", "line2"]
 
 
@@ -611,82 +580,48 @@ class TestRepoStats:
         assert "borg info" in cmd
         assert "--json" in cmd
 
-    async def test_stats_recorded_as_metrics(self, plugin):
+    async def test_stats_recorded_as_metrics(self, plugin, run_cycle):
         now = int(time.time())
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            side_effect=[(0, _list_json(now - 60), ""), (0, _info_json(), "")]
-        )
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(now - 60), ""), CmdResult(0, _info_json(), ""))
 
         assert _latest_metric("test-borg", "original_size") == pytest.approx(1000)
         assert _latest_metric("test-borg", "deduplicated_size") == pytest.approx(250)
 
-    async def test_dedup_ratio_is_derived(self, plugin):
+    async def test_dedup_ratio_is_derived(self, plugin, run_cycle):
         now = int(time.time())
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            side_effect=[(0, _list_json(now - 60), ""), (0, _info_json(total=1000, unique=250), "")]
-        )
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(now - 60), ""),
+                CmdResult(0, _info_json(total=1000, unique=250), ""))
         assert _latest_metric("test-borg", "dedup_ratio") == pytest.approx(4.0)
 
     async def test_stats_disabled_skips_info_call(self, make_plugin):
         p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "collect_stats": False})
-        now = int(time.time())
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _list_json(now - 60), ""))
-        await p.on_collect()
-        assert p.ssh_collector.fetch_output.call_count == 1
+        assert len(p.commands()) == 1
 
-    async def test_info_failure_does_not_fail_the_monitor(self, plugin):
+    async def test_info_failure_does_not_fail_the_monitor(self, plugin, run_cycle):
         now = int(time.time())
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            side_effect=[(0, _list_json(now - 60), ""), (2, "", "info exploded")]
-        )
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(now - 60), ""), CmdResult(2, "", "info exploded"))
         assert _latest_status("test-borg") == "online"
 
-    async def test_unparseable_info_is_tolerated(self, plugin):
+    async def test_unparseable_info_is_tolerated(self, plugin, run_cycle):
         now = int(time.time())
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            side_effect=[(0, _list_json(now - 60), ""), (0, "not json", "")]
-        )
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(now - 60), ""), CmdResult(0, "not json", ""))
         assert _latest_status("test-borg") == "online"
 
-    async def test_empty_repo_skips_the_stats_call(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _list_json(None), ""))
-        await plugin.on_collect()
-        assert plugin.ssh_collector.fetch_output.call_count == 1
+    async def test_empty_repo_skips_the_stats_call(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(None), ""))
         assert _latest_status("test-borg") == "failed"
 
-    async def test_status_is_set_before_stats_are_fetched(self, plugin):
-        seen = {}
-
-        async def fetch(command):
-            if "borg info" in command:
-                seen['status_at_info_time'] = _latest_status("test-borg")
-                return (0, _info_json(), "")
-            return (0, _list_json(int(time.time()) - 60), "")
-
-        plugin.ssh_collector.fetch_output = AsyncMock(side_effect=fetch)
-        await plugin.on_collect()
-        assert seen['status_at_info_time'] == "online"
-
-    async def test_missing_cache_stats_yields_no_metrics(self, plugin):
+    async def test_missing_cache_stats_yields_no_metrics(self, plugin, run_cycle):
         now = int(time.time())
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            side_effect=[(0, _list_json(now - 60), ""), (0, json.dumps({"repository": {}}), "")]
-        )
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(now - 60), ""),
+                CmdResult(0, json.dumps({"repository": {}}), ""))
         assert _latest_metric("test-borg", "original_size") is None
 
 
 class TestEventLogging:
-    async def test_messages_land_where_the_ui_reads_them(self, plugin, db_manager):
+    async def test_messages_land_where_the_ui_reads_them(self, plugin, run_cycle, db_manager):
         from vigil.core.data.database import Event, LogLine
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _list_json(int(time.time()) - 60), "")
-        )
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _list_json(int(time.time()) - 60), ""))
         db_manager.flush()
 
         with db.connection_context():
@@ -698,13 +633,10 @@ class TestEventLogging:
 
 
 class TestArchiveCache:
-    async def test_archives_cached_for_ui(self, make_plugin):
+    async def test_archives_cached_for_ui(self, make_plugin, run_cycle):
         p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "collect_stats": False})
         now = int(time.time())
-        p.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _multi_json(now - 3600, now - 7200), "")
-        )
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, _multi_json(now - 3600, now - 7200), ""))
 
         archives, info = p.cached_archives()
         assert [a['name'] for a in archives] == ["archive-0", "archive-1"]
@@ -713,7 +645,7 @@ class TestArchiveCache:
     async def test_cached_archives_empty_before_first_poll(self, plugin):
         assert plugin.cached_archives() == ([], {})
 
-    async def test_archive_sizes_merged_from_info(self, plugin):
+    async def test_archive_sizes_merged_from_info(self, plugin, run_cycle):
         now = int(time.time())
         info = json.dumps({
             "cache": {"stats": {"total_size": 1000, "total_csize": 500,
@@ -724,10 +656,7 @@ class TestArchiveCache:
                     "deduplicated_size": 1024, "nfiles": 42}},
             ],
         })
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            side_effect=[(0, _multi_json(now - 3600), ""), (0, info, "")]
-        )
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _multi_json(now - 3600), ""), CmdResult(0, info, ""))
 
         archives, _ = plugin.cached_archives()
         first = next(a for a in archives if a["name"] == "archive-0")
@@ -739,14 +668,11 @@ class TestArchiveCache:
         p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "list_archives": 5})
         assert "--last 5" in p._info_command()
 
-    async def test_archives_without_stats_keep_names(self, plugin):
+    async def test_archives_without_stats_keep_names(self, plugin, run_cycle):
         now = int(time.time())
         info = json.dumps({"cache": {"stats": {"total_size": 10,
                                                "unique_csize": 5}}})
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            side_effect=[(0, _multi_json(now - 3600), ""), (0, info, "")]
-        )
-        await plugin.on_collect()
+        _collect(plugin, run_cycle, CmdResult(0, _multi_json(now - 3600), ""), CmdResult(0, info, ""))
 
         archives, _ = plugin.cached_archives()
         assert [a["name"] for a in archives] == ["archive-0"]

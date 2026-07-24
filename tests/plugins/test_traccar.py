@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.traccar import TraccarCollectorPlugin, _age_hours, _AUTH_FAILED
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
+
+pytestmark = pytest.mark.asyncio
 
 
 BASE_CFG = {
@@ -33,9 +36,9 @@ def plugin(make_plugin):
     return make_plugin(TraccarCollectorPlugin, BASE_CFG)
 
 
-def _respond(plugin, devices=None):
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(0, json.dumps(devices if devices is not None else [_device()]), ""))
+def _run(plugin, run_cycle, devices=None):
+    payload = json.dumps(devices if devices is not None else [_device()])
+    run_cycle(plugin, lambda c: CmdResult(0, payload, ""))
 
 
 def _latest_status(plugin_id: str = "test-traccar") -> str | None:
@@ -67,55 +70,47 @@ class TestAgeHours:
 
 
 class TestTraccarCollection:
-    async def test_fresh_device_sets_online(self, plugin):
-        _respond(plugin, [_device(hours_ago=1.0)])
-        await plugin.on_collect()
+    async def test_fresh_device_sets_online(self, plugin, run_cycle):
+        _run(plugin, run_cycle, [_device(hours_ago=1.0)])
         assert _latest_status() == "online"
 
-    async def test_stale_device_sets_warning(self, plugin):
-        _respond(plugin, [_device(hours_ago=30.0)])
-        await plugin.on_collect()
+    async def test_stale_device_sets_warning(self, plugin, run_cycle):
+        _run(plugin, run_cycle, [_device(hours_ago=30.0)])
         assert _latest_status() == "warning"
 
-    async def test_very_stale_device_sets_failed(self, plugin):
-        _respond(plugin, [_device(hours_ago=100.0)])
-        await plugin.on_collect()
+    async def test_very_stale_device_sets_failed(self, plugin, run_cycle):
+        _run(plugin, run_cycle, [_device(hours_ago=100.0)])
         assert _latest_status() == "failed"
 
-    async def test_disabled_devices_excluded(self, plugin):
-        _respond(plugin, [_device(hours_ago=200.0, disabled=True)])
-        await plugin.on_collect()
+    async def test_disabled_devices_excluded(self, plugin, run_cycle):
+        _run(plugin, run_cycle, [_device(hours_ago=200.0, disabled=True)])
         assert _latest_status() == "warning"
 
-    async def test_auth_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", _AUTH_FAILED))
-        await plugin.on_collect()
+    async def test_auth_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", _AUTH_FAILED))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_missing_username_sets_failed(self, make_plugin):
+    async def test_missing_username_sets_failed(self, make_plugin, run_cycle):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "username"}
         p = make_plugin(TraccarCollectorPlugin, cfg)
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, "", ""))
         assert _latest_status("test-traccar") == "failed"
 
-    async def test_never_reported_counts_as_stale(self, plugin):
-        _respond(plugin, [{"name": "NoFix", "disabled": False, "lastUpdate": None}])
-        await plugin.on_collect()
+    async def test_never_reported_counts_as_stale(self, plugin, run_cycle):
+        _run(plugin, run_cycle, [{"name": "NoFix", "disabled": False, "lastUpdate": None}])
         assert _latest_status() == "failed"
 
-    async def test_device_filter_excludes_others(self, make_plugin):
+    async def test_device_filter_excludes_others(self, make_plugin, run_cycle):
         p = make_plugin(TraccarCollectorPlugin, {**BASE_CFG, "devices": ["Phone"]})
-        _respond(p, [_device(name="Phone", hours_ago=1.0),
-                    _device(name="OldTablet", hours_ago=500.0)])
-        await p.on_collect()
+        _run(p, run_cycle, [_device(name="Phone", hours_ago=1.0),
+                            _device(name="OldTablet", hours_ago=500.0)])
         assert _latest_status("test-traccar") == "online"
 
 
 class TestTraccarActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

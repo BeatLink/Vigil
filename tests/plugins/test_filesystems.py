@@ -1,10 +1,10 @@
 import pytest
-from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.filesystems import (
     FilesystemsCollectorPlugin, _sanitize, _parse_inodes, _parse_readonly, _SNAP,
 )
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -79,49 +79,43 @@ class TestSanitize:
 
 
 class TestFilesystemsCollection:
-    async def test_all_healthy_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _df(
+    async def test_all_healthy_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _df(
             ("/", 100_000_000_000, 40_000_000_000, 40),
             ("/home", 500_000_000_000, 100_000_000_000, 20),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "online"
         assert _latest_metric("worst_used_pct") == pytest.approx(40.0)
         assert _latest_metric("fs_root_used_pct") == pytest.approx(40.0)
         assert _latest_metric("fs_home_used_pct") == pytest.approx(20.0)
 
-    async def test_over_warning(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _df(
+    async def test_over_warning(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _df(
             ("/", 100, 85, 85),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "warning"
 
-    async def test_over_threshold_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _df(
+    async def test_over_threshold_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _df(
             ("/", 100, 40, 40),
             ("/data", 100, 95, 95),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "failed"
         assert _latest_metric("worst_used_pct") == pytest.approx(95.0)
 
-    async def test_mount_with_space(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _df(
+    async def test_mount_with_space(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _df(
             ("/mnt/my drive", 100, 10, 10),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "online"
         assert _latest_metric("fs_mnt_my_drive_used_pct") == pytest.approx(10.0)
 
-    async def test_no_filesystems_offline(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _HEADER + "\n", ""))
-        await plugin.on_collect()
+    async def test_no_filesystems_offline(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _HEADER + "\n", ""))
         assert _latest_status() == "offline"
 
-    async def test_df_failure_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "df: error"))
-        await plugin.on_collect()
+    async def test_df_failure_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "df: error"))
         assert _latest_status() == "failed"
 
 
@@ -152,110 +146,100 @@ class TestParseReadonly:
 
 
 class TestInodeExhaustion:
-    async def test_healthy_inodes_stay_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+    async def test_healthy_inodes_stay_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _combined(
             _df(("/", 100, 10, 10)),
             _df_inodes(("/", 12)),
             _mounts(("/", "rw")),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "online"
         assert _latest_metric("fs_root_inodes_pct") == pytest.approx(12.0)
 
-    async def test_inode_exhaustion_fails_despite_free_space(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+    async def test_inode_exhaustion_fails_despite_free_space(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _combined(
             _df(("/", 100, 10, 10)),
             _df_inodes(("/", 97)),
             _mounts(("/", "rw")),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "failed"
         assert _latest_metric("worst_used_pct") == pytest.approx(10.0)
         assert _latest_metric("worst_inodes_pct") == pytest.approx(97.0)
 
-    async def test_inode_warning(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+    async def test_inode_warning(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _combined(
             _df(("/", 100, 10, 10)),
             _df_inodes(("/", 88)),
             _mounts(("/", "rw")),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "warning"
 
-    async def test_inodeless_filesystem_records_no_metric(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+    async def test_inodeless_filesystem_records_no_metric(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _combined(
             _df(("/tank", 100, 10, 10)),
             _df_inodes(("/tank", "-")),
             _mounts(("/tank", "rw")),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "online"
         assert _latest_metric("fs_tank_inodes_pct") is None
 
 
 class TestReadOnlyDetection:
-    async def test_readonly_mount_fails(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+    async def test_readonly_mount_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _combined(
             _df(("/", 100, 10, 10), ("/data", 100, 20, 20)),
             _df_inodes(("/", 5), ("/data", 5)),
             _mounts(("/", "rw"), ("/data", "ro")),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "failed"
         assert _latest_metric("readonly_count") == pytest.approx(1.0)
 
-    async def test_readonly_as_warning_when_configured(self, make_plugin):
+    async def test_readonly_as_warning_when_configured(self, make_plugin, run_cycle):
         cfg = dict(BASE_CFG, readonly_is_failure=False)
         p = make_plugin(FilesystemsCollectorPlugin, cfg)
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+        run_cycle(p, lambda c: CmdResult(0, _combined(
             _df(("/data", 100, 20, 20)),
             _df_inodes(("/data", 5)),
             _mounts(("/data", "ro")),
         ), ""))
-        await p.on_collect()
         assert _latest_status() == "warning"
 
-    async def test_ignores_ro_mounts_df_does_not_report(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+    async def test_ignores_ro_mounts_df_does_not_report(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _combined(
             _df(("/", 100, 10, 10)),
             _df_inodes(("/", 5)),
             _mounts(("/", "rw"), ("/nix/store", "ro"),
                     ("/run/credentials/systemd-journald.service", "ro")),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "online"
         assert _latest_metric("readonly_count") == pytest.approx(0.0)
 
-    async def test_all_rw_stays_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+    async def test_all_rw_stays_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _combined(
             _df(("/", 100, 10, 10)),
             _df_inodes(("/", 5)),
             _mounts(("/", "rw")),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "online"
         assert _latest_metric("readonly_count") == pytest.approx(0.0)
 
 
 class TestDegradedOutput:
-    async def test_space_only_output_still_works(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _df(
+    async def test_space_only_output_still_works(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _df(
             ("/", 100, 95, 95),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "failed"
         assert _latest_metric("worst_used_pct") == pytest.approx(95.0)
 
-    async def test_space_and_inodes_without_mounts(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
+    async def test_space_and_inodes_without_mounts(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _combined(
             _df(("/", 100, 10, 10)),
             _df_inodes(("/", 97)),
         ), ""))
-        await plugin.on_collect()
         assert _latest_status() == "failed"
         assert _latest_metric("worst_inodes_pct") == pytest.approx(97.0)
 
 
 class TestFilesystemsActions:
     async def test_on_action_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

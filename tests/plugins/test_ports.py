@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.ports import PortsCollectorPlugin, _parse_results, _safe_metric_name, _build_probe_script
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -60,28 +61,25 @@ class TestHelpers:
 
 
 class TestPortsCollection:
-    async def test_all_reachable_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "0 3\n1 45\n", ""))
-        await plugin.on_collect()
+    async def test_all_reachable_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "0 3\n1 45\n", ""))
         assert _latest_status() == "online"
         assert _latest_metric("test-ports", "ssh_up") == pytest.approx(1.0)
         assert _latest_metric("test-ports", "ssh_latency_ms") == pytest.approx(3.0)
         assert _latest_metric("test-ports", "api_latency_ms") == pytest.approx(45.0)
 
-    async def test_one_down_fails(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "0 3\n1 FAIL\n", ""))
-        await plugin.on_collect()
+    async def test_one_down_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "0 3\n1 FAIL\n", ""))
         assert _latest_status() == "failed"
         assert _latest_metric("test-ports", "api_up") == pytest.approx(0.0)
 
-    async def test_no_checks_offline(self, make_plugin):
+    async def test_no_checks_offline(self, make_plugin, run_cycle):
         p = make_plugin(PortsCollectorPlugin, {**BASE_CFG, "checks": []})
-        await p.on_collect()
+        run_cycle(p)
         assert _latest_status() == "offline"
 
-    async def test_ssh_failure_fails(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(-1, "", "err"))
-        await plugin.on_collect()
+    async def test_ssh_failure_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "err"))
         assert _latest_status() == "failed"
 
     async def test_auto_labels_unnamed_check(self, make_plugin):
@@ -95,4 +93,4 @@ class TestPortsCollection:
 
 class TestPortsActions:
     async def test_on_action_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

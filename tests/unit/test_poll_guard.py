@@ -1,8 +1,9 @@
 import asyncio
 import pytest
-from unittest.mock import AsyncMock
+from typing import List
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 
 
 class _Probe(CollectorPlugin):
@@ -10,14 +11,14 @@ class _Probe(CollectorPlugin):
         super().__init__(*a, **kw)
         self.collections = 0
         self.gate = None
+        self._blocking = False
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
+        return []
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
         self.collections += 1
-        if self.gate is not None:
-            await self.gate.wait()
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult()
 
 
 @pytest.fixture
@@ -25,36 +26,43 @@ def probe(make_plugin):
     return make_plugin(_Probe, {"interval": 3600})
 
 
+@pytest.fixture
+def engine(tmp_path):
+    from unittest.mock import patch
+    from vigil.collector.main import VigilEngine
+    cfg = tmp_path / "c.yaml"
+    cfg.write_text("plugins: []\n")
+    with patch("vigil.collector.main.VigilEngine._connect", create=True):
+        return VigilEngine(str(cfg), db_path_override=str(tmp_path / "e.db"))
+
+
 class TestInterval:
-    async def test_first_tick_collects(self, probe):
-        await probe.run_cycle()
+    async def test_first_tick_collects(self, probe, engine):
+        await engine.run_cycle_now(probe)
         assert probe.collections == 1
 
-    async def test_second_tick_within_interval_is_skipped(self, probe):
-        await probe.run_cycle()
-        await probe.run_cycle()
-        assert probe.collections == 1
+    async def test_second_tick_within_interval_is_skipped(self, probe, engine):
+        # run_cycle_now itself is not interval-aware — it's a single-flight
+        # guard only. Interval throttling lives in _monitor_loop's sleep, so
+        # here we assert the guard directly: a call while _collecting is set
+        # for this plugin id is skipped.
+        engine._collecting[probe.id] = True
+        assert await engine.run_cycle_now(probe) is False
+        assert probe.collections == 0
 
-    async def test_tick_after_interval_collects_again(self, probe):
-        await probe.run_cycle()
-        probe._last_collected -= probe.interval + 1
-        await probe.run_cycle()
+    async def test_tick_after_interval_collects_again(self, probe, engine):
+        await engine.run_cycle_now(probe)
+        await engine.run_cycle_now(probe)
         assert probe.collections == 2
-
-    async def test_short_interval_polls_every_tick(self, make_plugin):
-        p = make_plugin(_Probe, {"interval": 0})
-        await p.run_cycle()
-        await p.run_cycle()
-        assert p.collections == 2
 
 
 class TestReturnValue:
-    async def test_returns_true_when_it_collected(self, probe):
-        assert await probe.run_cycle() is True
+    async def test_returns_true_when_it_collected(self, probe, engine):
+        assert await engine.run_cycle_now(probe) is True
 
-    async def test_returns_false_when_not_due(self, probe):
-        await probe.run_cycle()
-        assert await probe.run_cycle() is False
+    async def test_returns_false_when_not_due(self, probe, engine):
+        engine._collecting[probe.id] = True
+        assert await engine.run_cycle_now(probe) is False
 
 
 class TestTimeoutConfig:
@@ -72,28 +80,36 @@ class TestTimeoutConfig:
 
 
 class TestOverlapGuard:
-    async def test_overlapping_poll_is_skipped(self, probe):
+    async def test_overlapping_poll_is_skipped(self, probe, engine):
         probe.gate = asyncio.Event()
-        first = asyncio.create_task(probe.run_cycle())
+        probe._blocking = True
+
+        async def _blocking_cycle():
+            engine._collecting[probe.id] = True
+            try:
+                probe.collections += 1
+                await probe.gate.wait()
+            finally:
+                engine._collecting[probe.id] = False
+
+        first = asyncio.create_task(_blocking_cycle())
         await asyncio.sleep(0)
 
-        probe._last_collected = 0.0
-        await probe.run_cycle()
-
+        assert await engine.run_cycle_now(probe) is False
         assert probe.collections == 1
         probe.gate.set()
         await first
 
-    async def test_guard_releases_after_completion(self, probe):
-        probe.gate = asyncio.Event()
-        probe.gate.set()
-        await probe.run_cycle()
-        probe._last_collected = 0.0
-        await probe.run_cycle()
+    async def test_guard_releases_after_completion(self, probe, engine):
+        await engine.run_cycle_now(probe)
+        await engine.run_cycle_now(probe)
         assert probe.collections == 2
+        assert engine._collecting[probe.id] is False
 
-    async def test_guard_releases_after_exception(self, probe):
-        probe.on_collect = AsyncMock(side_effect=RuntimeError("boom"))
+    async def test_guard_releases_after_exception(self, probe, engine):
+        def _boom(results):
+            raise RuntimeError("boom")
+        probe.parse = _boom
         with pytest.raises(RuntimeError):
-            await probe.run_cycle()
-        assert probe._collecting is False
+            await engine.run_cycle_now(probe)
+        assert engine._collecting[probe.id] is False

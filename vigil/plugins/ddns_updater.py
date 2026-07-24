@@ -1,13 +1,13 @@
-import asyncio
 import subprocess
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import dns.exception
 import dns.resolver
 import requests
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult, LocalActionPlan
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.time_utils import format_age
 
@@ -25,8 +25,8 @@ _DEFAULT_LAYOUT = [
 
 
 class DdnsUpdaterCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.domain = config.get('domain')
         self.record_type = str(config.get('record_type', 'A')).upper()
         self.resolver_addr = config.get('resolver', '8.8.8.8')
@@ -39,16 +39,16 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
         self._last_update_attempt = 0.0
         self._session = requests.Session()
 
-    def _resolve_update_url(self) -> Optional[str]:
+    def _resolve_update_url(self) -> Tuple[Optional[str], Optional[str]]:
+        """Returns (url, error_message)."""
         if self._update_url:
-            return self._update_url
+            return self._update_url, None
         if self._update_url_file:
             try:
                 with open(self._update_url_file) as fh:
-                    return fh.read().strip()
+                    return fh.read().strip(), None
             except OSError as e:
-                self.db_logger.write(f"Could not read update_url_file: {e}", level="ERROR")
-                return None
+                return None, f"Could not read update_url_file: {e}"
         if self._update_url_command:
             try:
                 result = subprocess.run(
@@ -56,15 +56,11 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
                     text=True, timeout=10,
                 )
                 if result.returncode != 0:
-                    self.db_logger.write(
-                        f"update_url_command failed: {result.stderr.strip()}", level="ERROR"
-                    )
-                    return None
-                return result.stdout.strip()
+                    return None, f"update_url_command failed: {result.stderr.strip()}"
+                return result.stdout.strip(), None
             except Exception as e:
-                self.db_logger.write(f"update_url_command failed: {e}", level="ERROR")
-                return None
-        return None
+                return None, f"update_url_command failed: {e}"
+        return None, None
 
     def _fetch_public_ip(self) -> Optional[str]:
         for url in _IP_ECHO_SERVICES:
@@ -88,28 +84,25 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
         except dns.exception.DNSException:
             return None
 
-    def _push_update(self, update_url: str) -> bool:
+    def _push_update(self, update_url: str) -> Tuple[bool, str]:
+        """Returns (ok, log_message)."""
         try:
             resp = self._session.get(update_url, timeout=self.timeout)
         except requests.RequestException as e:
-            self.db_logger.write(f"Update request failed: {e}", level="ERROR")
-            return False
+            return False, f"Update request failed: {e}"
 
         body = resp.text.strip()
         ok = resp.status_code == 200 and body.lower().startswith(('good', 'nochg'))
         if ok:
-            self.db_logger.write(f"Update accepted: {body}", level="INFO")
-        else:
-            self.db_logger.write(
-                f"Update rejected (HTTP {resp.status_code}): {body[:200]}", level="ERROR"
-            )
-        return ok
+            return True, f"Update accepted: {body}"
+        return False, f"Update rejected (HTTP {resp.status_code}): {body[:200]}"
 
     def _collect_sync(self) -> Dict[str, Any]:
         result: Dict[str, Any] = {
             'public_ip': self._fetch_public_ip(),
             'dns_ip': None,
             'updated': None,
+            'update_log': None,
         }
         if not self.domain:
             return result
@@ -123,84 +116,106 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
                 return result
             self._last_update_attempt = now
 
-            update_url = self._resolve_update_url()
+            update_url, url_error = self._resolve_update_url()
             if not update_url:
-                self.db_logger.write(
-                    "Drift detected but no update_url/update_url_file/"
-                    "update_url_command configured", level="ERROR"
-                )
                 result['updated'] = False
+                result['update_log'] = url_error or (
+                    "Drift detected but no update_url/update_url_file/"
+                    "update_url_command configured"
+                )
                 return result
 
-            result['updated'] = self._push_update(update_url)
+            ok, log_message = self._push_update(update_url)
+            result['updated'] = ok
+            result['update_log'] = log_message
 
         return result
 
-    async def on_collect(self):
-        if not self.domain:
-            self.db_logger.write("No 'domain' configured", level="ERROR")
-            self.set_status('failed')
-            return
+    def commands(self) -> List[Command]:
+        return []
 
-        r = await asyncio.to_thread(self._collect_sync)
-        public_ip, dns_ip, updated = r['public_ip'], r['dns_ip'], r['updated']
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        return CollectResult()
+
+    def local_call(self) -> Optional[Callable[[], Any]]:
+        if not self.domain:
+            return lambda: {'no_domain': True}
+        return self._collect_sync
+
+    def parse_local(self, result: Any) -> CollectResult:
+        if result.get('no_domain'):
+            return CollectResult.failed("No 'domain' configured")
+
+        public_ip, dns_ip, updated = result['public_ip'], result['dns_ip'], result['updated']
 
         if public_ip is None:
-            self.db_logger.write("Could not determine public IP (all IP services failed)", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed("Could not determine public IP (all IP services failed)")
 
-        self.db.set_setting(f"ddns:{self.id}:public_ip", public_ip)
+        settings = {f"ddns:{self.id}:public_ip": public_ip}
         if dns_ip:
-            self.db.set_setting(f"ddns:{self.id}:dns_ip", dns_ip)
+            settings[f"ddns:{self.id}:dns_ip"] = dns_ip
 
         in_sync = public_ip == dns_ip
-        self.db_metrics.metric('in_sync', 1.0 if in_sync else 0.0)
+        metrics = {'in_sync': 1.0 if in_sync else 0.0}
 
         if in_sync:
-            self.db_logger.write(f"{self.domain} -> {dns_ip} (in sync)", level="INFO")
-            self.set_status('online')
-            return
+            return CollectResult(
+                metrics=metrics, settings=settings,
+                logs=[(f"{self.domain} -> {dns_ip} (in sync)", "INFO")],
+                status='online',
+            )
 
         if updated is True:
-            self.db_metrics.metric('last_update_epoch', time.time())
-            self.db_logger.write(
-                f"{self.domain} was {dns_ip}, updated to {public_ip}", level="INFO"
+            metrics['last_update_epoch'] = time.time()
+            return CollectResult(
+                metrics=metrics, settings=settings,
+                logs=[(f"{self.domain} was {dns_ip}, updated to {public_ip}", "INFO")],
+                status='online',
             )
-            self.set_status('online')
-        elif updated is False:
-            self.db_logger.write(
-                f"{self.domain} is {dns_ip}, should be {public_ip}, update failed",
-                level="ERROR"
+        if updated is False:
+            return CollectResult(
+                metrics=metrics, settings=settings,
+                logs=[(f"{self.domain} is {dns_ip}, should be {public_ip}, update failed"
+                       + (f": {result['update_log']}" if result.get('update_log') else ""), "ERROR")],
+                status='failed',
             )
-            self.set_status('failed')
-        else:
-            self.db_logger.write(
+        return CollectResult(
+            metrics=metrics, settings=settings,
+            logs=[(
                 f"{self.domain} is {dns_ip}, should be {public_ip}, "
                 f"update throttled ({format_age(int(time.monotonic() - self._last_update_attempt))} since last attempt)",
-                level="WARNING"
-            )
-            self.set_status('warning')
+                "WARNING",
+            )],
+            status='warning',
+        )
 
     def get_actions(self) -> List[Dict[str, str]]:
         return [
             {'name': 'Force Update', 'action_id': 'force_update', 'variant': 'primary', 'icon': 'sync'},
         ]
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
+    def plan_action(self, action_id: str, **kwargs):
         if action_id != 'force_update':
-            return False
+            return None
 
-        update_url = self._resolve_update_url()
-        if not update_url:
-            self.db_logger.write("Force Update: no update_url configured", level="ERROR")
-            return False
+        def _do_force_update():
+            update_url, url_error = self._resolve_update_url()
+            if not update_url:
+                return {'ok': False, 'log': url_error or 'Force Update: no update_url configured'}
+            self._last_update_attempt = time.monotonic()
+            ok, log_message = self._push_update(update_url)
+            return {'ok': ok, 'log': log_message}
 
-        self._last_update_attempt = time.monotonic()
-        ok = await asyncio.to_thread(self._push_update, update_url)
-        if ok:
-            self.db_metrics.metric('last_update_epoch', time.time())
-        return ok
+        return LocalActionPlan(_do_force_update)
+
+    def interpret_local_action(self, action_id: str, result: Any, **kwargs):
+        if not result['ok']:
+            return CollectResult.failed(result['log'])
+        return CollectResult(
+            metrics={'last_update_epoch': time.time()},
+            logs=[(result['log'], "INFO")],
+            success=True,
+        )
 
 
 class DdnsUpdaterUIPlugin(UIPlugin):
@@ -210,10 +225,10 @@ class DdnsUpdaterUIPlugin(UIPlugin):
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=[])
+        page = self.ui.page(metric_names=[])
 
         with layout.cell('status_card'):
-            self.internal_modules['ui']['status_card'](
+            self.ui.status_card(
                 page,
                 metric_name='in_sync',
                 title='DDNS STATUS',
@@ -227,11 +242,11 @@ class DdnsUpdaterUIPlugin(UIPlugin):
         with layout.cell('lastupdate_card'):
             lastupdate_label = info_card('LAST UPDATE PUSHED', 'Never')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update():
-            public_ip = self.db.get_setting(f"ddns:{self.id}:public_ip")
-            dns_ip = self.db.get_setting(f"ddns:{self.id}:dns_ip")
+            public_ip = self.storage.get_setting(f"ddns:{self.id}:public_ip")
+            dns_ip = self.storage.get_setting(f"ddns:{self.id}:dns_ip")
             if public_ip:
                 public_ip_label.text = public_ip
             if dns_ip:
@@ -239,7 +254,7 @@ class DdnsUpdaterUIPlugin(UIPlugin):
                 dns_ip_label.text = dns_ip
                 dns_ip_label.style(f"color: {STATUS_COLORS['online' if in_sync else 'failed']}")
 
-            last_update = self.latest_metric('last_update_epoch')
+            last_update = self.storage.latest_metric('last_update_epoch')
             if last_update is not None:
                 age = int(time.time() - last_update.value)
                 lastupdate_label.text = format_age(age)

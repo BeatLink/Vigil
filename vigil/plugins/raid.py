@@ -1,7 +1,8 @@
 import re
-from typing import Dict, Any
+from typing import Any, Dict, List
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _ARRAY_RE = re.compile(r'^(md\d+)\s*:\s*(\S+)\s+(\S+)', re.MULTILINE)
@@ -16,19 +17,21 @@ _DEFAULT_LAYOUT = [
 
 
 class RaidCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output("cat /proc/mdstat 2>&1")
+    def commands(self) -> List[Command]:
+        return [Command("cat /proc/mdstat 2>&1")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         if ret != 0 and not stdout.strip():
-            self.db_logger.write(f"Failed to read /proc/mdstat: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to read /proc/mdstat: {stderr}")
 
         ok = degraded = 0
         recovering = False
+        logs = []
 
         for m in _ARRAY_RE.finditer(stdout):
             dev = m.group(1)
@@ -44,41 +47,37 @@ class RaidCollectorPlugin(CollectorPlugin):
                 down = flags.count('_')
                 if down > 0 or active < expected:
                     degraded += 1
-                    self.db_logger.write(
-                        f"{dev}: DEGRADED [{active}/{expected}] [{flags}]", level="ERROR"
-                    )
+                    logs.append((f"{dev}: DEGRADED [{active}/{expected}] [{flags}]", "ERROR"))
                     continue
 
             if recov:
                 recovering = True
-                self.db_logger.write(
-                    f"{dev}: {recov.group(1)} {recov.group(2)}% in progress", level="WARNING"
-                )
+                logs.append((f"{dev}: {recov.group(1)} {recov.group(2)}% in progress", "WARNING"))
                 ok += 1
                 continue
 
             ok += 1
-            self.db_logger.write(f"{dev}: clean", level="INFO")
+            logs.append((f"{dev}: clean", "INFO"))
 
         total = ok + degraded
         if total == 0:
-            self.db_logger.write("No RAID arrays found in /proc/mdstat", level="WARNING")
-            self.set_status('offline')
-            return
+            return CollectResult.failed(
+                "No RAID arrays found in /proc/mdstat", level="WARNING", status='offline')
 
-        self.db_metrics.metric('arrays_total', float(total))
-        self.db_metrics.metric('arrays_ok', float(ok))
-        self.db_metrics.metric('arrays_degraded', float(degraded))
+        metrics = {
+            'arrays_total': float(total),
+            'arrays_ok': float(ok),
+            'arrays_degraded': float(degraded),
+        }
 
         if degraded > 0:
-            self.set_status('failed')
+            status = 'failed'
         elif recovering:
-            self.set_status('warning')
+            status = 'warning'
         else:
-            self.set_status('online')
+            status = 'online'
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(metrics=metrics, logs=logs, status=status)
 
 
 class RaidUIPlugin(UIPlugin):

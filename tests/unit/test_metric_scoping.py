@@ -1,16 +1,18 @@
 import pytest
 from unittest.mock import AsyncMock
+from typing import List
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.core.data.database import db, Event, Metric
 
 
 class _Probe(CollectorPlugin):
-    async def on_collect(self):
-        pass
+    def commands(self) -> List[Command]:
+        return []
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        return CollectResult()
 
 
 @pytest.fixture
@@ -23,7 +25,7 @@ def colliding(make_plugin):
 class TestMetricScoping:
     def test_metrics_are_written_under_the_id(self, colliding, db_manager):
         a, _ = colliding
-        a.db_metrics.metric("last_backup_epoch", 111.0)
+        a.storage.apply(CollectResult(metrics={"last_backup_epoch": 111.0}))
         db_manager.flush()
         with db.connection_context():
             row = Metric.select().where(Metric.metric_name == "last_backup_epoch").first()
@@ -31,25 +33,25 @@ class TestMetricScoping:
 
     def test_each_monitor_reads_its_own_metric(self, colliding, db_manager):
         a, b = colliding
-        a.db_metrics.metric("last_backup_epoch", 111.0)
-        b.db_metrics.metric("last_backup_epoch", 222.0)
+        a.storage.apply(CollectResult(metrics={"last_backup_epoch": 111.0}))
+        b.storage.apply(CollectResult(metrics={"last_backup_epoch": 222.0}))
         db_manager.flush()
 
-        assert a.latest_metric("last_backup_epoch").value == 111.0
-        assert b.latest_metric("last_backup_epoch").value == 222.0
+        assert a.storage.latest_metric("last_backup_epoch").value == 111.0
+        assert b.storage.latest_metric("last_backup_epoch").value == 222.0
 
     def test_sibling_writes_do_not_leak(self, colliding, db_manager):
         a, b = colliding
-        b.db_metrics.metric("archive_count", 9.0)
+        b.storage.apply(CollectResult(metrics={"archive_count": 9.0}))
         db_manager.flush()
-        assert a.latest_metric("archive_count") is None
+        assert a.storage.latest_metric("archive_count") is None
 
 
 class TestLogLineScoping:
     def test_log_lines_are_written_under_the_id(self, colliding, db_manager):
         from vigil.core.data.database import LogLine
         a, _ = colliding
-        a.db_logger.log_line("boot ok", log_time="2026-01-01T00:00:00")
+        a.storage.apply(CollectResult(log_lines=[("boot ok", "INFO", "2026-01-01T00:00:00")]))
         db_manager.flush()
         with db.connection_context():
             row = LogLine.select().first()
@@ -59,8 +61,9 @@ class TestLogLineScoping:
         from vigil.core.data.database import LogLine
         a, b = colliding
         for p in (a, b):
-            p.db_logger.log_line("Started nixos-upgrade.service",
-                                 log_time="2026-01-01T00:00:00")
+            p.storage.apply(CollectResult(log_lines=[
+                ("Started nixos-upgrade.service", "INFO", "2026-01-01T00:00:00"),
+            ]))
         db_manager.flush()
         with db.connection_context():
             sources = {r.source for r in LogLine.select()}
@@ -142,7 +145,7 @@ class TestMigration:
 class TestEventScoping:
     def test_events_record_the_source_id(self, colliding, db_manager):
         a, _ = colliding
-        a.db_logger.write("hello")
+        a.storage.apply(CollectResult(logs=[("hello", "INFO")]))
         db_manager.flush()
         with db.connection_context():
             row = Event.select().where(Event.message.contains("hello")).first()
@@ -150,7 +153,7 @@ class TestEventScoping:
 
     def test_event_prefix_keeps_the_display_name(self, colliding, db_manager):
         a, _ = colliding
-        a.db_logger.write("hello")
+        a.storage.apply(CollectResult(logs=[("hello", "INFO")]))
         db_manager.flush()
         with db.connection_context():
             row = Event.select().where(Event.message.contains("hello")).first()
@@ -158,8 +161,8 @@ class TestEventScoping:
 
     def test_events_are_separable_by_id(self, colliding, db_manager):
         a, b = colliding
-        a.db_logger.write("from a")
-        b.db_logger.write("from b")
+        a.storage.apply(CollectResult(logs=[("from a", "INFO")]))
+        b.storage.apply(CollectResult(logs=[("from b", "INFO")]))
         db_manager.flush()
         with db.connection_context():
             got = [e.message for e in

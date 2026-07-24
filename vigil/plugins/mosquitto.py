@@ -1,8 +1,10 @@
 import shlex
+import time
 import uuid
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _TIMED_OUT = "VIGIL_MQTT_TIMEOUT"
@@ -60,8 +62,8 @@ _DEFAULT_LAYOUT = [
 
 
 class MosquittoCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.host = config.get('host', '127.0.0.1')
         self.port = int(config.get('port', 1883))
         self.username = config.get('username')
@@ -69,42 +71,41 @@ class MosquittoCollectorPlugin(CollectorPlugin):
         self.password_command = config.get('password_command')
         self.probe_topic = config.get('probe_topic', f'vigil/probe/{self.id}')
         self.probe_timeout = int(config.get('probe_timeout', 5))
+        self._started: Optional[float] = None
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
+        self._started = time.monotonic()
         script = _build_probe_script(
             self.host, self.port, self.probe_topic, self.probe_timeout,
             self.username, self.password_command, self.password,
         )
-        import time as _time
-        started = _time.monotonic()
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
-        elapsed_ms = (_time.monotonic() - started) * 1000.0
+        return [Command(script)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
+        elapsed_ms = (time.monotonic() - self._started) * 1000.0 if self._started is not None else 0.0
 
         if ret != 0:
             if _TIMED_OUT in stderr:
-                self.db_logger.write(
+                message = (
                     f"Publish/subscribe round trip on {self.probe_topic!r} timed out "
                     f"after {self.probe_timeout}s — broker accepted the connection but "
-                    "did not deliver the message", level="ERROR")
+                    "did not deliver the message"
+                )
             elif _MISMATCH in stderr:
-                self.db_logger.write(
+                message = (
                     f"Publish/subscribe round trip returned an unexpected payload: "
-                    f"{stderr.strip()}", level="ERROR")
+                    f"{stderr.strip()}"
+                )
             else:
-                self.db_logger.write(
-                    f"Failed to run MQTT round trip: {stderr.strip()}", level="ERROR")
-            self.db_metrics.metric('roundtrip_ok', 0.0)
-            self.set_status('failed')
-            return
+                message = f"Failed to run MQTT round trip: {stderr.strip()}"
+            return CollectResult(metrics={'roundtrip_ok': 0.0}, logs=[(message, "ERROR")], status='failed')
 
-        self.db_metrics.metric('roundtrip_ok', 1.0)
-        self.db_metrics.metric('roundtrip_ms', elapsed_ms)
-        self.db_logger.write(
-            f"Round trip OK on {self.probe_topic} ({elapsed_ms:.0f}ms)", level="INFO")
-        self.set_status('online')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(
+            metrics={'roundtrip_ok': 1.0, 'roundtrip_ms': elapsed_ms},
+            logs=[(f"Round trip OK on {self.probe_topic} ({elapsed_ms:.0f}ms)", "INFO")],
+            status='online',
+        )
 
 
 class MosquittoUIPlugin(UIPlugin):

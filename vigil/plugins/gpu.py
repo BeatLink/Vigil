@@ -1,6 +1,7 @@
-from typing import Dict, Any
+from typing import Any, Dict, List
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
@@ -18,8 +19,8 @@ _DEFAULT_LAYOUT = [
 
 
 class GpuCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.util_warning   = int(config.get('util_warning',   85))
         self.util_threshold = int(config.get('util_threshold', 95))
         self.mem_warning    = int(config.get('mem_warning',    85))
@@ -27,20 +28,21 @@ class GpuCollectorPlugin(CollectorPlugin):
         self.temp_warning   = int(config.get('temp_warning',   80))
         self.temp_threshold = int(config.get('temp_threshold', 90))
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(_COLLECT_CMD)
+    def commands(self) -> List[Command]:
+        return [Command(_COLLECT_CMD)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         combined = f"{stdout}\n{stderr}".lower()
         if ret != 0 and ('command not found' in combined or 'not found' in combined
                          or "couldn't communicate" in combined or 'no devices' in combined):
-            self.db_logger.write("nvidia-smi unavailable or no NVIDIA GPU present", level="WARNING")
-            self.set_status('offline')
-            return
+            return CollectResult.failed("nvidia-smi unavailable or no NVIDIA GPU present",
+                                        level="WARNING", status='offline')
         if ret != 0:
-            self.db_logger.write(f"Collection failed: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Collection failed: {stderr}")
 
+        metrics: Dict[str, float] = {}
         max_util = max_mem_pct = max_temp = 0.0
         count = 0
         for line in stdout.splitlines():
@@ -57,9 +59,9 @@ class GpuCollectorPlugin(CollectorPlugin):
                 continue
 
             mem_pct = (100.0 * mem_used / mem_total) if mem_total > 0 else 0.0
-            self.db_metrics.metric(f'gpu{idx}_util', util)
-            self.db_metrics.metric(f'gpu{idx}_mem_pct', mem_pct)
-            self.db_metrics.metric(f'gpu{idx}_temp', temp)
+            metrics[f'gpu{idx}_util'] = util
+            metrics[f'gpu{idx}_mem_pct'] = mem_pct
+            metrics[f'gpu{idx}_temp'] = temp
 
             max_util    = max(max_util, util)
             max_mem_pct = max(max_mem_pct, mem_pct)
@@ -67,13 +69,12 @@ class GpuCollectorPlugin(CollectorPlugin):
             count += 1
 
         if count == 0:
-            self.db_logger.write(f"No GPUs parsed from output: {stdout!r}", level="WARNING")
-            self.set_status('offline')
-            return
+            return CollectResult.failed(f"No GPUs parsed from output: {stdout!r}",
+                                        level="WARNING", status='offline')
 
-        self.db_metrics.metric('gpu_util', max_util)
-        self.db_metrics.metric('gpu_mem_pct', max_mem_pct)
-        self.db_metrics.metric('gpu_temp', max_temp)
+        metrics['gpu_util'] = max_util
+        metrics['gpu_mem_pct'] = max_mem_pct
+        metrics['gpu_temp'] = max_temp
 
         levels = [
             _level_for(max_util,    self.util_warning, self.util_threshold),
@@ -84,14 +85,14 @@ class GpuCollectorPlugin(CollectorPlugin):
         overall = max(levels, key=lambda l: severity[l])
 
         log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
-        self.db_logger.write(
-            f"{count} GPU(s): peak {max_util:.0f}% util, {max_mem_pct:.0f}% VRAM, {max_temp:.0f}°C",
-            level=log_level
+        return CollectResult(
+            metrics=metrics,
+            logs=[(
+                f"{count} GPU(s): peak {max_util:.0f}% util, {max_mem_pct:.0f}% VRAM, {max_temp:.0f}°C",
+                log_level,
+            )],
+            status=overall,
         )
-        self.set_status(overall)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class GpuUIPlugin(UIPlugin):
@@ -107,7 +108,7 @@ class GpuUIPlugin(UIPlugin):
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
         )
-        page = self.page(metric_names=['gpu_util', 'gpu_mem_pct', 'gpu_temp'])
+        page = self.ui.page(metric_names=['gpu_util', 'gpu_mem_pct', 'gpu_temp'])
 
         util_warning   = int(self.config.get('util_warning',   85))
         util_threshold = int(self.config.get('util_threshold', 95))
@@ -120,7 +121,7 @@ class GpuUIPlugin(UIPlugin):
         _temp_or_dash = FORMATTERS['temp_c0']
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('util_card'):
             util_label = info_card('GPU', '-- %').bind_text_from(
                 page.model, ('metrics', 'gpu_util'), backward=_pct_or_dash)
@@ -137,7 +138,7 @@ class GpuUIPlugin(UIPlugin):
         with layout.cell('chart'):
             history_chart(page, 'GPU UTILIZATION (%)', self.id, 'gpu_util')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update():
             util = page.model.metrics.get('gpu_util')

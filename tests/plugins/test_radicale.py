@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.radicale import RadicaleCollectorPlugin, _SEP, _build_probe_script, _parse_response
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -20,9 +21,8 @@ def plugin(make_plugin):
     return make_plugin(RadicaleCollectorPlugin, BASE_CFG)
 
 
-def _respond(plugin, status=207, body="<multistatus/>"):
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(0, f"{body}\n{_SEP}{status}", ""))
+def _respond(plugin, run_cycle, status=207, body="<multistatus/>"):
+    return run_cycle(plugin, lambda c: CmdResult(0, f"{body}\n{_SEP}{status}", ""))
 
 
 def _latest_status(plugin_id: str = "test-radicale") -> str | None:
@@ -64,32 +64,27 @@ class TestParseResponse:
 
 
 class TestRadicaleCollection:
-    async def test_207_sets_online(self, plugin):
-        _respond(plugin, status=207)
-        await plugin.on_collect()
+    async def test_207_sets_online(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, status=207)
         assert _latest_status() == "online"
 
-    async def test_401_sets_failed(self, plugin):
-        _respond(plugin, status=401)
-        await plugin.on_collect()
+    async def test_401_sets_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, status=401)
         assert _latest_status() == "failed"
 
-    async def test_500_sets_failed(self, plugin):
-        _respond(plugin, status=500)
-        await plugin.on_collect()
+    async def test_500_sets_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, status=500)
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_ok_records_metric(self, plugin):
-        _respond(plugin, status=207)
-        await plugin.on_collect()
+    async def test_ok_records_metric(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, status=207)
         assert _latest_metric("propfind_ok") == 1.0
 
 
 class TestRadicaleActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

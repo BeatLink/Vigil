@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.diskio import DiskIoCollectorPlugin, _parse_diskstats, _is_physical, _auto_detect_device, _format_rate
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -99,43 +100,37 @@ class TestFormatRate:
 
 
 class TestDiskIoCollection:
-    async def test_normal_online(self, plugin):
+    async def test_normal_online(self, plugin, run_cycle):
         stdout = _two_snaps({"sda": (0, 0)}, {"sda": (2, 4)})
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "online"
         assert _latest_metric("test-diskio", "read_kbps") == pytest.approx(1.0)
         assert _latest_metric("test-diskio", "write_kbps") == pytest.approx(2.0)
 
-    async def test_counter_reset_clamped(self, plugin):
+    async def test_counter_reset_clamped(self, plugin, run_cycle):
         stdout = _two_snaps({"sda": (5000, 5000)}, {"sda": (10, 10)})
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_metric("test-diskio", "read_kbps") == pytest.approx(0.0)
 
-    async def test_auto_detects_device(self, plugin):
+    async def test_auto_detects_device(self, plugin, run_cycle):
         stdout = _two_snaps({"sda": (0, 0), "sdb": (0, 0)}, {"sda": (2, 0), "sdb": (1000, 0)})
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
-        assert plugin._active_device == "sdb"
+        result = run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
+        assert result.settings[f"diskio:{plugin.id}:active_device"] == "sdb"
 
-    async def test_explicit_device_missing_fails(self, explicit_plugin):
+    async def test_explicit_device_missing_fails(self, explicit_plugin, run_cycle):
         stdout = _two_snaps({"sdb": (0, 0)}, {"sdb": (2, 0)})
-        explicit_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await explicit_plugin.on_collect()
+        run_cycle(explicit_plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status("test-diskio-x") == "failed"
 
-    async def test_malformed_fails(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "no separator here", ""))
-        await plugin.on_collect()
+    async def test_malformed_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "no separator here", ""))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_fails(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(-1, "", "err"))
-        await plugin.on_collect()
+    async def test_ssh_failure_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "err"))
         assert _latest_status() == "failed"
 
 
 class TestDiskIoActions:
     async def test_on_action_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

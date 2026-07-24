@@ -1,6 +1,7 @@
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, List, Tuple
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
@@ -40,45 +41,40 @@ _DEFAULT_LAYOUT = [
 
 
 class CpuUsageCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.cpu_warning   = int(config.get('cpu_warning',   70))
         self.cpu_threshold = int(config.get('cpu_threshold', 85))
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(_COLLECT_CMD)
+    def commands(self) -> List[Command]:
+        return [Command(_COLLECT_CMD)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Collection failed: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Collection failed: {stderr}")
 
         lines = stdout.splitlines()
         cpu_lines = [l for l in lines if l.startswith('cpu ')]
 
         if len(cpu_lines) < 2:
-            self.db_logger.write(f"Incomplete output: {stdout!r}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Incomplete output: {stdout!r}")
 
         try:
             cpu_pct = _cpu_pct(cpu_lines[0], cpu_lines[1])
         except (ValueError, IndexError) as e:
-            self.db_logger.write(f"Failed to parse output: {e}", level="ERROR")
-            self.set_status('failed')
-            return
-
-        self.db_metrics.metric('cpu_pct', cpu_pct)
+            return CollectResult.failed(f"Failed to parse output: {e}")
 
         overall = _level_for(cpu_pct, self.cpu_warning, self.cpu_threshold)
         log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
-        self.db_logger.write(
-            f"CPU {cpu_pct:.1f}% (warn {self.cpu_warning}% / fail {self.cpu_threshold}%)",
-            level=log_level
+        return CollectResult(
+            metrics={'cpu_pct': cpu_pct},
+            logs=[(
+                f"CPU {cpu_pct:.1f}% (warn {self.cpu_warning}% / fail {self.cpu_threshold}%)",
+                log_level,
+            )],
+            status=overall,
         )
-        self.set_status(overall)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class CpuUsageUIPlugin(UIPlugin):

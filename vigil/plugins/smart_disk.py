@@ -1,6 +1,7 @@
-from typing import Dict, Any
+from typing import Any, Dict, List
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _SMART_SCRIPT = (
@@ -27,18 +28,20 @@ _DEFAULT_LAYOUT = [
 
 
 class SmartDiskCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(_SMART_SCRIPT)
+    def commands(self) -> List[Command]:
+        return [Command(_SMART_SCRIPT)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         if ret != 0:
-            self.db_logger.write(f"SMART check script failed: {stdout or stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"SMART check script failed: {stdout or stderr}")
 
         passed, failed = 0, 0
+        logs = []
         for line in stdout.splitlines():
             parts = line.strip().split(None, 1)
             if len(parts) != 2 or parts[0] not in ('PASS', 'FAIL'):
@@ -46,24 +49,21 @@ class SmartDiskCollectorPlugin(CollectorPlugin):
             result, disk = parts
             if result == 'FAIL':
                 failed += 1
-                self.db_logger.write(f"SMART failure detected on {disk}", level="ERROR")
+                logs.append((f"SMART failure detected on {disk}", "ERROR"))
             else:
                 passed += 1
-                self.db_logger.write(f"SMART OK on {disk}", level="INFO")
+                logs.append((f"SMART OK on {disk}", "INFO"))
 
         total = passed + failed
         if total == 0:
-            self.db_logger.write("No physical disks found", level="WARNING")
-            self.set_status('offline')
-            return
+            return CollectResult.failed(
+                "No physical disks found", level="WARNING", status='offline')
 
-        self.db_metrics.metric("disks_total", total)
-        self.db_metrics.metric("disks_ok", passed)
-        self.db_metrics.metric("disks_failed", failed)
-        self.set_status('failed' if failed > 0 else 'online')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(
+            metrics={"disks_total": total, "disks_ok": passed, "disks_failed": failed},
+            logs=logs,
+            status='failed' if failed > 0 else 'online',
+        )
 
 
 class SmartDiskUIPlugin(UIPlugin):

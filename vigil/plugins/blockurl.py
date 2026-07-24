@@ -1,8 +1,9 @@
 import json
 import shlex
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 
@@ -39,8 +40,8 @@ _DEFAULT_LAYOUT = [
 
 
 class BlockurlCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:9001')
         self.api_key = config.get('api_key')
         self.api_key_command = config.get(
@@ -48,43 +49,43 @@ class BlockurlCollectorPlugin(CollectorPlugin):
         self.min_domains = int(config.get('min_domains', 1))
         self.api_timeout = int(config.get('api_timeout', 10))
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         script = _build_fetch_script(
             self.api_url, self.api_timeout, self.api_key_command, self.api_key)
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
+        return [Command(script)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to query BlockURL API: {stderr.strip()}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to query BlockURL API: {stderr.strip()}")
 
         try:
             data = _parse_response(stdout)
         except ValueError as e:
-            self.db_logger.write(str(e), level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(str(e))
 
         domain_count = len(data)
         url_total = sum(int(entry[1]) for entry in data
                          if isinstance(entry, list) and len(entry) == 2)
 
-        self.db_metrics.metric('domains_total', float(domain_count))
-        self.db_metrics.metric('urls_total', float(url_total))
+        metrics = {'domains_total': float(domain_count), 'urls_total': float(url_total)}
 
         if domain_count < self.min_domains:
-            self.db_logger.write(
-                f"Only {domain_count} domain(s) in the blocklist "
-                f"(< {self.min_domains}) — database may be empty or wiped",
-                level="WARNING")
-            self.set_status('warning')
-            return
+            return CollectResult(
+                metrics=metrics,
+                logs=[(
+                    f"Only {domain_count} domain(s) in the blocklist "
+                    f"(< {self.min_domains}) — database may be empty or wiped",
+                    "WARNING",
+                )],
+                status='warning',
+            )
 
-        self.db_logger.write(
-            f"{domain_count} domain(s), {url_total} blocked URL(s)", level="INFO")
-        self.set_status('online')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(
+            metrics=metrics,
+            logs=[(f"{domain_count} domain(s), {url_total} blocked URL(s)", "INFO")],
+            status='online',
+        )
 
 
 class BlockurlUIPlugin(UIPlugin):

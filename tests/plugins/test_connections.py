@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.connections import ConnectionsCollectorPlugin, _parse_states
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -67,42 +67,37 @@ class TestParseStates:
 
 
 class TestConnectionsCollection:
-    async def test_normal_online(self, plugin):
+    async def test_normal_online(self, plugin, run_cycle):
         stdout = _make_tcp(["01", "0A", "06"])
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "online"
         assert _latest_metric("test-conn", "total") == pytest.approx(3.0)
         assert _latest_metric("test-conn", "established") == pytest.approx(1.0)
         assert _latest_metric("test-conn", "listen") == pytest.approx(1.0)
         assert _latest_metric("test-conn", "time_wait") == pytest.approx(1.0)
 
-    async def test_warning_on_high_total(self, make_plugin):
+    async def test_warning_on_high_total(self, make_plugin, run_cycle):
         p = make_plugin(ConnectionsCollectorPlugin, {**BASE_CFG, "total_warning": 2, "total_threshold": 10})
         stdout = _make_tcp(["01", "01", "01"])
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "warning"
 
-    async def test_failed_on_flood(self, make_plugin):
+    async def test_failed_on_flood(self, make_plugin, run_cycle):
         p = make_plugin(ConnectionsCollectorPlugin, {**BASE_CFG, "total_warning": 2, "total_threshold": 3})
         stdout = _make_tcp(["01", "01", "01", "01"])
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "failed"
 
-    async def test_zero_connections_records_zero(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, TCP_HEADER, ""))
-        await plugin.on_collect()
+    async def test_zero_connections_records_zero(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, TCP_HEADER, ""))
         assert _latest_metric("test-conn", "total") == pytest.approx(0.0)
         assert _latest_status() == "online"
 
-    async def test_ssh_failure_fails(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(-1, "", "err"))
-        await plugin.on_collect()
+    async def test_ssh_failure_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "err"))
         assert _latest_status() == "failed"
 
 
 class TestConnectionsActions:
     async def test_on_action_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

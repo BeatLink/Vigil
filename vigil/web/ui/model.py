@@ -92,7 +92,7 @@ class PluginPage:
         if self._metric_names:
             metrics = dict(self.model.metrics)
             for name in self._metric_names:
-                m = self.plugin.latest_metric(name)
+                m = self.plugin.storage.latest_metric(name)
                 metrics[name] = m.value if m is not None else None
             self.model.metrics = metrics
 
@@ -101,7 +101,7 @@ class PluginPage:
             return
         names = list(self._metric_names)
         values = await offload(
-            lambda: [self.plugin.latest_metric(n) for n in names]
+            lambda: [self.plugin.storage.latest_metric(n) for n in names]
         )()
         metrics = dict(self.model.metrics)
         for name, m in zip(names, values):

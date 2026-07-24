@@ -1,6 +1,7 @@
-from typing import Dict, Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _VIRTUAL_PREFIXES = ('lo', 'veth', 'docker', 'virbr', 'br-', 'tun', 'tap')
@@ -47,39 +48,32 @@ _DEFAULT_LAYOUT = [
 
 
 class NetworkUsageCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.interface: Optional[str] = config.get('interface')
         self._active_interface: Optional[str] = self.interface
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(
-            "cat /proc/net/dev && sleep 1 && cat /proc/net/dev"
-        )
+    def commands(self) -> List[Command]:
+        return [Command("cat /proc/net/dev && sleep 1 && cat /proc/net/dev")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to read /proc/net/dev: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to read /proc/net/dev: {stderr}")
 
         halves = stdout.split('Inter-|')
         if len(halves) < 3:
-            self.db_logger.write("Unexpected /proc/net/dev output format", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed("Unexpected /proc/net/dev output format")
 
         sample1 = _parse_net_dev(halves[1])
         sample2 = _parse_net_dev(halves[2])
 
         iface = self.interface or _auto_detect_interface(sample1)
         if not iface:
-            self.db_logger.write("No usable network interface found", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed("No usable network interface found")
 
         if iface not in sample1 or iface not in sample2:
-            self.db_logger.write(f"Interface '{iface}' not found in /proc/net/dev", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Interface '{iface}' not found in /proc/net/dev")
 
         rx1, tx1 = sample1[iface]
         rx2, tx2 = sample2[iface]
@@ -88,16 +82,14 @@ class NetworkUsageCollectorPlugin(CollectorPlugin):
         tx_kbps = max(0.0, (tx2 - tx1) / 1024)
 
         self._active_interface = iface
-        self.db_metrics.metric('rx_kbps', rx_kbps)
-        self.db_metrics.metric('tx_kbps', tx_kbps)
-        self.db_logger.write(
-            f"Interface {iface}: RX {_format_rate(rx_kbps)}, TX {_format_rate(tx_kbps)}",
-            level="INFO"
+        return CollectResult(
+            metrics={'rx_kbps': rx_kbps, 'tx_kbps': tx_kbps},
+            logs=[(
+                f"Interface {iface}: RX {_format_rate(rx_kbps)}, TX {_format_rate(tx_kbps)}",
+                "INFO",
+            )],
+            status='online',
         )
-        self.set_status('online')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class NetworkUsageUIPlugin(UIPlugin):
@@ -109,13 +101,13 @@ class NetworkUsageUIPlugin(UIPlugin):
         from vigil.web.ui.spec import FORMATTERS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['rx_kbps', 'tx_kbps'])
+        page = self.ui.page(metric_names=['rx_kbps', 'tx_kbps'])
 
         configured_interface = self.config.get('interface')
         _rate_or_dash = FORMATTERS['kbps_rate']
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('iface_card'):
             info_card('INTERFACE', configured_interface or 'Detecting...')
         with layout.cell('rx_card'):
@@ -129,6 +121,6 @@ class NetworkUsageUIPlugin(UIPlugin):
         with layout.cell('tx_chart'):
             history_chart(page, 'UPLOAD HISTORY (KB/s)', self.id, 'tx_kbps')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         page.start()

@@ -1,7 +1,8 @@
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.time_utils import format_age, format_duration
 
@@ -14,36 +15,38 @@ _VALID_PUSH_STATUSES = {'up', 'down'}
 
 
 class PushCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.max_age = int(config.get('max_age', self.interval * 2))
         self.token = config.get('token')
         self.target = config.get('target_host', self.name)
 
+    def commands(self) -> List[Command]:
+        # Purely push-driven: nothing to poll over SSH each cycle. The cycle
+        # still runs (via parse([])) so we can evaluate heartbeat staleness.
+        return []
 
-    async def on_collect(self):
-        last = self.latest_metric('last_push_epoch')
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        last = self.storage.latest_metric('last_push_epoch')
 
         if last is None:
-            self.db_logger.write("No heartbeat received yet", level="WARNING")
-            self.set_status('failed')
-            return
+            return CollectResult(logs=[("No heartbeat received yet", "WARNING")], status='failed')
 
         age = time.time() - last.value
         if age > self.max_age:
-            self.db_logger.write(
-                f"No heartbeat for {format_age(int(age))}, exceeds max_age of "
-                f"{format_duration(self.max_age)}",
-                level="ERROR"
+            return CollectResult(
+                logs=[(
+                    f"No heartbeat for {format_age(int(age))}, exceeds max_age of "
+                    f"{format_duration(self.max_age)}",
+                    "ERROR",
+                )],
+                status='failed',
             )
-            self.set_status('failed')
-            return
 
-        last_reported = self.latest_metric('reported_up')
+        last_reported = self.storage.latest_metric('reported_up')
         if last_reported is not None and last_reported.value == 0.0:
-            self.set_status('failed')
-        else:
-            self.set_status('online')
+            return CollectResult(status='failed')
+        return CollectResult(status='online')
 
     def record_push(self, status: str = 'up', msg: Optional[str] = None,
                     value: Optional[float] = None) -> bool:
@@ -52,19 +55,19 @@ class PushCollectorPlugin(CollectorPlugin):
 
         now = time.time()
         is_up = status == 'up'
-        self.db_metrics.metric('last_push_epoch', now)
-        self.db_metrics.metric('reported_up', 1.0 if is_up else 0.0)
+        metrics = {'last_push_epoch': now, 'reported_up': 1.0 if is_up else 0.0}
         if value is not None:
-            self.db_metrics.metric('value', float(value))
+            metrics['value'] = float(value)
 
         log_level = "INFO" if is_up else "ERROR"
         detail = f": {msg}" if msg else ""
-        self.db_logger.write(f"Heartbeat received (status={status}){detail}", level=log_level)
-        self.set_status('online' if is_up else 'failed')
+        result = CollectResult(
+            metrics=metrics,
+            logs=[(f"Heartbeat received (status={status}){detail}", log_level)],
+            status='online' if is_up else 'failed',
+        )
+        self.storage.apply(result)
         return True
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class PushUIPlugin(UIPlugin):
@@ -76,10 +79,10 @@ class PushUIPlugin(UIPlugin):
 
         max_age = int(self.config.get('max_age', self.interval * 2))
 
-        page = self.page()
+        page = self.ui.page()
 
         with layout.cell('status_card'):
-            self.internal_modules['ui']['status_card'](
+            self.ui.status_card(
                 page,
                 metric_name='reported_up',
                 title='LAST REPORTED STATUS',
@@ -91,10 +94,10 @@ class PushUIPlugin(UIPlugin):
         with layout.cell('maxage_card'):
             info_card('MAX AGE', format_duration(max_age))
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update():
-            last = self.latest_metric('last_push_epoch')
+            last = self.storage.latest_metric('last_push_epoch')
             if last is not None:
                 age = int(time.time() - last.value)
                 lastbeat_label.text = format_age(age)

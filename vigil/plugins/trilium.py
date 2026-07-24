@@ -2,9 +2,10 @@ import json
 import shlex
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 
@@ -64,29 +65,28 @@ _DEFAULT_LAYOUT = [
 
 
 class TriliumCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8080')
         self.token = config.get('token')
         self.token_command = config.get('token_command')
         self.stale_warning = float(config.get('stale_warning', 72))
         self.api_timeout = int(config.get('api_timeout', 10))
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         script = _build_fetch_script(
             self.api_url, self.api_timeout, self.token_command, self.token)
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
+        return [Command(script)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to query Trilium ETAPI: {stderr.strip()}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to query Trilium ETAPI: {stderr.strip()}")
 
         try:
             data = _parse_response(stdout)
         except ValueError as e:
-            self.db_logger.write(str(e), level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(str(e))
 
         stats = data.get('statistics', {})
         db = data.get('database', {})
@@ -95,16 +95,16 @@ class TriliumCollectorPlugin(CollectorPlugin):
         total_notes = float(db.get('totalNotes', 0) or 0)
         active_notes = float(db.get('activeNotes', 0) or 0)
 
-        self.db_metrics.metric('notes_total', total_notes)
-        self.db_metrics.metric('notes_active', active_notes)
+        metrics = {'notes_total': total_notes, 'notes_active': active_notes}
         if last_modified_age is not None:
-            self.db_metrics.metric('last_modified_age_hours', last_modified_age)
+            metrics['last_modified_age_hours'] = last_modified_age
 
         if last_modified_age is None:
-            self.db_logger.write(
-                "No 'lastModified' timestamp in ETAPI response", level="WARNING")
-            self.set_status('warning')
-            return
+            return CollectResult(
+                metrics=metrics,
+                logs=[("No 'lastModified' timestamp in ETAPI response", "WARNING")],
+                status='warning',
+            )
 
         if last_modified_age >= self.stale_warning:
             level = 'warning'
@@ -121,11 +121,7 @@ class TriliumCollectorPlugin(CollectorPlugin):
             )
 
         log_level = "WARNING" if level == 'warning' else "INFO"
-        self.db_logger.write(message, level=log_level)
-        self.set_status(level)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(metrics=metrics, logs=[(message, log_level)], status=level)
 
 
 class TriliumUIPlugin(UIPlugin):

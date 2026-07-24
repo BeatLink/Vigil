@@ -47,104 +47,104 @@ def _fake_answer(record_type: str, *values: str, ttl: int = 300):
 
 
 class TestDnsRecordCollection:
-    async def test_successful_a_resolution_sets_online(self, make_plugin):
+    async def test_successful_a_resolution_sets_online(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg())
         answer = _fake_answer('A', '93.184.216.34')
-        with patch.object(p, '_query', return_value=answer):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('ok', answer)):
+            run_local_cycle(p)
         assert _latest_status("test-dns") == "online"
         assert _latest_metric("test-dns", "resolved") == pytest.approx(1.0)
 
-    async def test_records_ttl(self, make_plugin):
+    async def test_records_ttl(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg())
         answer = _fake_answer('A', '93.184.216.34', ttl=600)
-        with patch.object(p, '_query', return_value=answer):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('ok', answer)):
+            run_local_cycle(p)
         assert _latest_metric("test-dns", "ttl") == pytest.approx(600.0)
 
-    async def test_nxdomain_sets_failed(self, make_plugin):
+    async def test_nxdomain_sets_failed(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg())
-        with patch.object(p, '_query', side_effect=dns.resolver.NXDOMAIN()):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('nxdomain', None)):
+            run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
         assert _latest_metric("test-dns", "resolved") == pytest.approx(0.0)
 
-    async def test_no_answer_sets_failed(self, make_plugin):
+    async def test_no_answer_sets_failed(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg(record_type="MX"))
-        with patch.object(p, '_query', side_effect=dns.resolver.NoAnswer()):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('no_answer', None)):
+            run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
 
-    async def test_timeout_sets_failed(self, make_plugin):
+    async def test_timeout_sets_failed(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg())
-        with patch.object(p, '_query', side_effect=dns.exception.Timeout()):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('timeout', None)):
+            run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
 
-    async def test_generic_dns_exception_sets_failed(self, make_plugin):
+    async def test_generic_dns_exception_sets_failed(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg())
-        with patch.object(p, '_query', side_effect=dns.exception.DNSException("bad")):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('dns_error', 'bad')):
+            run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
 
-    async def test_missing_domain_sets_failed(self, make_plugin):
+    async def test_missing_domain_sets_failed(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg(domain=None))
-        await p.on_collect()
+        run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
 
 
 class TestExpectedValues:
-    async def test_matching_expected_value_sets_online(self, make_plugin):
+    async def test_matching_expected_value_sets_online(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg(expected=["93.184.216.34"]))
         answer = _fake_answer('A', '93.184.216.34')
-        with patch.object(p, '_query', return_value=answer):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('ok', answer)):
+            run_local_cycle(p)
         assert _latest_status("test-dns") == "online"
         assert _latest_metric("test-dns", "matches_expected") == pytest.approx(1.0)
 
-    async def test_unexpected_value_sets_failed(self, make_plugin):
+    async def test_unexpected_value_sets_failed(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg(expected=["1.2.3.4"]))
         answer = _fake_answer('A', '93.184.216.34')
-        with patch.object(p, '_query', return_value=answer):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('ok', answer)):
+            run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
         assert _latest_metric("test-dns", "matches_expected") == pytest.approx(0.0)
 
-    async def test_no_expected_skips_matching(self, make_plugin):
+    async def test_no_expected_skips_matching(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg())
         answer = _fake_answer('A', '93.184.216.34')
-        with patch.object(p, '_query', return_value=answer):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('ok', answer)):
+            run_local_cycle(p)
         assert _latest_metric("test-dns", "matches_expected") is None
 
 
 class TestRecordTypeFormatting:
-    async def test_mx_record_formatting(self, make_plugin):
+    async def test_mx_record_formatting(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg(record_type="MX", expected=["10 mail.example.com"]))
         answer = _fake_answer('MX', '10 mail.example.com.')
-        with patch.object(p, '_query', return_value=answer):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('ok', answer)):
+            run_local_cycle(p)
         assert _latest_status("test-dns") == "online"
 
-    async def test_txt_record_formatting(self, make_plugin):
+    async def test_txt_record_formatting(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg(record_type="TXT", expected=["v=spf1 -all"]))
         answer = _fake_answer('TXT', '"v=spf1 -all"')
-        with patch.object(p, '_query', return_value=answer):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('ok', answer)):
+            run_local_cycle(p)
         assert _latest_status("test-dns") == "online"
 
-    async def test_cname_record_strips_trailing_dot(self, make_plugin):
+    async def test_cname_record_strips_trailing_dot(self, make_plugin, run_local_cycle):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg(record_type="CNAME", expected=["target.example.net"]))
         answer = _fake_answer('CNAME', 'target.example.net.')
-        with patch.object(p, '_query', return_value=answer):
-            await p.on_collect()
+        with patch.object(p, '_query', return_value=('ok', answer)):
+            run_local_cycle(p)
         assert _latest_status("test-dns") == "online"
 
 
 class TestDnsRecordActions:
     async def test_on_action_always_returns_false(self, make_plugin):
         p = make_plugin(DnsRecordCollectorPlugin, _cfg())
-        assert await p.on_action("anything") is False
+        assert p.plan_action("anything") is None
 
 
 class TestResolverConfig:

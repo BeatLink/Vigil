@@ -1,9 +1,9 @@
 import json
-from unittest.mock import AsyncMock
 
 import pytest
 
 from vigil.plugins.blockurl import BlockurlCollectorPlugin, _parse_response
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -23,9 +23,8 @@ def plugin(make_plugin):
     return make_plugin(BlockurlCollectorPlugin, BASE_CFG)
 
 
-def _respond(plugin, domains=None):
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(0, json.dumps(domains if domains is not None else _DOMAINS), ""))
+def _result(domains=None):
+    return CmdResult(0, json.dumps(domains if domains is not None else _DOMAINS), "")
 
 
 def _latest_status(plugin_id: str = "test-blockurl") -> str | None:
@@ -59,32 +58,27 @@ class TestParseResponse:
 
 
 class TestBlockurlCollection:
-    async def test_populated_list_sets_online(self, plugin):
-        _respond(plugin)
-        await plugin.on_collect()
+    async def test_populated_list_sets_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result())
         assert _latest_status() == "online"
 
-    async def test_empty_list_sets_warning(self, plugin):
-        _respond(plugin, domains=[])
-        await plugin.on_collect()
+    async def test_empty_list_sets_warning(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(domains=[]))
         assert _latest_status() == "warning"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_records_url_total(self, plugin):
-        _respond(plugin)
-        await plugin.on_collect()
+    async def test_records_url_total(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result())
         assert _latest_metric("urls_total") == 8.0
 
-    async def test_records_domain_total(self, plugin):
-        _respond(plugin)
-        await plugin.on_collect()
+    async def test_records_domain_total(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result())
         assert _latest_metric("domains_total") == 2.0
 
 
 class TestBlockurlActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.interrupts import InterruptsCollectorPlugin, _extract_counter
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -58,51 +58,44 @@ class TestExtractCounter:
 
 
 class TestInterruptsCollection:
-    async def test_normal_online(self, plugin):
+    async def test_normal_online(self, plugin, run_cycle):
         stdout = _two_snaps(_make_stat(1000, 500), _make_stat(6000, 2500))
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "online"
         assert _latest_metric("test-irq", "irq_per_sec") == pytest.approx(5000.0)
         assert _latest_metric("test-irq", "ctxt_per_sec") == pytest.approx(2000.0)
 
-    async def test_warning_threshold(self, make_plugin):
+    async def test_warning_threshold(self, make_plugin, run_cycle):
         p = make_plugin(InterruptsCollectorPlugin, {**BASE_CFG, "irq_warning": 100, "irq_threshold": 10000})
         stdout = _two_snaps(_make_stat(0, 0), _make_stat(500, 0))
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "warning"
 
-    async def test_failed_threshold(self, make_plugin):
+    async def test_failed_threshold(self, make_plugin, run_cycle):
         p = make_plugin(InterruptsCollectorPlugin, {**BASE_CFG, "irq_warning": 100, "irq_threshold": 1000})
         stdout = _two_snaps(_make_stat(0, 0), _make_stat(5000, 0))
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "failed"
 
-    async def test_counter_reset_clamped(self, plugin):
+    async def test_counter_reset_clamped(self, plugin, run_cycle):
         stdout = _two_snaps(_make_stat(9000, 9000), _make_stat(10, 10))
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_metric("test-irq", "irq_per_sec") == pytest.approx(0.0)
 
-    async def test_malformed_fails(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "no separator", ""))
-        await plugin.on_collect()
+    async def test_malformed_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "no separator", ""))
         assert _latest_status() == "failed"
 
-    async def test_missing_intr_fails(self, plugin):
+    async def test_missing_intr_fails(self, plugin, run_cycle):
         stdout = _two_snaps("cpu 1 2 3\n", "cpu 1 2 3\n")
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_fails(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(-1, "", "err"))
-        await plugin.on_collect()
+    async def test_ssh_failure_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "err"))
         assert _latest_status() == "failed"
 
 
 class TestInterruptsActions:
-    async def test_on_action_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+    async def test_on_action_returns_none(self, plugin):
+        assert plugin.plan_action("anything") is None

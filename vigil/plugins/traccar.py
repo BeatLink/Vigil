@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _AUTH_FAILED = "VIGIL_AUTH_FAILED"
@@ -59,8 +60,8 @@ _DEFAULT_LAYOUT = [
 
 
 class TraccarCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8082')
         self.username = config.get('username')
         self.password = config.get('password')
@@ -70,47 +71,44 @@ class TraccarCollectorPlugin(CollectorPlugin):
         self.devices: Optional[List[str]] = config.get('devices') or None
         self.api_timeout = int(config.get('api_timeout', 10))
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         if not self.username:
-            self.db_logger.write(
-                "No username configured — set username/password_command "
-                "for the dedicated Traccar vigil account", level="ERROR")
-            self.set_status('failed')
-            return
-
+            return []
         script = _build_fetch_script(
             self.api_url, self.api_timeout, self.username,
             self.password_command, self.password,
         )
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
+        return [Command(script)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        if not self.username:
+            return CollectResult.failed(
+                "No username configured — set username/password_command "
+                "for the dedicated Traccar vigil account")
+
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
             if _AUTH_FAILED in stderr:
-                self.db_logger.write(
+                return CollectResult.failed(
                     "Traccar rejected the configured credentials "
-                    "(check username / password_command)", level="ERROR")
-            else:
-                self.db_logger.write(
-                    f"Failed to query Traccar API: {stderr.strip()}", level="ERROR")
-            self.set_status('failed')
-            return
+                    "(check username / password_command)")
+            return CollectResult.failed(f"Failed to query Traccar API: {stderr.strip()}")
 
         try:
             devices = _parse_response(stdout)
         except ValueError as e:
-            self.db_logger.write(str(e), level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(str(e))
 
         watched = [d for d in devices if not d.get('disabled')
                    and (self.devices is None or d.get('name') in self.devices)]
 
         if not watched:
-            self.db_logger.write(
-                "No matching enabled devices reported by Traccar", level="WARNING")
-            self.set_status('warning')
-            return
+            return CollectResult(
+                logs=[("No matching enabled devices reported by Traccar", "WARNING")],
+                status='warning',
+            )
 
-        self.db_metrics.metric('devices_total', float(len(watched)))
+        metrics = {'devices_total': float(len(watched))}
 
         stale_warn: List[Tuple[str, float]] = []
         stale_fail: List[Tuple[str, float]] = []
@@ -128,8 +126,8 @@ class TraccarCollectorPlugin(CollectorPlugin):
             elif age >= self.stale_warning:
                 stale_warn.append((name, age))
 
-        self.db_metrics.metric('oldest_update_hours', oldest_age)
-        self.db_metrics.metric('devices_stale', float(len(stale_warn) + len(stale_fail)))
+        metrics['oldest_update_hours'] = oldest_age
+        metrics['devices_stale'] = float(len(stale_warn) + len(stale_fail))
 
         level = 'online'
         problems = []
@@ -153,11 +151,7 @@ class TraccarCollectorPlugin(CollectorPlugin):
             parts.append("| " + "; ".join(problems))
 
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-        self.db_logger.write(' | '.join(parts), level=log_level)
-        self.set_status(level)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
 
 
 class TraccarUIPlugin(UIPlugin):

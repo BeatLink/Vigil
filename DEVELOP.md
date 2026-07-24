@@ -49,3 +49,77 @@ NiceGUI resolves a `ui.timer`'s context *outside* the callback, in code that rai
 ## Auth middleware ordering
 
 HTTP Basic Auth (`register_auth`) is registered before the routes it protects are defined. Starlette middleware wraps the whole app regardless of registration order relative to routes, but registering it early keeps intent obvious: everything that follows is meant to be gated by it.
+
+## Two-process architecture
+
+Vigil runs as two OS processes sharing one SQLite database: a collector (`vigil/collector/`, entry point `VigilEngine.run()` in `core/main.py`) that polls targets and owns live plugin instances, and a web process (`vigil/web/`, `VigilWebEngine`) that serves the dashboard by reading that state. Only the collector process ever constructs an `SSHConnection` or a `*CollectorPlugin`; the web process builds the sibling `*UIPlugin` class from the same module instead (id/name/render_ui only, no SSH). `main.py`'s dynamic plugin loader matches `CollectorPlugin` specifically, not the shared `UIPlugin` also importable from the same module — that's what keeps a misconfigured web process from ever holding a live SSH connection.
+
+`CollectorPlugin`/`UIPlugin` are deliberately separate classes (and modules) rather than one `BasePlugin` with a mode flag, so the process boundary is visible in the type system rather than a runtime branch: a plugin author calling `self.ssh_controller` from `render_ui()` gets a real, local `SSHController` in the collector and a network-proxying stand-in in the web process, transparently. `UIPlugin.on_action`/`ssh_controller`/`job_controller` are thin proxies to the collector's internal API (`remote_proxy.py`), so plugin code that calls those directly from `render_ui()` (processes.py's Kill button, service_list.py's unit-file viewer, borg.py's job panel) works unmodified regardless of which process constructed the plugin.
+
+`vigil/collector/internal_api.py` is the seam between them: a small FastAPI app bound to loopback only (never a public bind address — the whole point is that it has no auth of its own) that the web process's `remote_proxy.CollectorClient` calls for anything that needs a live SSH connection or in-memory job state: actions, ad-hoc SSH commands, job control, "Poll Now", push heartbeats. Everything else the web process needs is a plain DB read, since SQLite's WAL mode serves concurrent readers regardless of which process is writing — read-only `JobController` methods (`recent`, `output`, `is_running`, `current_job_id`) go straight to the database rather than over HTTP for exactly this reason. This is distinct from `core/api.py`, Vigil's public, read-only REST API.
+
+Push-monitor token verification happens in the collector's internal API, not the web process's `/api/push` route: `plugin.token` is config the collector-side `PushCollectorPlugin` holds, and `UIPlugin` never has it — forwarding the caller's token for the collector to verify keeps the secret compared in exactly one place.
+
+`main.py`'s per-monitor polling has no shared tick: each monitor sleeps its own `interval` between calls (a 30s monitor is never rounded up to a slower one's schedule), with a random startup stagger so they don't all fire in the same event-loop iteration at boot. Exceptions are caught per-iteration so one crashing monitor never stops its own future polls or anyone else's. Group plugins get a loop too — they re-read live child status from the DB each cycle rather than needing ordering relative to their children.
+
+Two monitors resolving to the same effective `id` (falls back to display name when config omits it) would silently overwrite each other's status/metrics/events/log lines every cycle, since everything is keyed by `id`. Nothing else detects this, so `main.py` checks it once at startup, where it's cheap and loud.
+
+## SSH transport
+
+`core/common/ssh_connector.py` uses asyncssh rather than shelling out to the system `ssh` client — one native connection per host stands in for the old ControlMaster socket, and each command becomes a channel on that connection rather than a forked process. This removed the collector's old thread-pool/semaphore concurrency ceiling entirely (multiple commands to the same host already run concurrently on one asyncssh connection).
+
+Three behaviors of the old subprocess design had to be reproduced deliberately, each verified empirically against a real sshd:
+
+1. **Killing a remote process.** asyncssh's `process.close()` alone does not reliably terminate the remote command (a `sleep 300` survived it). Every timeout/cancel path explicitly calls `terminate()` then `kill()`. `execute_streaming` opens a PTY (for borg-style interactive progress output); `execute` deliberately does not, because a PTY merges stdout/stderr into one stream and dozens of plugins inspect stderr specifically for error text.
+2. **Host key trust.** `known_hosts=None` disables verification entirely with no callback ever firing — that was tried first and provides no MITM protection. `known_hosts=[]` (not `None`) is what makes the `_TofuClient.validate_host_public_key` callback fire, reproducing `StrictHostKeyChecking=accept-new`: trust and persist a host's key on first use, reject any later connection with a different key.
+3. **Per-host channel limits.** sshd's default `MaxSessions` is 10 (15 concurrent channels left 5 failing with "open failed"). Vigil bounds its own per-host concurrency (`_MAX_CONCURRENT_PER_HOST`) below that so it behaves safely against any host regardless of local sshd config.
+
+`execute()` opens no PTY so stdout/stderr stay genuinely separate for callers that destructure and inspect both. `execute_streaming()` merges stderr into stdout (`stderr=asyncssh.STDOUT`) because borg interleaves progress on stderr with results on stdout. It's held against a separate, smaller `_job_semaphore` than regular `execute()` channels, since a job can run for hours.
+
+## Job control
+
+`collector/controllers/job_controller.py` exists for long-lived, cancellable commands (a borg backup) that `SSHController`'s short remediation-command model (30s ceiling, boolean result) can't express. A job is a database row (`Job`) plus streamed output persisted as it arrives — nothing lives only in memory, so the UI reattaches after a reload and a second browser sees the same state. The controller holds one job at a time per plugin, since borg takes an exclusive repository lock anyway; rejecting a concurrent start here (`JobRejected`) gives a clear error instead of a confusing one from borg itself.
+
+Output lines are buffered and flushed on a timer (`FLUSH_INTERVAL` = 0.5s, `FLUSH_LINES` = 50 cap) so a chatty command doesn't become one DB commit per line, while the UI still sees progress promptly. Cancellation sets a flag `execute_streaming`'s read loop checks between lines, then terminates the remote process — observed at the next line of output, which for borg's continuous progress is effectively immediate.
+
+## SQLite writer and caching
+
+A single background thread (`core/data/database.py`) owns all DB writes. The polling loop runs on the asyncio event loop; committing to SQLite fsyncs, which can block noticeably (especially on ZFS) and would stall the whole async server if done inline. Writes are enqueued (non-blocking for the caller) and batched: the writer thread accumulates whatever arrives within `batch_window` seconds and commits as one transaction. That batch's event-type tags are what `DataBus` notifies subscribed widgets with once the commit lands — making `batch_window` a latency floor for the UI as well as a durability trade-off (a crash can lose the in-memory batch).
+
+Read-heavy queries (`latest_statuses`, `latest_metric`, `metric_history`, `recent_events`) are cached for a few seconds per unique key, because the dashboard's overview page, every plugin detail page, and every expanded group child each poll roughly once a second and frequently want the exact same rows (two tabs open on one monitor, a metric shown in both a card and a chart). The cache's `max_age` should not be set below the writer's batch window — polling faster than a write can land doesn't surface fresher data anyway. `recent_events()` itself is deliberately left uncached since the REST API shares it and expects a live read; the dashboard's Events page caches around it at the call site instead.
+
+`PluginSnapshot` exists because `Metric` can only carry one named number per row — wrong for a process list or systemd unit list, where every row (PID, state, "enabled" string) matters and needs a per-row UI. In the collector/web split it's also the *only* way that data reaches the web process at all, since `render_ui()` there runs in a different process from `on_collect()` entirely; a plugin with row-level data must write a snapshot (`InternalDatabaseLogger.snapshot`) for its web-side table to read back.
+
+`LogLine` dedup uses a `UNIQUE dedup_hash` (derived from target/source/log_time/message) with `on_conflict_ignore`, since collectors re-fetch the same trailing lines every cycle — dedup is enforced by the DB itself with no read needed on the hot path.
+
+`ensure_schema_upgrades` exists because `create_tables` only creates missing tables, never alters an existing one — a column added to a model appears on fresh installs but not upgraded databases, where inserts then fail silently (writes are queued, so the failure only shows as a log line while data is dropped). Each upgrade step is additive and idempotent, so it's safe to run on every start with no version bookkeeping.
+
+On startup, jobs still marked `running` from a previous process are force-failed (`fail_stale_jobs`) — they're child processes of Vigil, so they die with it, but their row would otherwise still claim to be live.
+
+## DataBus and polling fallback
+
+`core/data/events.py`'s `DataBus` fires per data type (`status`, `metric`, `event`, `log_line`, `setting`), not per monitor id — a widget re-checks on any write of that type and filters client-side, avoiding per-id subscribe/unsubscribe churn as widgets mount and unmount. `emit()` is called from the writer thread right after a batch *commits*, not at insert time, since the row isn't queryable until then. It hands off to the UI event loop via `call_soon_threadsafe` once `bind_loop()` has registered the running loop; before that (early in tests, or before the UI starts) `emit()` is a no-op.
+
+In the web process, no writer thread ever runs, so `DataBus` never emits there — `bus.polling_mode` is set instead, and `on_data_event` (`components.py`) checks it to fall back to a `safe_timer` per widget. `Subscribe()` returns an `off()` function callers must call once their widget is gone, or the callback (and its closure) leaks for the process's life.
+
+## Plugin config sharing
+
+`core/common/plugin_config.py` holds the config-parsing logic both `CollectorPlugin` and `UIPlugin` need (`id`/`target`/`interval` derivation), split into its own module specifically so neither process's plugin base class has to import the other's dependencies (real SSH machinery vs. NiceGUI) just to compute those three fields the same way in both places.
+
+## Declarative UI spec
+
+Most plugins reduced, after a binding-model migration, to the same shape: a handful of metric cards with a formatter, a layout grid, a chart, an events table. `web/ui/spec.py`'s `UI_SPEC` dict lets a plugin declare that shape instead of hand-writing `render_ui()`; `generic_render()` interprets it using the same `PluginPage`/`PluginModel` binding machinery underneath. Plugins with genuinely bespoke widgets (processes.py's per-row kill buttons, borg.py's job panel, service_list.py's unit-file editor) keep a real `render_ui()` and can still call `generic_render()` for their page's standard parts.
+
+Format/color functions are referenced by name from `FORMATTERS`/`COLOR_RULES` rather than inlined as lambdas, so a spec dict stays pure, serializable data reusable across plugins. A plugin needing a one-off transform registers it under its own key (`register_formatter`/`register_color_rule`) instead of bending a shared name to fit.
+
+`web/ui/layout.py`'s flex-row layout lets `config.yaml` override a plugin's default widget arrangement two ways: replacing the row structure entirely, or per-widget property overrides (visibility, height, flex) that keep the default rows.
+
+## Bindable page model
+
+`web/ui/model.py` replaces per-widget polling timers with one shared timer per page (`PluginPage.model`, driven by `_PageScheduler`). NiceGUI's binding only auto-pushes to the browser for some properties, verified against its source before this was built: scalar fields (`label.text`) are a real `BindableProperty` with an on-change hook, so `label.bind_text_from(model, 'status')` needs no plugin code to reach the browser — including per-metric values via nested-key paths like `('metrics', 'vms_total')`. Row-based widgets (`ui.table.rows`, `ui.echart.options`) have no such hook at all, so they stay on an explicit `page.on_refresh()` callback, still riding the same shared timer.
+
+One `_PageScheduler` per NiceGUI client drives every `PluginPage` on it from a single `safe_timer`, ticking at the fastest interval any registered page asked for — this is what keeps a group's refresh cost from scaling with how many children are expanded, since plugins have no idea whether they're standalone or one of many expanded children. `PluginPage.start()` does one synchronous refresh immediately before registering with the scheduler: without it, a freshly loaded page shows its constructed defaults ('--', empty tables) until the first tick, and a single HTTP response is fully serialized before any deferred timer for that request can run — "defer to next tick" would mean "never" for that page load.
+
+## Duration parsing
+
+`core/common/time_utils.py` accepts plain numbers or strings like `'1w'`, `'7d'`, `'2h30m'`, `'30s'`, including compound forms like `'1d12h'`.

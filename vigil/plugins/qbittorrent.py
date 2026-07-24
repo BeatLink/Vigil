@@ -1,8 +1,9 @@
 import json
 import shlex
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
@@ -58,6 +59,18 @@ def _build_fetch_script(api_url: str, timeout: int, password_command: Optional[s
     return '\n'.join(lines)
 
 
+def _action_curl_line(base: str, timeout: int, auth: str, endpoint: str,
+                      params: Optional[Dict[str, str]] = None) -> str:
+    parts = [
+        f'curl -s -f -m {timeout} {auth}',
+        f'-H {shlex.quote("Referer: " + base)}',
+    ]
+    for key, value in (params or {}).items():
+        parts.append(f'--data-urlencode {shlex.quote(f"{key}={value}")}')
+    parts.append(shlex.quote(base + endpoint))
+    return ' '.join(parts)
+
+
 def _build_action_script(api_url: str, timeout: int, password_command: Optional[str],
                          username: Optional[str], password: Optional[str],
                          endpoint: str, params: Optional[Dict[str, str]] = None) -> str:
@@ -66,15 +79,57 @@ def _build_action_script(api_url: str, timeout: int, password_command: Optional[
 
     auth_lines, auth = _auth_preamble(base, timeout, password_command, username, password)
     lines.extend(auth_lines)
+    lines.append(_action_curl_line(base, timeout, auth, endpoint, params))
+    return '\n'.join(lines)
 
-    parts = [
-        f'curl -s -f -m {timeout} {auth}',
-        f'-H {shlex.quote("Referer: " + base)}',
-    ]
-    for key, value in (params or {}).items():
-        parts.append(f'--data-urlencode {shlex.quote(f"{key}={value}")}')
-    parts.append(shlex.quote(base + endpoint))
-    lines.append(' '.join(parts))
+
+def _build_fallback_action_script(api_url: str, timeout: int, password_command: Optional[str],
+                                  username: Optional[str], password: Optional[str],
+                                  modern_endpoint: str, legacy_endpoint: str,
+                                  params: Optional[Dict[str, str]] = None) -> str:
+    """Try the modern endpoint; on failure fall back to the legacy one (older
+    qBittorrent versions use start/stop instead of resume/pause)."""
+    base = api_url.rstrip('/')
+    lines = ["set -e"]
+
+    auth_lines, auth = _auth_preamble(base, timeout, password_command, username, password)
+    lines.extend(auth_lines)
+
+    modern_line = _action_curl_line(base, timeout, auth, modern_endpoint, params)
+    legacy_line = _action_curl_line(base, timeout, auth, legacy_endpoint, params)
+    lines.append(f'{modern_line} || {legacy_line}')
+    return '\n'.join(lines)
+
+
+def _build_recheck_script(api_url: str, timeout: int, password_command: Optional[str],
+                          username: Optional[str], password: Optional[str]) -> str:
+    """Fetch the torrent list, extract hashes of errored torrents, and (if
+    any) issue a recheck for them — all in one remote round trip."""
+    base = api_url.rstrip('/')
+    lines = ["set -e"]
+
+    auth_lines, auth = _auth_preamble(base, timeout, password_command, username, password)
+    lines.extend(auth_lines)
+
+    error_states = ' '.join(shlex.quote(s) for s in sorted(_ERROR_STATES))
+    lines.append(
+        f'__torrents=$(curl -s -m {timeout} {auth} '
+        f'{shlex.quote(base + "/api/v2/torrents/info")})'
+    )
+    lines.append(
+        "__hashes=$(printf '%s' \"$__torrents\" | python3 -c "
+        "\"import json,sys; states=set(sys.argv[1:]); "
+        "data=json.load(sys.stdin); "
+        "print('|'.join(t['hash'] for t in data if t.get('state') in states and t.get('hash')))\" "
+        f"{error_states})"
+    )
+    lines.append('echo "HASHES:$__hashes"')
+    lines.append('if [ -n "$__hashes" ]; then')
+    lines.append(
+        f'  curl -s -f -m {timeout} {auth} -H {shlex.quote("Referer: " + base)} '
+        f'--data-urlencode "hashes=$__hashes" {shlex.quote(base + "/api/v2/torrents/recheck")}'
+    )
+    lines.append('fi')
     return '\n'.join(lines)
 
 
@@ -125,8 +180,8 @@ _DEFAULT_LAYOUT = [
 
 
 class QbittorrentCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8080')
         self.username = config.get('username')
         self.password = config.get('password')
@@ -138,29 +193,26 @@ class QbittorrentCollectorPlugin(CollectorPlugin):
         self.min_downloading = int(config.get('min_downloading', 1))
         self.api_timeout = int(config.get('api_timeout', 10))
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         script = _build_fetch_script(
             self.api_url, self.api_timeout, self.password_command,
             self.username, self.password,
         )
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
+        return [Command(script)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
             if _AUTH_FAILED in stderr:
-                self.db_logger.write(
+                return CollectResult.failed(
                     "qBittorrent rejected the configured credentials "
-                    "(check username / password_command)", level="ERROR")
-            else:
-                self.db_logger.write(
-                    f"Failed to query qBittorrent API: {stderr.strip()}", level="ERROR")
-            self.set_status('failed')
-            return
+                    "(check username / password_command)")
+            return CollectResult.failed(f"Failed to query qBittorrent API: {stderr.strip()}")
 
         try:
             transfer, torrents = _parse_response(stdout)
         except ValueError as e:
-            self.db_logger.write(str(e), level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(str(e))
 
         connection = str(transfer.get('connection_status', 'unknown'))
         dl_speed = float(transfer.get('dl_info_speed', 0) or 0)
@@ -170,15 +222,17 @@ class QbittorrentCollectorPlugin(CollectorPlugin):
         errored = [t for t in torrents if t.get('state') in _ERROR_STATES]
         downloading = [t for t in torrents if t.get('state') in _ACTIVE_DL_STATES]
 
-        self.db_metrics.metric('dl_speed_bytes', dl_speed)
-        self.db_metrics.metric('up_speed_bytes', up_speed)
-        self.db_metrics.metric('torrents_total', float(len(torrents)))
-        self.db_metrics.metric('torrents_stalled', float(len(stalled)))
-        self.db_metrics.metric('torrents_errored', float(len(errored)))
-        self.db_metrics.metric('torrents_downloading', float(len(downloading)))
-        self.db_metrics.metric('dl_session_bytes', float(transfer.get('dl_info_data', 0) or 0))
-        self.db_metrics.metric('up_session_bytes', float(transfer.get('up_info_data', 0) or 0))
-        self.db_metrics.metric('connected', 1.0 if connection == 'connected' else 0.0)
+        metrics = {
+            'dl_speed_bytes': dl_speed,
+            'up_speed_bytes': up_speed,
+            'torrents_total': float(len(torrents)),
+            'torrents_stalled': float(len(stalled)),
+            'torrents_errored': float(len(errored)),
+            'torrents_downloading': float(len(downloading)),
+            'dl_session_bytes': float(transfer.get('dl_info_data', 0) or 0),
+            'up_session_bytes': float(transfer.get('up_info_data', 0) or 0),
+            'connected': 1.0 if connection == 'connected' else 0.0,
+        }
 
         problems = []
         level = 'online'
@@ -223,8 +277,7 @@ class QbittorrentCollectorPlugin(CollectorPlugin):
             parts.append("| " + "; ".join(problems))
 
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-        self.db_logger.write(' | '.join(parts), level=log_level)
-        self.set_status(level)
+        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
 
     def get_actions(self) -> List[Dict[str, str]]:
         return [
@@ -236,74 +289,64 @@ class QbittorrentCollectorPlugin(CollectorPlugin):
              'variant': 'danger', 'icon': 'pause'},
         ]
 
-    async def _post(self, endpoint: str, params: Optional[Dict[str, str]] = None) -> bool:
-        script = _build_action_script(
-            self.api_url, self.api_timeout, self.password_command,
-            self.username, self.password, endpoint, params,
-        )
-        status, _, stderr = await self.ssh_controller.execute_action(script)
-        if status != 0:
-            if _AUTH_FAILED in (stderr or ''):
-                self.db_logger.write(
-                    f"{endpoint} rejected: qBittorrent refused the configured "
-                    "credentials", level="ERROR")
-            else:
-                self.db_logger.write(
-                    f"{endpoint} failed: {(stderr or '').strip()}", level="ERROR")
-        return status == 0
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
+    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, CollectResult]]:
         if action_id == 'resume_all':
-            if await self._post('/api/v2/torrents/start', {'hashes': 'all'}):
-                self.db_logger.write("Resumed all torrents", level="INFO")
-                return True
-            if await self._post('/api/v2/torrents/resume', {'hashes': 'all'}):
-                self.db_logger.write("Resumed all torrents", level="INFO")
-                return True
-            return False
+            script = _build_fallback_action_script(
+                self.api_url, self.api_timeout, self.password_command,
+                self.username, self.password,
+                '/api/v2/torrents/start', '/api/v2/torrents/resume', {'hashes': 'all'},
+            )
+            return ActionPlan(script)
 
         if action_id == 'pause_all':
-            if await self._post('/api/v2/torrents/stop', {'hashes': 'all'}):
-                self.db_logger.write("Paused all torrents", level="WARNING")
-                return True
-            if await self._post('/api/v2/torrents/pause', {'hashes': 'all'}):
-                self.db_logger.write("Paused all torrents", level="WARNING")
-                return True
-            return False
+            script = _build_fallback_action_script(
+                self.api_url, self.api_timeout, self.password_command,
+                self.username, self.password,
+                '/api/v2/torrents/stop', '/api/v2/torrents/pause', {'hashes': 'all'},
+            )
+            return ActionPlan(script)
 
         if action_id == 'recheck_errored':
-            hashes = await self._errored_hashes()
-            if hashes is None:
-                return False
+            script = _build_recheck_script(
+                self.api_url, self.api_timeout, self.password_command,
+                self.username, self.password,
+            )
+            return ActionPlan(script)
+
+        return None
+
+    def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
+        if action_id == 'resume_all':
+            if result.exit_code != 0:
+                if _AUTH_FAILED in (result.stderr or ''):
+                    return CollectResult.failed(
+                        "resume_all rejected: qBittorrent refused the configured credentials")
+                return CollectResult.failed(f"resume_all failed: {(result.stderr or '').strip()}")
+            return CollectResult(logs=[("Resumed all torrents", "INFO")], success=True)
+
+        if action_id == 'pause_all':
+            if result.exit_code != 0:
+                if _AUTH_FAILED in (result.stderr or ''):
+                    return CollectResult.failed(
+                        "pause_all rejected: qBittorrent refused the configured credentials")
+                return CollectResult.failed(f"pause_all failed: {(result.stderr or '').strip()}")
+            return CollectResult(logs=[("Paused all torrents", "WARNING")], success=True)
+
+        if action_id == 'recheck_errored':
+            if result.exit_code != 0:
+                if _AUTH_FAILED in (result.stderr or ''):
+                    return CollectResult.failed(
+                        "recheck_errored rejected: qBittorrent refused the configured credentials")
+                return CollectResult.failed(f"Could not list/recheck torrents: {(result.stderr or '').strip()}")
+            hashes_line = next(
+                (line for line in result.stdout.splitlines() if line.startswith('HASHES:')), 'HASHES:')
+            hashes = [h for h in hashes_line[len('HASHES:'):].split('|') if h]
             if not hashes:
-                self.db_logger.write("No errored torrents to recheck", level="INFO")
-                return True
-            ok = await self._post('/api/v2/torrents/recheck', {'hashes': '|'.join(hashes)})
-            if ok:
-                self.db_logger.write(
-                    f"Rechecking {len(hashes)} errored torrent(s)", level="INFO")
-            return ok
+                return CollectResult(logs=[("No errored torrents to recheck", "INFO")], success=True)
+            return CollectResult(
+                logs=[(f"Rechecking {len(hashes)} errored torrent(s)", "INFO")], success=True)
 
-        return False
-
-    async def _errored_hashes(self) -> Optional[List[str]]:
-        script = _build_fetch_script(
-            self.api_url, self.api_timeout, self.password_command,
-            self.username, self.password,
-        )
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
-        if ret != 0:
-            self.db_logger.write(
-                f"Could not list torrents to recheck: {(stderr or '').strip()}",
-                level="ERROR")
-            return None
-        try:
-            _, torrents = _parse_response(stdout)
-        except ValueError as e:
-            self.db_logger.write(f"Could not list torrents to recheck: {e}", level="ERROR")
-            return None
-        return [t['hash'] for t in torrents
-                if t.get('state') in _ERROR_STATES and t.get('hash')]
+        return result.exit_code == 0
 
 
 class QbittorrentUIPlugin(UIPlugin):
@@ -321,7 +364,7 @@ class QbittorrentUIPlugin(UIPlugin):
         stalled_warning = int(self.config.get('stalled_warning', 3))
         stalled_threshold = int(self.config.get('stalled_threshold', 10))
 
-        page = self.page(metric_names=[
+        page = self.ui.page(metric_names=[
             'connected', 'dl_speed_bytes', 'up_speed_bytes', 'torrents_total',
             'torrents_downloading', 'torrents_stalled', 'torrents_errored',
         ])
@@ -334,7 +377,7 @@ class QbittorrentUIPlugin(UIPlugin):
         _int_or_dash = FORMATTERS['int']
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('connection_card'):
             connection_label = info_card('CONNECTION', '--').bind_text_from(
                 page.model, ('metrics', 'connected'), backward=_connection_text)
@@ -351,7 +394,7 @@ class QbittorrentUIPlugin(UIPlugin):
         with layout.cell('chart'):
             history_chart(page, 'DOWNLOAD SPEED (B/s)', self.id, 'dl_speed_bytes')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update_cards():
             metrics = page.model.metrics

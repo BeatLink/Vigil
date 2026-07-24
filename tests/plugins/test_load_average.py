@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.load_average import LoadAverageCollectorPlugin, _level_for
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -76,59 +76,45 @@ class TestLevelFor:
 
 
 class TestLoadAverageCollection:
-    async def test_load_pct_metrics_recorded(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _make_output(_LOAD_OK, cpus=4), ""))
-        await plugin.on_collect()
+    async def test_load_pct_metrics_recorded(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output(_LOAD_OK, cpus=4), ""))
         assert _latest_metric("load_pct_1m")  == pytest.approx(30.0)
         assert _latest_metric("load_pct_5m")  == pytest.approx(25.0)
         assert _latest_metric("load_pct_15m") == pytest.approx(20.0)
 
-    async def test_pct_scales_with_core_count(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output((2.0, 2.0, 2.0), cpus=8), ""))
-        await plugin.on_collect()
+    async def test_pct_scales_with_core_count(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output((2.0, 2.0, 2.0), cpus=8), ""))
         assert _latest_metric("load_pct_1m") == pytest.approx(25.0)
 
-    async def test_no_thresholds_always_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _make_output(_LOAD_FAILED, cpus=4), ""))
-        await plugin.on_collect()
+    async def test_no_thresholds_always_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output(_LOAD_FAILED, cpus=4), ""))
         assert _latest_status() == "online"
 
-    async def test_below_warning_sets_online(self, thresh_plugin):
-        thresh_plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output(_LOAD_OK, cpus=4), ""))
-        await thresh_plugin.on_collect()
+    async def test_below_warning_sets_online(self, thresh_plugin, run_cycle):
+        run_cycle(thresh_plugin, lambda c: CmdResult(0, _make_output(_LOAD_OK, cpus=4), ""))
         assert _latest_status("test-load-thresh") == "online"
 
-    async def test_above_warning_sets_warning(self, thresh_plugin):
-        thresh_plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output(_LOAD_WARNING, cpus=4), ""))
-        await thresh_plugin.on_collect()
+    async def test_above_warning_sets_warning(self, thresh_plugin, run_cycle):
+        run_cycle(thresh_plugin, lambda c: CmdResult(0, _make_output(_LOAD_WARNING, cpus=4), ""))
         assert _latest_status("test-load-thresh") == "warning"
 
-    async def test_above_failed_threshold_sets_failed(self, thresh_plugin):
-        thresh_plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _make_output(_LOAD_FAILED, cpus=4), ""))
-        await thresh_plugin.on_collect()
+    async def test_above_failed_threshold_sets_failed(self, thresh_plugin, run_cycle):
+        run_cycle(thresh_plugin, lambda c: CmdResult(0, _make_output(_LOAD_FAILED, cpus=4), ""))
         assert _latest_status("test-load-thresh") == "failed"
 
-    async def test_missing_cpus_line_falls_back_to_1(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "LOAD:2.0 1.5 1.0 1/100 12345\n", ""))
-        await plugin.on_collect()
+    async def test_missing_cpus_line_falls_back_to_1(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "LOAD:2.0 1.5 1.0 1/100 12345\n", ""))
         assert _latest_metric("load_pct_1m") == pytest.approx(200.0)
 
-    async def test_missing_load_line_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "CPUS:4\n", ""))
-        await plugin.on_collect()
+    async def test_missing_load_line_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "CPUS:4\n", ""))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(-1, "", "timeout"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "timeout"))
         assert _latest_status() == "failed"
 
 
 class TestLoadAverageActions:
-    async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+    async def test_on_action_always_returns_none(self, plugin):
+        assert plugin.plan_action("anything") is None

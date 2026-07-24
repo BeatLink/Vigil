@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.freshrss import FreshrssCollectorPlugin, _parse_response, _build_fetch_script
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -38,9 +39,8 @@ def plugin(make_plugin):
     return make_plugin(FreshrssCollectorPlugin, BASE_CFG)
 
 
-def _respond(plugin, feeds=None, refresh_hours_ago=1.0, auth=1):
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(0, _response(feeds, refresh_hours_ago, auth), ""))
+def _respond(plugin, run_cycle, feeds=None, refresh_hours_ago=1.0, auth=1):
+    run_cycle(plugin, lambda c: CmdResult(0, _response(feeds, refresh_hours_ago, auth), ""))
 
 
 def _latest_status(plugin_id: str = "test-freshrss") -> str | None:
@@ -85,43 +85,37 @@ class TestParseResponse:
 
 
 class TestFreshrssCollection:
-    async def test_fresh_feeds_set_online(self, plugin):
-        _respond(plugin, feeds=[_feed(hours_ago=1.0)], refresh_hours_ago=1.0)
-        await plugin.on_collect()
+    async def test_fresh_feeds_set_online(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, feeds=[_feed(hours_ago=1.0)], refresh_hours_ago=1.0)
         assert _latest_status() == "online"
 
-    async def test_stale_feed_sets_warning(self, plugin):
-        _respond(plugin, feeds=[_feed(hours_ago=60.0)])
-        await plugin.on_collect()
+    async def test_stale_feed_sets_warning(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, feeds=[_feed(hours_ago=60.0)])
         assert _latest_status() == "warning"
 
-    async def test_very_stale_feed_sets_failed(self, plugin):
-        _respond(plugin, feeds=[_feed(hours_ago=200.0)])
-        await plugin.on_collect()
+    async def test_very_stale_feed_sets_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, feeds=[_feed(hours_ago=200.0)])
         assert _latest_status() == "failed"
 
-    async def test_stale_refresh_cycle_sets_warning(self, plugin):
-        _respond(plugin, refresh_hours_ago=10.0)
-        await plugin.on_collect()
+    async def test_stale_refresh_cycle_sets_warning(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, refresh_hours_ago=10.0)
         assert _latest_status() == "warning"
 
-    async def test_auth_failure_sets_failed(self, plugin):
-        _respond(plugin, auth=0)
-        await plugin.on_collect()
+    async def test_auth_failure_sets_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, auth=0)
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_missing_username_sets_failed(self, make_plugin):
+    async def test_missing_username_sets_failed(self, make_plugin, run_cycle):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "username"}
         p = make_plugin(FreshrssCollectorPlugin, cfg)
-        await p.on_collect()
+        run_cycle(p)
         assert _latest_status("test-freshrss") == "failed"
 
 
 class TestFreshrssActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

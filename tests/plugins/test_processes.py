@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.processes import ProcessesCollectorPlugin, _parse_ps_output, _level_for
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -129,98 +130,80 @@ class TestLevelFor:
 
 
 class TestProcessesCollection:
-    async def test_successful_collection_sets_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _PS_OUTPUT_OK, ""))
-        await plugin.on_collect()
+    async def test_successful_collection_sets_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _PS_OUTPUT_OK, ""))
         assert _latest_status() == "online"
 
-    async def test_process_list_populated(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _PS_OUTPUT_OK, ""))
-        await plugin.on_collect()
-        assert len(plugin._processes) == 3
-        assert plugin._processes[0]['pid'] == 123
+    async def test_process_list_populated(self, plugin, run_cycle):
+        result = run_cycle(plugin, lambda c: CmdResult(0, _PS_OUTPUT_OK, ""))
+        assert len(result.snapshot) == 3
+        assert result.snapshot[0]['pid'] == 123
 
-    async def test_process_count_metric_recorded(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _PS_OUTPUT_OK, ""))
-        await plugin.on_collect()
+    async def test_process_count_metric_recorded(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _PS_OUTPUT_OK, ""))
         assert _latest_metric("process_count") == pytest.approx(3.0)
 
-    async def test_top_cpu_metric_recorded(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _PS_OUTPUT_OK, ""))
-        await plugin.on_collect()
+    async def test_top_cpu_metric_recorded(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _PS_OUTPUT_OK, ""))
         assert _latest_metric("top_cpu_pct") == pytest.approx(45.2)
 
-    async def test_empty_process_list_sets_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _PS_OUTPUT_HEADER_ONLY, ""))
-        await plugin.on_collect()
+    async def test_empty_process_list_sets_online(self, plugin, run_cycle):
+        result = run_cycle(plugin, lambda c: CmdResult(0, _PS_OUTPUT_HEADER_ONLY, ""))
         assert _latest_status() == "online"
-        assert plugin._processes == []
+        assert result.snapshot == []
 
-    async def test_unparseable_output_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "complete garbage\n!!!\n", ""))
-        await plugin.on_collect()
+    async def test_unparseable_output_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "complete garbage\n!!!\n", ""))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(-1, "", "timeout"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "timeout"))
         assert _latest_status() == "failed"
 
-    async def test_no_thresholds_always_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _PS_OUTPUT_HIGH_CPU, ""))
-        await plugin.on_collect()
+    async def test_no_thresholds_always_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _PS_OUTPUT_HIGH_CPU, ""))
         assert _latest_status() == "online"
 
-    async def test_top_cpu_above_warning_sets_warning(self, thresh_plugin):
-        thresh_plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _PS_OUTPUT_WARN_CPU, ""))
-        await thresh_plugin.on_collect()
+    async def test_top_cpu_above_warning_sets_warning(self, thresh_plugin, run_cycle):
+        run_cycle(thresh_plugin, lambda c: CmdResult(0, _PS_OUTPUT_WARN_CPU, ""))
         assert _latest_status("test-procs-thresh") == "warning"
 
-    async def test_top_cpu_above_threshold_sets_failed(self, thresh_plugin):
-        thresh_plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _PS_OUTPUT_HIGH_CPU, ""))
-        await thresh_plugin.on_collect()
+    async def test_top_cpu_above_threshold_sets_failed(self, thresh_plugin, run_cycle):
+        run_cycle(thresh_plugin, lambda c: CmdResult(0, _PS_OUTPUT_HIGH_CPU, ""))
         assert _latest_status("test-procs-thresh") == "failed"
 
 
 class TestProcessesKillAction:
     async def test_kill_term_sends_correct_command(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        result = await plugin.on_action('kill', pid=123, signal='TERM')
-        assert result is True
-        plugin.ssh_controller.execute_action.assert_called_once_with("kill -TERM 123")
+        plan = plugin.plan_action('kill', pid=123, signal='TERM')
+        assert plan.command == "kill -TERM 123"
+        outcome = plugin.interpret_action('kill', CmdResult(0, "", ""), pid=123, signal='TERM')
+        assert outcome.success is True
 
     async def test_kill_kill_sends_correct_command(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        result = await plugin.on_action('kill', pid=456, signal='KILL')
-        assert result is True
-        plugin.ssh_controller.execute_action.assert_called_once_with("kill -KILL 456")
+        plan = plugin.plan_action('kill', pid=456, signal='KILL')
+        assert plan.command == "kill -KILL 456"
 
     async def test_kill_with_sudo(self, make_plugin):
         cfg = {**BASE_CFG, "name": "test-sudo", "id": "test-sudo", "require_sudo": True}
         p = make_plugin(ProcessesCollectorPlugin, cfg)
-        p.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        await p.on_action('kill', pid=99, signal='TERM')
-        p.ssh_controller.execute_action.assert_called_once_with("sudo kill -TERM 99")
+        plan = p.plan_action('kill', pid=99, signal='TERM')
+        assert plan.command == "sudo kill -TERM 99"
 
     async def test_kill_uses_default_signal_from_config(self, make_plugin):
         cfg = {**BASE_CFG, "name": "test-sig", "id": "test-sig", "kill_signal": "KILL"}
         p = make_plugin(ProcessesCollectorPlugin, cfg)
-        p.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        await p.on_action('kill', pid=77)
-        p.ssh_controller.execute_action.assert_called_once_with("kill -KILL 77")
+        plan = p.plan_action('kill', pid=77)
+        assert plan.command == "kill -KILL 77"
 
     async def test_kill_failure_returns_false(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(
-            return_value=(1, "", "Operation not permitted"))
-        result = await plugin.on_action('kill', pid=1, signal='TERM')
-        assert result is False
+        outcome = plugin.interpret_action(
+            'kill', CmdResult(1, "", "Operation not permitted"), pid=1, signal='TERM')
+        assert outcome.success is False
 
     async def test_kill_missing_pid_returns_false(self, plugin):
-        result = await plugin.on_action('kill')
-        assert result is False
+        plan = plugin.plan_action('kill')
+        assert plan.success is False
 
     async def test_unknown_action_returns_false(self, plugin):
-        result = await plugin.on_action('reboot')
-        assert result is False
+        assert plugin.plan_action('reboot') is None

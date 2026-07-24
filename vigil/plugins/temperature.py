@@ -1,6 +1,7 @@
-from typing import Dict, Any
+from typing import Any, Dict, List
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
@@ -27,17 +28,18 @@ _DEFAULT_LAYOUT = [
 
 
 class TemperatureCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.temp_warning   = int(config.get('temp_warning',   70))
         self.temp_threshold = int(config.get('temp_threshold', 80))
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(_COLLECT_CMD)
+    def commands(self) -> List[Command]:
+        return [Command(_COLLECT_CMD)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Collection failed: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Collection failed: {stderr}")
 
         sensors: Dict[str, float] = {}
         for line in stdout.splitlines():
@@ -55,26 +57,24 @@ class TemperatureCollectorPlugin(CollectorPlugin):
                 continue
 
         if not sensors:
-            self.db_logger.write("No thermal zones found — skipping", level="INFO")
-            self.set_status('online')
-            return
+            return CollectResult(logs=[("No thermal zones found — skipping", "INFO")], status='online')
 
         max_temp = max(sensors.values())
-        self.db_metrics.metric('temp_c', max_temp)
+        metrics = {'temp_c': max_temp}
         for key, temp_c in sensors.items():
-            self.db_metrics.metric(f'temp_zone_{key}', temp_c)
+            metrics[f'temp_zone_{key}'] = temp_c
 
         overall = _level_for(max_temp, self.temp_warning, self.temp_threshold)
         log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
-        self.db_logger.write(
-            f"Max {max_temp:.1f}°C across {len(sensors)} zone(s) "
-            f"(warn {self.temp_warning}°C / fail {self.temp_threshold}°C)",
-            level=log_level
+        return CollectResult(
+            metrics=metrics,
+            logs=[(
+                f"Max {max_temp:.1f}°C across {len(sensors)} zone(s) "
+                f"(warn {self.temp_warning}°C / fail {self.temp_threshold}°C)",
+                log_level,
+            )],
+            status=overall,
         )
-        self.set_status(overall)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class TemperatureUIPlugin(UIPlugin):
@@ -95,12 +95,12 @@ class TemperatureUIPlugin(UIPlugin):
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
         )
-        page = self.page(metric_names=['temp_c'])
+        page = self.ui.page(metric_names=['temp_c'])
 
         _temp_or_dash = FORMATTERS['temp_c1']
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('max_card'):
             max_label = info_card('MAX TEMP', '--').bind_text_from(
                 page.model, ('metrics', 'temp_c'), backward=_temp_or_dash)
@@ -111,7 +111,7 @@ class TemperatureUIPlugin(UIPlugin):
         with layout.cell('chart'):
             history_chart(page, 'TEMPERATURE (°C)', self.id, 'temp_c')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update_max_color():
             val = page.model.metrics.get('temp_c')

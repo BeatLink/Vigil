@@ -1,9 +1,10 @@
 import os
 import shlex
 import time
-from typing import Dict, Any, List
+from typing import Any, Dict, List, Optional, Union
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.time_utils import parse_duration, format_duration, format_age
 
@@ -28,69 +29,107 @@ _ONESHOT_LAYOUT = [
     ['logs'],
 ]
 
+_RUNNING_SUBSTATES = {'running', 'start', 'start-pre', 'start-post', 'start-chroot', 'reload'}
+
 
 class SystemdCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.service_name = config.get('service_name')
         self.lines = config.get('lines', 10)
         self.max_age = parse_duration(config['max_age']) if 'max_age' in config else None
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
         self.allowed_write_paths = tuple(config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
 
-
-    async def _collect_journal(self) -> bool:
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(
+    def commands(self) -> List[Command]:
+        journal_cmd = Command(
             f"journalctl -u {self.service_name} -n {self.lines} "
             f"--no-pager --output=short-iso"
         )
-        if ret != 0:
-            self.db_logger.write(f"Log collection failed: {stderr}", level="ERROR")
-            return False
-
-        for line in stdout.splitlines():
-            if not line.strip():
-                continue
-            log_time, message = self._split_iso_line(line)
-            level = 'ERROR' if any(k in line.upper() for k in ('ERROR', 'FAIL', 'CRITICAL')) else 'INFO'
-            self.db_logger.log_line(message, level=level, log_time=log_time)
-        return True
-
-    @staticmethod
-    def _split_iso_line(line: str):
-        parts = line.split(' ', 1)
-        if len(parts) == 2 and 'T' in parts[0] and parts[0][:4].isdigit():
-            return parts[0], line
-        return None, line
-
-    async def on_collect(self):
         if self.max_age is not None:
-            await self._collect_oneshot()
-        else:
-            await self._collect_continuous()
+            return [Command(self._oneshot_state_cmd()), journal_cmd]
+        return [Command(f"systemctl is-active {self.service_name}"), journal_cmd]
 
-    async def _run_systemctl_command(self, command: str) -> bool:
-        status, _, stderr = await self.ssh_controller.execute_action(
-            f"sudo systemctl {command} {self.service_name if command != 'daemon-reload' else ''}".strip()
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        if self.max_age is not None:
+            return self._parse_oneshot(results)
+        return self._parse_continuous(results)
+
+    def _parse_continuous(self, results: List[CmdResult]) -> CollectResult:
+        state_result, journal_result = results
+
+        is_active = state_result.exit_code == 0 and state_result.stdout.strip() == 'active'
+        metrics = {'active': 1.0 if is_active else 0.0}
+
+        journal_ok, log_lines = self._parse_journal(journal_result)
+        if not journal_ok:
+            return CollectResult(
+                metrics=metrics,
+                logs=[(f"Log collection failed: {journal_result.stderr}", "ERROR")],
+                status='failed',
+            )
+
+        return CollectResult(
+            metrics=metrics,
+            log_lines=log_lines,
+            status='online' if is_active else 'warning',
         )
-        if status != 0:
-            self.db_logger.write(f"systemctl {command} failed: {stderr}", level='ERROR')
-        return status == 0
 
-    async def _collect_continuous(self):
-        s_ret, s_out, _ = await self.ssh_collector.fetch_output(
-            f"systemctl is-active {self.service_name}"
-        )
-        is_active = s_ret == 0 and s_out.strip() == 'active'
-        self.db_metrics.metric('active', 1.0 if is_active else 0.0)
+    def _parse_oneshot(self, results: List[CmdResult]) -> CollectResult:
+        state_result, journal_result = results
 
-        if await self._collect_journal():
-            self.set_status('online' if is_active else 'warning')
+        if state_result.exit_code != 0:
+            return CollectResult.failed(f"Failed to query service state: {state_result.stderr}")
+
+        tokens = dict(tok.split('=', 1) for tok in state_result.stdout.strip().split() if '=' in tok)
+        result    = tokens.get('result', 'empty')
+        exit_code = tokens.get('exit',   'empty')
+        active    = tokens.get('active', 'unknown')
+        sub       = tokens.get('sub',    'unknown')
+        try:
+            epoch = int(tokens.get('epoch', '0'))
+        except ValueError:
+            epoch = 0
+
+        logs = [(
+            f"systemd state: result={result!r} exit_code={exit_code!r} epoch={epoch} active={active!r} sub={sub!r}",
+            "INFO",
+        )]
+
+        is_running = active == 'activating' or (active == 'active' and sub in _RUNNING_SUBSTATES)
+        is_success = result == 'success' or exit_code == '0'
+        age = (int(time.time()) - epoch) if epoch > 0 else -1
+
+        metrics = {
+            'last_run_epoch': float(epoch),
+            'last_run_success': 1.0 if is_success else 0.0,
+            'is_running': 1.0 if is_running else 0.0,
+        }
+
+        if is_running:
+            logs.append(("Service is currently running", "INFO"))
+            status = 'online'
+        elif epoch == 0:
+            logs.append(("Service has never run", "WARNING"))
+            status = 'failed'
+        elif not is_success:
+            logs.append((f"Last run failed (result: {result}, exit: {exit_code})", "ERROR"))
+            status = 'failed'
+        elif age > self.max_age:
+            logs.append((
+                f"Last run was {format_age(age)}, exceeds max_age of {format_duration(self.max_age)}",
+                "WARNING",
+            ))
+            status = 'failed'
         else:
-            self.set_status('failed')
+            logs.append((f"Last run {format_age(age)}, result: {result}", "INFO"))
+            status = 'online'
 
-    async def _collect_oneshot(self):
-        cmd = (
+        journal_ok, log_lines = self._parse_journal(journal_result)
+        return CollectResult(metrics=metrics, logs=logs, log_lines=log_lines, status=status)
+
+    def _oneshot_state_cmd(self) -> str:
+        return (
             f"result=$(systemctl show {self.service_name} -p Result --value); "
             f"exit_code=$(systemctl show {self.service_name} -p ExecMainStatus --value); "
             f"active=$(systemctl show {self.service_name} -p ActiveState --value); "
@@ -103,59 +142,26 @@ class SystemdCollectorPlugin(CollectorPlugin):
             'else epoch=0; fi; '
             'echo "result=${result:-empty} exit=${exit_code:-empty} epoch=$epoch active=${active:-unknown} sub=${sub:-unknown}"'
         )
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(cmd)
 
-        if ret != 0:
-            self.db_logger.write(f"Failed to query service state: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+    @staticmethod
+    def _parse_journal(journal_result: CmdResult):
+        if journal_result.exit_code != 0:
+            return False, []
+        log_lines = []
+        for line in journal_result.stdout.splitlines():
+            if not line.strip():
+                continue
+            log_time, message = SystemdCollectorPlugin._split_iso_line(line)
+            level = 'ERROR' if any(k in line.upper() for k in ('ERROR', 'FAIL', 'CRITICAL')) else 'INFO'
+            log_lines.append((message, level, log_time))
+        return True, log_lines
 
-        tokens = dict(tok.split('=', 1) for tok in stdout.strip().split() if '=' in tok)
-        result    = tokens.get('result', 'empty')
-        exit_code = tokens.get('exit',   'empty')
-        active    = tokens.get('active', 'unknown')
-        sub       = tokens.get('sub',    'unknown')
-        try:
-            epoch = int(tokens.get('epoch', '0'))
-        except ValueError:
-            epoch = 0
-
-        self.db_logger.write(
-            f"systemd state: result={result!r} exit_code={exit_code!r} epoch={epoch} active={active!r} sub={sub!r}",
-            level="INFO"
-        )
-
-        _RUNNING_SUBSTATES = {'running', 'start', 'start-pre', 'start-post', 'start-chroot', 'reload'}
-        is_running = active == 'activating' or (active == 'active' and sub in _RUNNING_SUBSTATES)
-
-        is_success = result == 'success' or exit_code == '0'
-        age = (int(time.time()) - epoch) if epoch > 0 else -1
-
-        self.db_metrics.metric('last_run_epoch', float(epoch))
-        self.db_metrics.metric('last_run_success', 1.0 if is_success else 0.0)
-        self.db_metrics.metric('is_running', 1.0 if is_running else 0.0)
-
-        if is_running:
-            self.db_logger.write("Service is currently running", level="INFO")
-            self.set_status('online')
-        elif epoch == 0:
-            self.db_logger.write("Service has never run", level="WARNING")
-            self.set_status('failed')
-        elif not is_success:
-            self.db_logger.write(f"Last run failed (result: {result}, exit: {exit_code})", level="ERROR")
-            self.set_status('failed')
-        elif age > self.max_age:
-            self.db_logger.write(
-                f"Last run was {format_age(age)}, exceeds max_age of {format_duration(self.max_age)}",
-                level="WARNING"
-            )
-            self.set_status('failed')
-        else:
-            self.db_logger.write(f"Last run {format_age(age)}, result: {result}", level="INFO")
-            self.set_status('online')
-
-        await self._collect_journal()
-
+    @staticmethod
+    def _split_iso_line(line: str):
+        parts = line.split(' ', 1)
+        if len(parts) == 2 and 'T' in parts[0] and parts[0][:4].isdigit():
+            return parts[0], line
+        return None, line
 
     def get_actions(self) -> List[Dict[str, str]]:
         return [
@@ -165,20 +171,29 @@ class SystemdCollectorPlugin(CollectorPlugin):
             {'name': 'Disable on Boot', 'action_id': 'disable_service','variant': 'secondary', 'icon': 'toggle_off'},
         ]
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        if action_id == 'restart_service':
-            return await self._run_systemctl_command('restart')
+    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, CollectResult]]:
+        command_map = {
+            'restart_service': 'restart',
+            'stop_service': 'stop',
+            'enable_service': 'enable',
+            'disable_service': 'disable',
+        }
+        command = command_map.get(action_id)
+        if command is None:
+            return None
+        return ActionPlan(f"sudo systemctl {command} {self.service_name}")
 
-        if action_id == 'stop_service':
-            return await self._run_systemctl_command('stop')
-
-        if action_id == 'enable_service':
-            return await self._run_systemctl_command('enable')
-
-        if action_id == 'disable_service':
-            return await self._run_systemctl_command('disable')
-
-        return False
+    def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
+        if result.exit_code != 0:
+            command_map = {
+                'restart_service': 'restart',
+                'stop_service': 'stop',
+                'enable_service': 'enable',
+                'disable_service': 'disable',
+            }
+            command = command_map.get(action_id, action_id)
+            return CollectResult.failed(f"systemctl {command} failed: {result.stderr}")
+        return True
 
 
 class SystemdUIPlugin(UIPlugin):
@@ -199,7 +214,7 @@ class SystemdUIPlugin(UIPlugin):
         return tuple(self.config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
 
     async def _resolve_unit_path(self) -> tuple[bool, str]:
-        status, stdout, stderr = await self.ssh_controller.execute_action(
+        status, stdout, stderr = await self.network.execute_raw(
             f"systemctl show -p FragmentPath --value {shlex.quote(self.service_name)}"
         )
         if status != 0:
@@ -219,7 +234,7 @@ class SystemdUIPlugin(UIPlugin):
         )
 
     async def _read_unit_file(self) -> tuple[bool, str]:
-        status, stdout, stderr = await self.ssh_controller.execute_action(
+        status, stdout, stderr = await self.network.execute_raw(
             f"sudo systemctl cat {shlex.quote(self.service_name)}"
         )
         if status != 0:
@@ -241,13 +256,13 @@ class SystemdUIPlugin(UIPlugin):
             f"Path({shlex.quote(path)}).write_text({shlex.quote(content)}, encoding='utf-8')\n"
             "PY"
         )
-        status, _, stderr = await self.ssh_controller.execute_action(cmd)
+        status, _, stderr = await self.network.execute_raw(cmd)
         if status != 0:
             return False, stderr.strip() or 'Unable to write unit file'
         return True, 'Unit file written successfully'
 
     async def _run_systemctl_command(self, command: str) -> bool:
-        status, _, stderr = await self.ssh_controller.execute_action(
+        status, _, stderr = await self.network.execute_raw(
             f"sudo systemctl {command} {self.service_name if command != 'daemon-reload' else ''}".strip()
         )
         return status == 0
@@ -324,14 +339,14 @@ class SystemdUIPlugin(UIPlugin):
         from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _CONTINUOUS_LAYOUT if context == 'page' else make_inline_layout(_CONTINUOUS_LAYOUT))
-        page = self.page()
+        page = self.ui.page()
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('service_card'):
             info_card('SERVICE', self.service_name)
         with layout.cell('status_card'):
-            self.internal_modules['ui']['status_card'](
+            self.ui.status_card(
                 page,
                 metric_name='active',
                 title='SERVICE STATUS',
@@ -343,7 +358,7 @@ class SystemdUIPlugin(UIPlugin):
         with layout.cell('unit_file_card'):
             self._render_unit_file_controls()
         with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table'](page, title='LOGS', limit=100, full_height=True)
+            self.ui.logs_table(page, title='LOGS', limit=100, full_height=True)
 
         def update_time():
             last = StatusHistory.select().where(
@@ -364,10 +379,10 @@ class SystemdUIPlugin(UIPlugin):
         from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _ONESHOT_LAYOUT if context == 'page' else make_inline_layout(_ONESHOT_LAYOUT))
-        page = self.page(metric_names=['is_running', 'last_run_epoch', 'last_run_success'])
+        page = self.ui.page(metric_names=['is_running', 'last_run_epoch', 'last_run_success'])
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('service_card'):
             info_card('SERVICE', self.service_name)
         with layout.cell('maxage_card'):
@@ -381,7 +396,7 @@ class SystemdUIPlugin(UIPlugin):
                 result_label = info_card('LAST RESULT', '--')
                 age_label = info_card('LAST RUN', '--')
         with layout.cell('logs'):
-            self.internal_modules['ui']['logs_table'](page, title='LOGS', limit=100, full_height=True)
+            self.ui.logs_table(page, title='LOGS', limit=100, full_height=True)
 
         def update():
             def _val(name):

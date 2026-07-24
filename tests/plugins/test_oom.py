@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.oom import OomCollectorPlugin, _extract_counter
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -39,11 +39,8 @@ def plugin(make_plugin):
     return make_plugin(OomCollectorPlugin, BASE_CFG)
 
 
-async def _collect(plugin, oom_kill, ret=0, include=True):
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(ret, _vmstat(oom_kill, include), "")
-    )
-    await plugin.on_collect()
+def _collect(plugin, run_cycle, oom_kill, ret=0, include=True):
+    return run_cycle(plugin, lambda c: CmdResult(ret, _vmstat(oom_kill, include), ""))
 
 
 class TestExtractCounter:
@@ -58,94 +55,93 @@ class TestExtractCounter:
 
 
 class TestBaseline:
-    async def test_first_collection_is_baseline(self, plugin):
-        await _collect(plugin, 5)
+    async def test_first_collection_is_baseline(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, 5)
         assert _latest_status() == "online"
         assert _latest_metric("oom_kills_total") == pytest.approx(5.0)
 
-    async def test_no_kills_stays_online(self, plugin):
-        await _collect(plugin, 5)
-        await _collect(plugin, 5)
+    async def test_no_kills_stays_online(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, 5)
+        _collect(plugin, run_cycle, 5)
         assert _latest_status() == "online"
         assert _latest_metric("oom_kills_new") == pytest.approx(0.0)
 
 
 class TestKillDetection:
-    async def test_new_kill_fails(self, plugin):
-        await _collect(plugin, 5)
-        await _collect(plugin, 6)
+    async def test_new_kill_fails(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, 5)
+        _collect(plugin, run_cycle, 6)
         assert _latest_status() == "failed"
         assert _latest_metric("oom_kills_new") == pytest.approx(1.0)
 
-    async def test_multiple_kills_recorded(self, plugin):
-        await _collect(plugin, 0)
-        await _collect(plugin, 3)
+    async def test_multiple_kills_recorded(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, 0)
+        _collect(plugin, run_cycle, 3)
         assert _latest_status() == "failed"
         assert _latest_metric("oom_kills_new") == pytest.approx(3.0)
 
-    async def test_kill_as_warning_when_configured(self, make_plugin):
+    async def test_kill_as_warning_when_configured(self, make_plugin, run_cycle):
         p = make_plugin(OomCollectorPlugin, dict(BASE_CFG, is_warning=True))
-        await _collect(p, 0)
-        await _collect(p, 1)
+        _collect(p, run_cycle, 0)
+        _collect(p, run_cycle, 1)
         assert _latest_status() == "warning"
 
 
 class TestAlertDecay:
-    async def test_alert_holds_then_clears(self, make_plugin):
+    async def test_alert_holds_then_clears(self, make_plugin, run_cycle):
         p = make_plugin(OomCollectorPlugin, dict(BASE_CFG, alert_for=3))
-        await _collect(p, 0)
-        await _collect(p, 1)
+        _collect(p, run_cycle, 0)
+        _collect(p, run_cycle, 1)
         assert _latest_status() == "failed"
-        await _collect(p, 1)
+        _collect(p, run_cycle, 1)
         assert _latest_status() == "warning"
-        await _collect(p, 1)
+        _collect(p, run_cycle, 1)
         assert _latest_status() == "warning"
-        await _collect(p, 1)
+        _collect(p, run_cycle, 1)
         assert _latest_status() == "online"
 
-    async def test_new_kill_resets_decay(self, make_plugin):
+    async def test_new_kill_resets_decay(self, make_plugin, run_cycle):
         p = make_plugin(OomCollectorPlugin, dict(BASE_CFG, alert_for=3))
-        await _collect(p, 0)
-        await _collect(p, 1)
-        await _collect(p, 1)
+        _collect(p, run_cycle, 0)
+        _collect(p, run_cycle, 1)
+        _collect(p, run_cycle, 1)
         assert _latest_status() == "warning"
-        await _collect(p, 2)
+        _collect(p, run_cycle, 2)
         assert _latest_status() == "failed"
 
-    async def test_alert_for_zero_clears_immediately(self, make_plugin):
+    async def test_alert_for_zero_clears_immediately(self, make_plugin, run_cycle):
         p = make_plugin(OomCollectorPlugin, dict(BASE_CFG, alert_for=0))
-        await _collect(p, 0)
-        await _collect(p, 1)
+        _collect(p, run_cycle, 0)
+        _collect(p, run_cycle, 1)
         assert _latest_status() == "failed"
-        await _collect(p, 1)
+        _collect(p, run_cycle, 1)
         assert _latest_status() == "online"
 
 
 class TestCounterReset:
-    async def test_reboot_rebaselines_without_alerting(self, plugin):
-        await _collect(plugin, 9)
-        await _collect(plugin, 2)
+    async def test_reboot_rebaselines_without_alerting(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, 9)
+        _collect(plugin, run_cycle, 2)
         assert _latest_status() == "online"
 
-    async def test_kills_after_reboot_still_detected(self, plugin):
-        await _collect(plugin, 9)
-        await _collect(plugin, 0)
-        await _collect(plugin, 1)
+    async def test_kills_after_reboot_still_detected(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, 9)
+        _collect(plugin, run_cycle, 0)
+        _collect(plugin, run_cycle, 1)
         assert _latest_status() == "failed"
         assert _latest_metric("oom_kills_new") == pytest.approx(1.0)
 
 
 class TestFailureModes:
-    async def test_ssh_failure_is_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "no such file"))
-        await plugin.on_collect()
+    async def test_ssh_failure_is_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "no such file"))
         assert _latest_status() == "failed"
 
-    async def test_missing_counter_is_offline(self, plugin):
-        await _collect(plugin, 0, include=False)
+    async def test_missing_counter_is_offline(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, 0, include=False)
         assert _latest_status() == "offline"
 
 
 class TestOomActions:
-    async def test_on_action_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+    async def test_on_action_returns_none(self, plugin):
+        assert plugin.plan_action("anything") is None

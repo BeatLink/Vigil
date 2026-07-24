@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.smart_disk import SmartDiskCollectorPlugin
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -35,62 +36,42 @@ def _latest_metric(name: str) -> float | None:
 
 
 class TestSmartDiskCollection:
-    async def test_all_pass_is_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "PASS /dev/sda\nPASS /dev/sdb", "")
-        )
-        await plugin.on_collect()
+    async def test_all_pass_is_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "PASS /dev/sda\nPASS /dev/sdb", ""))
         assert _latest_status("test-smart") == "online"
 
-    async def test_all_pass_metrics(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "PASS /dev/sda\nPASS /dev/sdb", "")
-        )
-        await plugin.on_collect()
+    async def test_all_pass_metrics(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "PASS /dev/sda\nPASS /dev/sdb", ""))
         assert _latest_metric("disks_total") == 2
         assert _latest_metric("disks_ok") == 2
         assert _latest_metric("disks_failed") == 0
 
-    async def test_one_fail_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "PASS /dev/sda\nFAIL /dev/sdb", "")
-        )
-        await plugin.on_collect()
+    async def test_one_fail_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "PASS /dev/sda\nFAIL /dev/sdb", ""))
         assert _latest_status("test-smart") == "failed"
 
-    async def test_fail_metrics_correct(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "PASS /dev/sda\nFAIL /dev/sdb\nFAIL /dev/sdc", "")
-        )
-        await plugin.on_collect()
+    async def test_fail_metrics_correct(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "PASS /dev/sda\nFAIL /dev/sdb\nFAIL /dev/sdc", ""))
         assert _latest_metric("disks_total") == 3
         assert _latest_metric("disks_ok") == 1
         assert _latest_metric("disks_failed") == 2
 
-    async def test_all_fail_is_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "FAIL /dev/sda", "")
-        )
-        await plugin.on_collect()
+    async def test_all_fail_is_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "FAIL /dev/sda", ""))
         assert _latest_status("test-smart") == "failed"
 
-    async def test_no_output_sets_offline(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "", ""))
-        await plugin.on_collect()
+    async def test_no_output_sets_offline(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "", ""))
         assert _latest_status("test-smart") == "offline"
 
-    async def test_malformed_lines_skipped(self, plugin):
+    async def test_malformed_lines_skipped(self, plugin, run_cycle):
         output = "PASS /dev/sda\nsome random noise\nFAIL /dev/sdb"
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, output, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, output, ""))
         assert _latest_metric("disks_total") == 2
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(-1, "", "SSH timeout")
-        )
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "SSH timeout"))
         assert _latest_status("test-smart") == "failed"
 
     async def test_on_action_always_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

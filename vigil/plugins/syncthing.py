@@ -1,19 +1,40 @@
 import json
 import shlex
+import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
+
+_MARK = "@@VIGIL_FOLDER@@"
+
+
+def _auth_header(timeout: int, api_key_command: Optional[str], api_key: Optional[str]) -> str:
+    if api_key_command:
+        return '-H "X-API-Key: $(' + api_key_command + ')"'
+    return f'-H {shlex.quote("X-API-Key: " + (api_key or ""))}'
+
+
+def _config_script(api_url: str, timeout: int, api_key_command: Optional[str],
+                   api_key: Optional[str]) -> str:
+    header = _auth_header(timeout, api_key_command, api_key)
+    base = api_url.rstrip('/')
+    return f'curl -s -m {timeout} {header} {shlex.quote(base + "/rest/system/config")}'
+
+
+def _connections_script(api_url: str, timeout: int, api_key_command: Optional[str],
+                        api_key: Optional[str]) -> str:
+    header = _auth_header(timeout, api_key_command, api_key)
+    base = api_url.rstrip('/')
+    return f'curl -s -m {timeout} {header} {shlex.quote(base + "/rest/system/connections")}'
 
 
 def _folder_status_script(api_url: str, timeout: int, api_key_command: Optional[str],
                           api_key: Optional[str], folder_id: str) -> str:
     base = api_url.rstrip('/')
-    if api_key_command:
-        header = '-H "X-API-Key: $(' + api_key_command + ')"'
-    else:
-        header = f'-H {shlex.quote("X-API-Key: " + (api_key or ""))}'
+    header = _auth_header(timeout, api_key_command, api_key)
     return f'curl -s -m {timeout} {header} {shlex.quote(base + "/rest/db/status?folder=" + folder_id)}'
 
 
@@ -26,8 +47,8 @@ _DEFAULT_LAYOUT = [
 
 
 class SyncthingCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8384')
         self.api_key = config.get('api_key')
         self.api_key_command = config.get(
@@ -37,83 +58,71 @@ class SyncthingCollectorPlugin(CollectorPlugin):
         self.stall_warning_secs = float(config.get('stall_warning', 60)) * 60
         self.api_timeout = int(config.get('api_timeout', 10))
         self._stall_since: Dict[str, float] = {}
+        self._cached_folder_ids: List[str] = []
 
-    async def _get_config(self) -> Optional[Dict[str, Any]]:
-        script = (
-            f'curl -s -m {self.api_timeout} '
-            + (f'-H "X-API-Key: $({self.api_key_command})"' if self.api_key_command
-               else f'-H {shlex.quote("X-API-Key: " + (self.api_key or ""))}')
-            + f' {shlex.quote(self.api_url.rstrip("/") + "/rest/system/config")}'
-        )
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
-        if ret != 0:
-            self.db_logger.write(f"Failed to query Syncthing config: {stderr.strip()}", level="ERROR")
-            return None
+    def commands(self) -> List[Command]:
+        cmds = [
+            Command(_config_script(self.api_url, self.api_timeout, self.api_key_command, self.api_key)),
+            Command(_connections_script(self.api_url, self.api_timeout, self.api_key_command, self.api_key)),
+        ]
+        cmds += [
+            Command(_folder_status_script(
+                self.api_url, self.api_timeout, self.api_key_command, self.api_key, folder_id))
+            for folder_id in self._cached_folder_ids
+        ]
+        return cmds
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        config_result, connections_result = results[0], results[1]
+        folder_results = results[2:]
+
+        if config_result.exit_code != 0:
+            return CollectResult.failed(
+                f"Failed to query Syncthing config: {config_result.stderr.strip()}")
         try:
-            return json.loads(stdout)
+            cfg = json.loads(config_result.stdout)
         except json.JSONDecodeError as e:
-            self.db_logger.write(f"Config response was not JSON ({e})", level="ERROR")
-            return None
-
-    async def on_collect(self):
-        cfg = await self._get_config()
-        if cfg is None:
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Config response was not JSON ({e})")
 
         all_folder_ids = [f['id'] for f in cfg.get('folders', [])]
         watched_ids = [f for f in all_folder_ids
                        if self.folders is None or f in self.folders]
+        self._cached_folder_ids = watched_ids
 
         if not watched_ids:
-            self.db_logger.write("No matching folders configured in Syncthing", level="WARNING")
-            self.set_status('warning')
-            return
+            return CollectResult(
+                logs=[("No matching folders configured in Syncthing", "WARNING")], status='warning')
 
-        import time as _time
+        if not folder_results:
+            # First cycle after startup / after the folder list changed: we
+            # just learned the folder IDs, per-folder status lags one cycle.
+            return CollectResult(
+                logs=[(f"Discovered {len(watched_ids)} folder(s), fetching status next cycle", "INFO")],
+                status='warning',
+            )
+
         folder_states: Dict[str, Dict[str, Any]] = {}
-        for folder_id in watched_ids:
-            script = _folder_status_script(
-                self.api_url, self.api_timeout, self.api_key_command,
-                self.api_key, folder_id)
-            ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
-            if ret != 0:
-                self.db_logger.write(
-                    f"Failed to query folder {folder_id!r}: {stderr.strip()}", level="ERROR")
-                self.set_status('failed')
-                return
+        for folder_id, result in zip(watched_ids, folder_results):
+            if result.exit_code != 0:
+                return CollectResult.failed(f"Failed to query folder {folder_id!r}: {result.stderr.strip()}")
             try:
-                folder_states[folder_id] = json.loads(stdout)
+                folder_states[folder_id] = json.loads(result.stdout)
             except json.JSONDecodeError as e:
-                self.db_logger.write(
-                    f"Folder {folder_id!r} status was not JSON ({e})", level="ERROR")
-                self.set_status('failed')
-                return
+                return CollectResult.failed(f"Folder {folder_id!r} status was not JSON ({e})")
 
-        conn_script = (
-            f'curl -s -m {self.api_timeout} '
-            + (f'-H "X-API-Key: $({self.api_key_command})"' if self.api_key_command
-               else f'-H {shlex.quote("X-API-Key: " + (self.api_key or ""))}')
-            + f' {shlex.quote(self.api_url.rstrip("/") + "/rest/system/connections")}'
-        )
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(conn_script)
-        if ret != 0:
-            self.db_logger.write(f"Failed to query connections: {stderr.strip()}", level="ERROR")
-            self.set_status('failed')
-            return
+        if connections_result.exit_code != 0:
+            return CollectResult.failed(f"Failed to query connections: {connections_result.stderr.strip()}")
         try:
-            connections = json.loads(stdout).get('connections', {})
+            connections = json.loads(connections_result.stdout).get('connections', {})
         except json.JSONDecodeError as e:
-            self.db_logger.write(f"Connections response was not JSON ({e})", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Connections response was not JSON ({e})")
 
         device_names = {d['deviceID']: d.get('name', d['deviceID']) for d in cfg.get('devices', [])}
         expected_devices = [d for d in device_names
                              if self.devices is None or device_names[d] in self.devices
                              or d in (self.devices or [])]
 
-        now = _time.monotonic()
+        now = time.monotonic()
         errored_folders = []
         stalled_folders = []
         total_need_bytes = 0.0
@@ -145,18 +154,20 @@ class SyncthingCollectorPlugin(CollectorPlugin):
             else:
                 self._stall_since.pop(folder_id, None)
 
-        self.db_metrics.metric('folders_total', float(len(watched_ids)))
-        self.db_metrics.metric('folders_errored', float(len(errored_folders)))
-        self.db_metrics.metric('folders_stalled', float(len(stalled_folders)))
-        self.db_metrics.metric('need_bytes', total_need_bytes)
-        self.db_metrics.metric('pull_errors', float(total_pull_errors))
+        metrics = {
+            'folders_total': float(len(watched_ids)),
+            'folders_errored': float(len(errored_folders)),
+            'folders_stalled': float(len(stalled_folders)),
+            'need_bytes': total_need_bytes,
+            'pull_errors': float(total_pull_errors),
+        }
 
         disconnected = [
             device_names.get(dev_id, dev_id) for dev_id in expected_devices
             if not connections.get(dev_id, {}).get('connected', False)
         ]
-        self.db_metrics.metric('devices_expected', float(len(expected_devices)))
-        self.db_metrics.metric('devices_disconnected', float(len(disconnected)))
+        metrics['devices_expected'] = float(len(expected_devices))
+        metrics['devices_disconnected'] = float(len(disconnected))
 
         problems = []
         level = 'online'
@@ -190,11 +201,7 @@ class SyncthingCollectorPlugin(CollectorPlugin):
             parts.append("| " + "; ".join(problems))
 
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-        self.db_logger.write(' | '.join(parts), level=log_level)
-        self.set_status(level)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
 
 
 class SyncthingUIPlugin(UIPlugin):
@@ -208,7 +215,7 @@ class SyncthingUIPlugin(UIPlugin):
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
-        page = self.page(metric_names=[
+        page = self.ui.page(metric_names=[
             'folders_total', 'folders_errored', 'folders_stalled',
             'need_bytes', 'devices_expected', 'devices_disconnected',
         ])
@@ -229,7 +236,7 @@ class SyncthingUIPlugin(UIPlugin):
             return f'{connected}/{int(exp_dev)}'
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('folders_card'):
             info_card('FOLDERS', '--').bind_text_from(
                 page.model, ('metrics', 'folders_total'), backward=_int_or_dash)
@@ -248,7 +255,7 @@ class SyncthingUIPlugin(UIPlugin):
         with layout.cell('chart'):
             history_chart(page, 'BYTES NEEDED', self.id, 'need_bytes')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update_colors():
             disc = page.model.metrics.get('devices_disconnected')

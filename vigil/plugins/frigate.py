@@ -2,6 +2,7 @@ import json
 from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _QUALITY_ORDER = {'unusable': 0, 'poor': 1, 'fair': 2, 'excellent': 3}
@@ -31,38 +32,34 @@ _DEFAULT_LAYOUT = [
 
 
 class FrigateCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:5000')
         self.cameras: Optional[List[str]] = config.get('cameras') or None
         self.api_timeout = int(config.get('api_timeout', 10))
 
-    async def on_collect(self):
-        script = _build_fetch_script(self.api_url, self.api_timeout)
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
+    def commands(self) -> List[Command]:
+        return [Command(_build_fetch_script(self.api_url, self.api_timeout))]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to query Frigate API: {stderr.strip()}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to query Frigate API: {stderr.strip()}")
 
         try:
             stats = _parse_response(stdout)
         except ValueError as e:
-            self.db_logger.write(str(e), level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(str(e))
 
         cameras = stats.get('cameras', {})
         watched = {name: data for name, data in cameras.items()
                    if self.cameras is None or name in self.cameras}
 
         if not watched:
-            self.db_logger.write(
+            return CollectResult.failed(
                 "No matching cameras reported by Frigate (check the "
                 "'cameras' config list against Frigate's own camera names)",
-                level="WARNING")
-            self.set_status('warning')
-            return
+                level="WARNING", status='warning')
 
         detectors = stats.get('detectors', {})
         avg_inference = (
@@ -70,9 +67,11 @@ class FrigateCollectorPlugin(CollectorPlugin):
             / len(detectors)
         ) if detectors else 0.0
 
-        self.db_metrics.metric('camera_fps_total', float(stats.get('camera_fps', 0) or 0))
-        self.db_metrics.metric('detection_fps_total', float(stats.get('detection_fps', 0) or 0))
-        self.db_metrics.metric('detector_inference_ms', float(avg_inference))
+        metrics = {
+            'camera_fps_total': float(stats.get('camera_fps', 0) or 0),
+            'detection_fps_total': float(stats.get('detection_fps', 0) or 0),
+            'detector_inference_ms': float(avg_inference),
+        }
 
         worst_quality = 'excellent'
         worst_camera = None
@@ -98,10 +97,9 @@ class FrigateCollectorPlugin(CollectorPlugin):
             elif quality == 'poor':
                 problems.append(f"{cam_name}: poor ({fps:.1f} fps)")
 
-        self.db_metrics.metric('stalls_last_hour', float(total_stalls))
-        self.db_metrics.metric('reconnects_last_hour', float(total_reconnects))
-        self.db_metrics.metric(
-            'worst_quality_rank', float(_QUALITY_ORDER.get(worst_quality, 0)))
+        metrics['stalls_last_hour'] = float(total_stalls)
+        metrics['reconnects_last_hour'] = float(total_reconnects)
+        metrics['worst_quality_rank'] = float(_QUALITY_ORDER.get(worst_quality, 0))
 
         if worst_quality == 'unusable':
             level = 'failed'
@@ -122,11 +120,11 @@ class FrigateCollectorPlugin(CollectorPlugin):
             parts.append("| " + "; ".join(problems))
 
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-        self.db_logger.write(' | '.join(p for p in parts if p), level=log_level)
-        self.set_status(level)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(
+            metrics=metrics,
+            logs=[(' | '.join(p for p in parts if p), log_level)],
+            status=level,
+        )
 
 
 from vigil.web.ui.spec import generic_render, register_formatter, register_color_rule

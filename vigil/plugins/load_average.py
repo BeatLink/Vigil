@@ -1,6 +1,7 @@
-from typing import Dict, Any
+from typing import Any, Dict, List
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
@@ -15,26 +16,25 @@ _DEFAULT_LAYOUT = [
 
 
 class LoadAverageCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.load_warning   = float(config['load_warning'])   if 'load_warning'   in config else None
         self.load_threshold = float(config['load_threshold'])  if 'load_threshold'  in config else None
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(_COLLECT_CMD)
+    def commands(self) -> List[Command]:
+        return [Command(_COLLECT_CMD)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Collection failed: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Collection failed: {stderr}")
 
         lines = stdout.splitlines()
         load_line = next((l for l in lines if l.startswith('LOAD:')), None)
         cpus_line = next((l for l in lines if l.startswith('CPUS:')), None)
 
         if not load_line:
-            self.db_logger.write(f"Incomplete output: {stdout!r}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Incomplete output: {stdout!r}")
 
         try:
             cpu_count    = max(1, int(cpus_line.removeprefix('CPUS:').strip())) if cpus_line else 1
@@ -43,13 +43,13 @@ class LoadAverageCollectorPlugin(CollectorPlugin):
             load_pct_5m  = float(parts[1]) / cpu_count * 100.0
             load_pct_15m = float(parts[2]) / cpu_count * 100.0
         except (ValueError, IndexError) as e:
-            self.db_logger.write(f"Failed to parse output: {e}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to parse output: {e}")
 
-        self.db_metrics.metric('load_pct_1m',  load_pct_1m)
-        self.db_metrics.metric('load_pct_5m',  load_pct_5m)
-        self.db_metrics.metric('load_pct_15m', load_pct_15m)
+        metrics = {
+            'load_pct_1m':  load_pct_1m,
+            'load_pct_5m':  load_pct_5m,
+            'load_pct_15m': load_pct_15m,
+        }
 
         if self.load_warning is not None and self.load_threshold is not None:
             overall = _level_for(load_pct_1m, self.load_warning, self.load_threshold)
@@ -57,15 +57,15 @@ class LoadAverageCollectorPlugin(CollectorPlugin):
             overall = 'online'
 
         log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
-        self.db_logger.write(
-            f"LOAD {load_pct_1m:.0f}% / {load_pct_5m:.0f}% / {load_pct_15m:.0f}% (1m/5m/15m, "
-            f"{cpu_count} cores)",
-            level=log_level
+        return CollectResult(
+            metrics=metrics,
+            logs=[(
+                f"LOAD {load_pct_1m:.0f}% / {load_pct_5m:.0f}% / {load_pct_15m:.0f}% (1m/5m/15m, "
+                f"{cpu_count} cores)",
+                log_level,
+            )],
+            status=overall,
         )
-        self.set_status(overall)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class LoadAverageUIPlugin(UIPlugin):

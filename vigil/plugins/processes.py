@@ -1,6 +1,7 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Union
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
@@ -37,41 +38,34 @@ _DEFAULT_LAYOUT = [
 
 
 class ProcessesCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.max_processes = int(config.get('max_processes', 20))
         self.require_sudo  = bool(config.get('require_sudo', False))
         self.kill_signal   = str(config.get('kill_signal', 'TERM')).upper()
         self.cpu_warning   = float(config['cpu_warning'])   if 'cpu_warning'   in config else None
         self.cpu_threshold = float(config['cpu_threshold'])  if 'cpu_threshold'  in config else None
-        self._processes: List[Dict] = []
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         cmd = (
             f"ps -eo pid,user,pcpu,pmem,comm --sort=-%cpu "
             f"| head -n {self.max_processes + 1}"
         )
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(cmd)
+        return [Command(cmd)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Collection failed: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Collection failed: {stderr}")
 
         processes = _parse_ps_output(stdout)
 
         has_data_rows = len(stdout.strip().splitlines()) > 1
         if not processes and has_data_rows:
-            self.db_logger.write(f"Could not parse ps output: {stdout!r}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Could not parse ps output: {stdout!r}")
 
-        self._processes = processes
         process_count = len(processes)
         top_cpu = processes[0]['cpu'] if processes else 0.0
-
-        self.db_metrics.metric('process_count', float(process_count))
-        self.db_metrics.metric('top_cpu_pct',   top_cpu)
-        self.db_logger.snapshot(processes)
 
         if self.cpu_warning is not None and self.cpu_threshold is not None:
             overall = _level_for(top_cpu, self.cpu_warning, self.cpu_threshold)
@@ -79,35 +73,34 @@ class ProcessesCollectorPlugin(CollectorPlugin):
             overall = 'online'
 
         log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
-        self.db_logger.write(
-            f"{process_count} processes, top CPU {top_cpu:.1f}%",
-            level=log_level
+        return CollectResult(
+            metrics={'process_count': float(process_count), 'top_cpu_pct': top_cpu},
+            snapshot=processes,
+            logs=[(f"{process_count} processes, top CPU {top_cpu:.1f}%", log_level)],
+            status=overall,
         )
-        self.set_status(overall)
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
+    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, CollectResult]]:
         if action_id != 'kill':
-            return False
+            return None
 
         pid    = kwargs.get('pid')
         signal = str(kwargs.get('signal', self.kill_signal)).upper()
 
         if pid is None:
-            self.db_logger.write("Kill action missing pid", level="ERROR")
-            return False
+            return CollectResult.failed("Kill action missing pid")
 
         prefix = 'sudo ' if self.require_sudo else ''
-        ret, _, stderr = await self.ssh_controller.execute_action(
-            f"{prefix}kill -{signal} {int(pid)}"
-        )
-        if ret != 0:
-            self.db_logger.write(
-                f"Failed to send SIG{signal} to PID {pid}: {stderr}", level="ERROR"
-            )
-            return False
+        return ActionPlan(f"{prefix}kill -{signal} {int(pid)}")
 
-        self.db_logger.write(f"Sent SIG{signal} to PID {pid}", level="INFO")
-        return True
+    def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
+        if action_id != 'kill':
+            return result.exit_code == 0
+        pid = kwargs.get('pid')
+        signal = str(kwargs.get('signal', self.kill_signal)).upper()
+        if result.exit_code != 0:
+            return CollectResult.failed(f"Failed to send SIG{signal} to PID {pid}: {result.stderr}")
+        return CollectResult(logs=[(f"Sent SIG{signal} to PID {pid}", "INFO")], success=True)
 
 
 class ProcessesUIPlugin(UIPlugin):
@@ -122,10 +115,10 @@ class ProcessesUIPlugin(UIPlugin):
         cpu_threshold = float(self.config['cpu_threshold']) if 'cpu_threshold' in self.config else None
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page()
+        page = self.ui.page()
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('count_card'):
             count_label = info_card('PROCESSES', '--')
         with layout.cell('top_cpu_card'):
@@ -159,7 +152,7 @@ class ProcessesUIPlugin(UIPlugin):
             ''')
 
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         async def _do_kill(e, signal):
             pid = (e.args or {}).get('pid')
@@ -174,8 +167,8 @@ class ProcessesUIPlugin(UIPlugin):
         table.on('kill_kill', lambda e: asyncio.create_task(_do_kill(e, 'KILL')))
 
         def update():
-            count_metric = self.latest_metric('process_count')
-            top_cpu_metric = self.latest_metric('top_cpu_pct')
+            count_metric = self.storage.latest_metric('process_count')
+            top_cpu_metric = self.storage.latest_metric('top_cpu_pct')
             if count_metric is not None:
                 count_label.text = str(int(count_metric.value))
             if top_cpu_metric is not None:
@@ -186,7 +179,7 @@ class ProcessesUIPlugin(UIPlugin):
                         f'color: {STATUS_COLORS[_level_for(top_cpu, cpu_warning, cpu_threshold)]}'
                     )
             rows = []
-            for p in self.latest_snapshot(default=[]):
+            for p in self.storage.latest_snapshot(default=[]):
                 cpu_color = STATUS_COLORS['online']
                 if cpu_warning is not None and cpu_threshold is not None:
                     cpu_color = STATUS_COLORS[_level_for(p['cpu'], cpu_warning, cpu_threshold)]

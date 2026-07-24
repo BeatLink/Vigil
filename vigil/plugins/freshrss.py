@@ -5,6 +5,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 
@@ -57,8 +58,8 @@ _DEFAULT_LAYOUT = [
 
 
 class FreshrssCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:80')
         self.username = config.get('username')
         self.api_password = config.get('api_password')
@@ -68,37 +69,34 @@ class FreshrssCollectorPlugin(CollectorPlugin):
         self.refresh_stale_warning = float(config.get('refresh_stale_warning', 6))
         self.api_timeout = int(config.get('api_timeout', 10))
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         if not self.username:
-            self.db_logger.write(
-                "No username configured — set username/api_password_command",
-                level="ERROR")
-            self.set_status('failed')
-            return
-
+            return []
         script = _build_fetch_script(
             self.api_url, self.api_timeout, self.username,
             self.api_password_command, self.api_password,
         )
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
+        return [Command(script)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        if not self.username:
+            return CollectResult.failed(
+                "No username configured — set username/api_password_command")
+
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to query Fever API: {stderr.strip()}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to query Fever API: {stderr.strip()}")
 
         try:
             data = _parse_response(stdout)
         except ValueError as e:
-            self.db_logger.write(str(e), level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(str(e))
 
         feeds: List[Dict[str, Any]] = data.get('feeds', [])
         now = time.time()
 
         refresh_age_hours = (now - float(data.get('last_refreshed_on_time', 0) or 0)) / 3600.0
-        self.db_metrics.metric('refresh_age_hours', refresh_age_hours)
-        self.db_metrics.metric('feeds_total', float(len(feeds)))
+        metrics = {'refresh_age_hours': refresh_age_hours, 'feeds_total': float(len(feeds))}
 
         stale_warn = []
         stale_fail = []
@@ -111,7 +109,7 @@ class FreshrssCollectorPlugin(CollectorPlugin):
             elif age >= self.feed_stale_warning:
                 stale_warn.append((title, age))
 
-        self.db_metrics.metric('feeds_stale', float(len(stale_warn) + len(stale_fail)))
+        metrics['feeds_stale'] = float(len(stale_warn) + len(stale_fail))
 
         problems = []
         level = 'online'
@@ -146,11 +144,7 @@ class FreshrssCollectorPlugin(CollectorPlugin):
             parts.append("| " + "; ".join(problems))
 
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-        self.db_logger.write(' | '.join(parts), level=log_level)
-        self.set_status(level)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
 
 
 class FreshrssUIPlugin(UIPlugin):

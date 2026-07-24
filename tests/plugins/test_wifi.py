@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.wifi import WifiCollectorPlugin, _parse_wireless, _auto_detect_interface
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -87,49 +88,42 @@ class TestAutoDetect:
 
 
 class TestWifiCollection:
-    async def test_strong_signal_online(self, plugin):
+    async def test_strong_signal_online(self, plugin, run_cycle):
         stdout = _make_wireless({"wlan0": (65, -45)})
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "online"
         assert _latest_metric("test-wifi", "link_quality") == pytest.approx(65.0)
         assert _latest_metric("test-wifi", "signal_dbm") == pytest.approx(-45.0)
 
-    async def test_weak_signal_warning(self, plugin):
+    async def test_weak_signal_warning(self, plugin, run_cycle):
         stdout = _make_wireless({"wlan0": (30, -75)})
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "warning"
 
-    async def test_very_weak_signal_failed(self, plugin):
+    async def test_very_weak_signal_failed(self, plugin, run_cycle):
         stdout = _make_wireless({"wlan0": (15, -90)})
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "failed"
 
-    async def test_auto_detects_strongest(self, plugin):
+    async def test_auto_detects_strongest(self, plugin, run_cycle):
         stdout = _make_wireless({"wlan0": (25, -80), "wlan1": (68, -40)})
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
-        assert plugin._active_interface == "wlan1"
+        result = run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
+        assert result.settings[f"wifi:{plugin.id}:active_interface"] == "wlan1"
 
-    async def test_explicit_interface_missing_fails(self, explicit_plugin):
+    async def test_explicit_interface_missing_fails(self, explicit_plugin, run_cycle):
         stdout = _make_wireless({"wlan1": (60, -50)})
-        explicit_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await explicit_plugin.on_collect()
+        run_cycle(explicit_plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status("test-wifi-explicit") == "failed"
 
-    async def test_no_wireless_interface_fails(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, WIRELESS_HEADER, ""))
-        await plugin.on_collect()
+    async def test_no_wireless_interface_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, WIRELESS_HEADER, ""))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_fails(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(-1, "", "no route"))
-        await plugin.on_collect()
+    async def test_ssh_failure_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "no route"))
         assert _latest_status() == "failed"
 
 
 class TestWifiActions:
     async def test_on_action_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

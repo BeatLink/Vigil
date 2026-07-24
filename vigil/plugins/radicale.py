@@ -1,7 +1,9 @@
 import shlex
-from typing import Any, Dict, Optional
+import time as _time
+from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _PROPFIND_BODY = (
@@ -56,64 +58,62 @@ _DEFAULT_LAYOUT = [
 
 
 class RadicaleCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.url = config.get('url', 'http://127.0.0.1:5232')
         self.username = config.get('username', 'vigil')
         self.password = config.get('password')
         self.password_command = config.get('password_command')
         self.request_timeout = int(config.get('request_timeout', 10))
+        self._started: Optional[float] = None
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         script = _build_probe_script(
             self.url, self.request_timeout, self.username,
             self.password_command, self.password,
         )
-        import time as _time
-        started = _time.monotonic()
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
-        elapsed_ms = (_time.monotonic() - started) * 1000.0
+        self._started = _time.monotonic()
+        return [Command(script)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        elapsed_ms = (_time.monotonic() - self._started) * 1000.0 if self._started else 0.0
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         if ret != 0:
-            self.db_logger.write(f"Failed to run PROPFIND probe: {stderr.strip()}", level="ERROR")
-            self.db_metrics.metric('propfind_ok', 0.0)
-            self.set_status('failed')
-            return
+            return CollectResult(
+                metrics={'propfind_ok': 0.0},
+                logs=[(f"Failed to run PROPFIND probe: {stderr.strip()}", "ERROR")],
+                status='failed',
+            )
 
         try:
             body, status = _parse_response(stdout)
         except ValueError as e:
-            self.db_logger.write(str(e), level="ERROR")
-            self.db_metrics.metric('propfind_ok', 0.0)
-            self.set_status('failed')
-            return
+            return CollectResult(
+                metrics={'propfind_ok': 0.0},
+                logs=[(str(e), "ERROR")],
+                status='failed',
+            )
 
-        self.db_metrics.metric('propfind_status', float(status))
-        self.db_metrics.metric('propfind_latency_ms', elapsed_ms)
+        metrics = {'propfind_status': float(status), 'propfind_latency_ms': elapsed_ms}
 
         if status == 207:
-            self.db_metrics.metric('propfind_ok', 1.0)
-            self.db_logger.write(
-                f"PROPFIND OK (207 Multi-Status, {elapsed_ms:.0f}ms)", level="INFO")
-            self.set_status('online')
-            return
+            metrics['propfind_ok'] = 1.0
+            return CollectResult(
+                metrics=metrics,
+                logs=[(f"PROPFIND OK (207 Multi-Status, {elapsed_ms:.0f}ms)", "INFO")],
+                status='online',
+            )
 
-        self.db_metrics.metric('propfind_ok', 0.0)
+        metrics['propfind_ok'] = 0.0
         if status == 401:
-            self.db_logger.write(
-                "PROPFIND rejected (401) — check the vigil htpasswd entry "
-                "is present and matches password_command", level="ERROR")
+            msg = ("PROPFIND rejected (401) — check the vigil htpasswd entry "
+                   "is present and matches password_command")
         elif status == 0:
-            self.db_logger.write(
-                "PROPFIND got no response (connection failed)", level="ERROR")
+            msg = "PROPFIND got no response (connection failed)"
         else:
-            self.db_logger.write(
-                f"PROPFIND returned unexpected status {status}: {body[:200]}",
-                level="ERROR")
-        self.set_status('failed')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+            msg = f"PROPFIND returned unexpected status {status}: {body[:200]}"
+        return CollectResult(metrics=metrics, logs=[(msg, "ERROR")], status='failed')
 
 
 class RadicaleUIPlugin(UIPlugin):

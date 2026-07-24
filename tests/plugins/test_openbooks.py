@@ -1,8 +1,8 @@
 import json
-from unittest.mock import AsyncMock
 
 import pytest
 
+pytestmark = pytest.mark.asyncio
 from vigil.plugins.openbooks import (
     OpenbooksCollectorPlugin,
     _build_probe_script,
@@ -12,6 +12,7 @@ from vigil.plugins.openbooks import (
     _APPEARANCE_SUCCESS,
     _APPEARANCE_DANGER,
 )
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -33,10 +34,6 @@ def _connect_fail():
 @pytest.fixture
 def plugin(make_plugin):
     return make_plugin(OpenbooksCollectorPlugin, BASE_CFG)
-
-
-def _respond(plugin, message):
-    plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, message, ""))
 
 
 def _latest_status(plugin_id: str = "test-openbooks") -> str | None:
@@ -77,32 +74,27 @@ class TestParseResponse:
 
 
 class TestOpenbooksCollection:
-    async def test_connect_success_sets_online(self, plugin):
-        _respond(plugin, _connect_ok())
-        await plugin.on_collect()
+    async def test_connect_success_sets_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _connect_ok(), ""))
         assert _latest_status() == "online"
 
-    async def test_connect_failure_sets_failed(self, plugin):
-        _respond(plugin, _connect_fail())
-        await plugin.on_collect()
+    async def test_connect_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _connect_fail(), ""))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "timed out"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "timed out"))
         assert _latest_status() == "failed"
 
-    async def test_garbage_response_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "not json at all", ""))
-        await plugin.on_collect()
+    async def test_garbage_response_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "not json at all", ""))
         assert _latest_status() == "failed"
 
-    async def test_records_bridge_connected_metric(self, plugin):
-        _respond(plugin, _connect_ok())
-        await plugin.on_collect()
+    async def test_records_bridge_connected_metric(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _connect_ok(), ""))
         assert _latest_metric("bridge_connected") == 1.0
 
 
 class TestOpenbooksActions:
-    async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+    async def test_on_action_always_returns_none(self, plugin):
+        assert plugin.plan_action("anything") is None

@@ -1,6 +1,7 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Union
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _LIST_CMD = "virsh list --all"
@@ -34,8 +35,8 @@ def _parse_row(line: str):
 
 
 class VmsCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.uri = config.get('uri', 'qemu:///system')
         self.expect_running = set(config.get('expect_running', []) or [])
         self.offline_warning = bool(config.get('offline_warning', True))
@@ -43,22 +44,19 @@ class VmsCollectorPlugin(CollectorPlugin):
     def _virsh(self, subcmd: str) -> str:
         return f"virsh -c {_shquote(self.uri)} {subcmd}"
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(f"{self._virsh('list --all')} 2>&1")
+    def commands(self) -> List[Command]:
+        return [Command(f"{self._virsh('list --all')} 2>&1")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         combined = f"{stdout}\n{stderr}".lower()
         if ret != 0 and ('command not found' in combined or 'not found' in combined):
-            self.db_logger.write("virsh not installed on target", level="WARNING")
-            self.set_status('offline')
-            return
+            return CollectResult.failed("virsh not installed on target", level="WARNING", status='offline')
         if ret != 0 and 'failed to connect' in combined:
-            self.db_logger.write(f"libvirt not reachable: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"libvirt not reachable: {stderr}")
         if ret != 0:
-            self.db_logger.write(f"virsh list failed: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"virsh list failed: {stderr}")
 
         running: List[str] = []
         stopped: List[str] = []
@@ -75,34 +73,36 @@ class VmsCollectorPlugin(CollectorPlugin):
                 stopped.append(name)
 
         total = len(running) + len(stopped) + len(benign)
-        self.db_metrics.metric('vms_total', float(total))
-        self.db_metrics.metric('vms_running', float(len(running)))
-        self.db_metrics.metric('vms_stopped', float(len(stopped) + len(benign)))
+        metrics = {
+            'vms_total': float(total),
+            'vms_running': float(len(running)),
+            'vms_stopped': float(len(stopped) + len(benign)),
+        }
 
         if total == 0:
-            self.db_logger.write("No VMs defined", level="INFO")
-            self.set_status('online')
-            return
+            return CollectResult(metrics=metrics, logs=[("No VMs defined", "INFO")], status='online')
 
         running_set = set(running)
         missing = sorted(self.expect_running - running_set)
         if missing:
-            self.db_logger.write(f"Expected VMs not running: {', '.join(missing)}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult(
+                metrics=metrics,
+                logs=[(f"Expected VMs not running: {', '.join(missing)}", "ERROR")],
+                status='failed',
+            )
 
         if self.offline_warning and stopped:
-            self.db_logger.write(
-                f"{len(running)} running, {len(stopped)} in error state: {', '.join(stopped)}",
-                level="WARNING"
+            return CollectResult(
+                metrics=metrics,
+                logs=[(f"{len(running)} running, {len(stopped)} in error state: {', '.join(stopped)}", "WARNING")],
+                status='warning',
             )
-            self.set_status('warning')
-            return
 
-        self.db_logger.write(
-            f"{len(running)} running, {len(benign)} shut off", level="INFO"
+        return CollectResult(
+            metrics=metrics,
+            logs=[(f"{len(running)} running, {len(benign)} shut off", "INFO")],
+            status='online',
         )
-        self.set_status('online')
 
     def get_actions(self) -> List[Dict[str, str]]:
         actions = []
@@ -113,23 +113,25 @@ class VmsCollectorPlugin(CollectorPlugin):
                             'variant': 'danger', 'icon': 'stop'})
         return actions
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
+    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, CollectResult]]:
         if ':' not in action_id:
-            return False
+            return None
         verb, name = action_id.split(':', 1)
         if name not in self.expect_running:
-            self.db_logger.write(f"Refusing to {verb} unlisted VM {name!r}", level="ERROR")
-            return False
+            return CollectResult.failed(f"Refusing to {verb} unlisted VM {name!r}")
         if verb == 'start':
             subcmd = f"start {_shquote(name)}"
         elif verb == 'shutdown':
             subcmd = f"shutdown {_shquote(name)}"
         else:
-            return False
-        status, _, stderr = await self.ssh_controller.execute_action(self._virsh(subcmd))
-        if status != 0:
-            self.db_logger.write(f"{verb} of {name} failed: {stderr}", level="ERROR")
-        return status == 0
+            return None
+        return ActionPlan(self._virsh(subcmd))
+
+    def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
+        if result.exit_code != 0:
+            verb, name = action_id.split(':', 1)
+            return CollectResult.failed(f"{verb} of {name} failed: {result.stderr}")
+        return True
 
 
 class VmsUIPlugin(UIPlugin):

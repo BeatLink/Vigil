@@ -1,5 +1,6 @@
 from typing import Dict, Any, List
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import format_bytes as _format_gb
 
@@ -23,10 +24,10 @@ _DEFAULT_LAYOUT = [
 
 
 class FoldersCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.folders = config.get('folders', []) or []
-        self.timeout = int(config.get('timeout', 60))
+        self.du_timeout = int(config.get('timeout', 60))
 
     def _level_for(self, gb: float, folder: Dict[str, Any]) -> str:
         threshold = folder.get('threshold')
@@ -37,60 +38,63 @@ class FoldersCollectorPlugin(CollectorPlugin):
             return 'warning'
         return 'online'
 
-    async def on_collect(self):
+    def _valid_folders(self) -> List[Dict[str, Any]]:
+        return [f for f in self.folders if f.get('path')]
+
+    def commands(self) -> List[Command]:
+        return [
+            Command(f"timeout {self.du_timeout} du -sb {_shquote(folder['path'])}")
+            for folder in self._valid_folders()
+        ]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
         if not self.folders:
-            self.db_logger.write("No folders configured", level="WARNING")
-            self.set_status('offline')
-            return
+            return CollectResult.failed("No folders configured", level="WARNING", status='offline')
+
+        folders = self._valid_folders()
 
         severity = {'online': 0, 'warning': 1, 'failed': 2}
         worst_level = 'online'
         worst_gb = 0.0
         any_error = False
+        metrics: Dict[str, float] = {}
+        logs: List[tuple] = []
 
-        for folder in self.folders:
-            path = folder.get('path')
-            if not path:
-                continue
-            cmd = f"timeout {self.timeout} du -sb {_shquote(path)}"
-            ret, stdout, stderr = await self.ssh_collector.fetch_output(cmd)
+        for folder, result in zip(folders, results):
+            path = folder['path']
+            ret, stdout, stderr = result.exit_code, result.stdout, result.stderr
 
             if ret == 124:
-                self.db_logger.write(f"{path}: du timed out after {self.timeout}s", level="ERROR")
+                logs.append((f"{path}: du timed out after {self.du_timeout}s", "ERROR"))
                 any_error = True
                 continue
             if ret != 0:
-                self.db_logger.write(f"{path}: du failed: {stderr.strip()}", level="ERROR")
+                logs.append((f"{path}: du failed: {stderr.strip()}", "ERROR"))
                 any_error = True
                 continue
 
             try:
                 size_bytes = int(stdout.split()[0])
             except (ValueError, IndexError):
-                self.db_logger.write(f"{path}: could not parse du output {stdout.strip()!r}", level="ERROR")
+                logs.append((f"{path}: could not parse du output {stdout.strip()!r}", "ERROR"))
                 any_error = True
                 continue
 
             gb = size_bytes / (1024 ** 3)
-            self.db_metrics.metric(f'folder_{_sanitize(path)}_gb', gb)
+            metrics[f'folder_{_sanitize(path)}_gb'] = gb
             level = self._level_for(gb, folder)
             worst_gb = max(worst_gb, gb)
             if severity[level] > severity[worst_level]:
                 worst_level = level
-            self.db_logger.write(
+            logs.append((
                 f"{path}: {_format_gb(gb)}",
-                level="ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-            )
+                "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO",
+            ))
 
-        self.db_metrics.metric('worst_folder_gb', worst_gb)
+        metrics['worst_folder_gb'] = worst_gb
 
-        if any_error:
-            self.set_status('failed')
-        else:
-            self.set_status(worst_level)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        status = 'failed' if any_error else worst_level
+        return CollectResult(metrics=metrics, logs=logs, status=status)
 
 
 class FoldersUIPlugin(UIPlugin):
@@ -116,14 +120,14 @@ class FoldersUIPlugin(UIPlugin):
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['worst_folder_gb'])
+        page = self.ui.page(metric_names=['worst_folder_gb'])
 
         by_key = {_sanitize(f.get('path', '')): f for f in self.folders if f.get('path')}
 
         _gb_or_dash = FORMATTERS['bytes_gb']
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('count_card'):
             info_card('FOLDERS', str(len(self.folders)))
         with layout.cell('worst_card'):
@@ -134,7 +138,7 @@ class FoldersUIPlugin(UIPlugin):
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update():
             folder_gb: Dict[str, float] = {}

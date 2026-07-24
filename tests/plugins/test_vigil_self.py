@@ -22,10 +22,14 @@ BASE_CFG = {
 }
 
 
+def _make_engine(plugins, last_collected=None):
+    return MagicMock(plugins=plugins, _last_collected=last_collected or {})
+
+
 @pytest.fixture
 def plugin(make_plugin):
     p = make_plugin(VigilSelfCollectorPlugin, BASE_CFG)
-    p.engine = MagicMock(plugins=[])
+    p.engine = _make_engine([])
     yield p
     VigilSelfCollectorPlugin.engine = None
 
@@ -46,13 +50,17 @@ def _latest_metric(metric: str, name: str = "test-self") -> float | None:
     return row.value if row else None
 
 
-def _fake_monitor(name: str, interval: float, last_collected: float, children=None):
+def _fake_monitor(monitor_id: str, interval: float, children=None):
     m = MagicMock()
-    m.name = name
+    m.id = monitor_id
+    m.name = monitor_id
     m.interval = interval
-    m._last_collected = last_collected
     m.children = children or []
     return m
+
+
+def _run(plugin, run_local_cycle):
+    return run_local_cycle(plugin)
 
 
 class TestFormatUptime:
@@ -83,108 +91,112 @@ class TestProcReaders:
 
 
 class TestSelfCollection:
-    async def test_healthy_process_sets_online(self, plugin):
-        await plugin.on_collect()
+    async def test_healthy_process_sets_online(self, plugin, run_local_cycle):
+        _run(plugin, run_local_cycle)
         assert _latest_status() == "online"
 
-    async def test_uptime_metric_recorded(self, plugin):
-        await plugin.on_collect()
+    async def test_uptime_metric_recorded(self, plugin, run_local_cycle):
+        _run(plugin, run_local_cycle)
         assert _latest_metric("uptime_seconds") is not None
 
-    async def test_memory_metric_recorded(self, plugin):
-        await plugin.on_collect()
+    async def test_memory_metric_recorded(self, plugin, run_local_cycle):
+        _run(plugin, run_local_cycle)
         assert _latest_metric("memory_mb") > 0
 
-    async def test_memory_above_threshold_sets_failed(self, plugin):
+    async def test_memory_above_threshold_sets_failed(self, plugin, run_local_cycle):
         with patch("vigil.plugins.vigil_self._read_rss_mb", return_value=600.0):
-            await plugin.on_collect()
+            _run(plugin, run_local_cycle)
         assert _latest_status() == "failed"
 
-    async def test_memory_above_warning_sets_warning(self, plugin):
+    async def test_memory_above_warning_sets_warning(self, plugin, run_local_cycle):
         with patch("vigil.plugins.vigil_self._read_rss_mb", return_value=300.0):
-            await plugin.on_collect()
+            _run(plugin, run_local_cycle)
         assert _latest_status() == "warning"
 
-    async def test_unreadable_memory_does_not_fail(self, plugin):
+    async def test_unreadable_memory_does_not_fail(self, plugin, run_local_cycle):
         with patch("vigil.plugins.vigil_self._read_rss_mb", return_value=None):
-            await plugin.on_collect()
+            _run(plugin, run_local_cycle)
         assert _latest_status() == "online"
 
-    async def test_first_collection_records_no_cpu(self, plugin):
-        await plugin.on_collect()
+    async def test_first_collection_records_no_cpu(self, plugin, run_local_cycle):
+        _run(plugin, run_local_cycle)
         assert _latest_metric("cpu_pct") is None
 
-    async def test_second_collection_records_cpu(self, plugin):
-        await plugin.on_collect()
-        await plugin.on_collect()
+    async def test_second_collection_records_cpu(self, plugin, run_local_cycle):
+        _run(plugin, run_local_cycle)
+        _run(plugin, run_local_cycle)
         assert _latest_metric("cpu_pct") is not None
 
 
 class TestCollectionHealth:
-    async def test_counts_only_leaf_monitors(self, plugin):
+    async def test_counts_only_leaf_monitors(self, plugin, run_local_cycle):
         now = time.monotonic()
-        leaf = _fake_monitor("leaf", 60, now)
-        group = _fake_monitor("group", 60, now, children=[leaf])
-        plugin.engine = MagicMock(plugins=[group])
-        await plugin.on_collect()
+        leaf = _fake_monitor("leaf", 60)
+        group = _fake_monitor("group", 60, children=[leaf])
+        plugin.engine = _make_engine([group], {"leaf": now, "group": now})
+        _run(plugin, run_local_cycle)
         assert _latest_metric("monitors_total") == 1.0
 
-    async def test_fresh_monitors_are_not_late(self, plugin):
+    async def test_fresh_monitors_are_not_late(self, plugin, run_local_cycle):
         now = time.monotonic()
-        plugin.engine = MagicMock(plugins=[_fake_monitor("fresh", 60, now)])
-        await plugin.on_collect()
+        m = _fake_monitor("fresh", 60)
+        plugin.engine = _make_engine([m], {"fresh": now})
+        _run(plugin, run_local_cycle)
         assert _latest_metric("monitors_late") == 0.0
         assert _latest_status() == "online"
 
-    async def test_late_monitor_sets_warning(self, plugin):
+    async def test_late_monitor_sets_warning(self, plugin, run_local_cycle):
         stale = time.monotonic() - (60 * 4)
-        plugin.engine = MagicMock(plugins=[_fake_monitor("late", 60, stale)])
-        await plugin.on_collect()
+        m = _fake_monitor("late", 60)
+        plugin.engine = _make_engine([m], {"late": stale})
+        _run(plugin, run_local_cycle)
         assert _latest_metric("monitors_late") == 1.0
         assert _latest_status() == "warning"
 
-    async def test_stalled_monitor_sets_failed(self, plugin):
+    async def test_stalled_monitor_sets_failed(self, plugin, run_local_cycle):
         stale = time.monotonic() - (60 * 12)
-        plugin.engine = MagicMock(plugins=[_fake_monitor("stalled", 60, stale)])
-        await plugin.on_collect()
+        m = _fake_monitor("stalled", 60)
+        plugin.engine = _make_engine([m], {"stalled": stale})
+        _run(plugin, run_local_cycle)
         assert _latest_metric("monitors_stalled") == 1.0
         assert _latest_status() == "failed"
 
-    async def test_never_collected_monitor_is_not_stalled(self, plugin):
-        plugin.engine = MagicMock(plugins=[_fake_monitor("new", 3600, 0.0)])
-        await plugin.on_collect()
+    async def test_never_collected_monitor_is_not_stalled(self, plugin, run_local_cycle):
+        m = _fake_monitor("new", 3600)
+        plugin.engine = _make_engine([m], {"new": 0.0})
+        _run(plugin, run_local_cycle)
         assert _latest_metric("monitors_stalled") == 0.0
         assert _latest_status() == "online"
 
-    async def test_staleness_is_relative_to_each_interval(self, plugin):
+    async def test_staleness_is_relative_to_each_interval(self, plugin, run_local_cycle):
         ten_min_ago = time.monotonic() - 600
-        plugin.engine = MagicMock(plugins=[
-            _fake_monitor("hourly", 3600, ten_min_ago),
-            _fake_monitor("frequent", 30, ten_min_ago),
-        ])
-        await plugin.on_collect()
+        hourly = _fake_monitor("hourly", 3600)
+        frequent = _fake_monitor("frequent", 30)
+        plugin.engine = _make_engine([hourly, frequent], {"hourly": ten_min_ago, "frequent": ten_min_ago})
+        _run(plugin, run_local_cycle)
         assert _latest_metric("monitors_total") == 2.0
         assert _latest_metric("monitors_stalled") == 1.0
 
-    async def test_stalled_outranks_healthy_memory(self, plugin):
+    async def test_stalled_outranks_healthy_memory(self, plugin, run_local_cycle):
         stale = time.monotonic() - (60 * 12)
-        plugin.engine = MagicMock(plugins=[_fake_monitor("stalled", 60, stale)])
+        m = _fake_monitor("stalled", 60)
+        plugin.engine = _make_engine([m], {"stalled": stale})
         with patch("vigil.plugins.vigil_self._read_rss_mb", return_value=10.0):
-            await plugin.on_collect()
+            _run(plugin, run_local_cycle)
         assert _latest_status() == "failed"
 
-    async def test_no_engine_reports_zero_monitors(self, plugin):
+    async def test_no_engine_reports_zero_monitors(self, plugin, run_local_cycle):
         plugin.engine = None
-        await plugin.on_collect()
+        _run(plugin, run_local_cycle)
         assert _latest_metric("monitors_total") == 0.0
         assert _latest_status() == "online"
 
-    async def test_excludes_itself_from_the_count(self, plugin):
-        plugin.engine = MagicMock(plugins=[plugin])
-        await plugin.on_collect()
+    async def test_excludes_itself_from_the_count(self, plugin, run_local_cycle):
+        plugin.engine = _make_engine([plugin])
+        _run(plugin, run_local_cycle)
         assert _latest_metric("monitors_total") == 0.0
 
 
 class TestSelfActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

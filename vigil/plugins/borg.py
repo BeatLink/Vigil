@@ -3,12 +3,12 @@ import re
 import shlex
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult, JobPlan
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.time_utils import parse_duration, format_duration, format_age
-from vigil.collector.controllers.job_controller import JobRejected
 
 
 _DEFAULT_LAYOUT = [
@@ -90,9 +90,9 @@ def _parse_archive_time(value: str) -> int:
 class BorgCollectorPlugin(CollectorPlugin):
     DEFAULT_TIMEOUT = 180.0
 
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         config = {'timeout': self.DEFAULT_TIMEOUT, **config}
-        super().__init__(name, config, db)
+        super().__init__(name, config, db, ssh_pool)
         self.repo = config.get('repo')
         self.max_age = parse_duration(config.get('max_age', '1d'))
         self.passphrase = config.get('passphrase')
@@ -122,11 +122,7 @@ class BorgCollectorPlugin(CollectorPlugin):
         try:
             with open(self.passphrase_file, "r") as f:
                 return f.read().rstrip("\n")
-        except OSError as e:
-            self.db_logger.write(
-                f"Could not read passphrase_file {self.passphrase_file!r}: {e}",
-                level="ERROR",
-            )
+        except OSError:
             return None
 
     def _env_prefix(self, persistent_cache: bool = False) -> List[str]:
@@ -209,68 +205,75 @@ class BorgCollectorPlugin(CollectorPlugin):
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
         return f"{self.archive_prefix}-{stamp}"
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         if not self.repo:
-            self.db_logger.write("No 'repo' configured for borg monitor", level="ERROR")
-            self.set_status('failed')
-            return
+            return []
+        commands = [Command(self._list_command())]
+        if self.collect_stats:
+            commands.append(Command(self._info_command()))
+        return commands
 
-        command = self._list_command()
-        self.db_logger.write(f"Running: {_redact(command)}", level="INFO")
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        if not self.repo:
+            return CollectResult.failed("No 'repo' configured for borg monitor")
 
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(command)
+        list_result = results[0]
+        stdout, stderr, ret = list_result.stdout, list_result.stderr, list_result.exit_code
+        logs = [(f"Running: {_redact(self._list_command())}", "INFO")]
 
         if ret != 0:
             detail = (stderr or stdout).strip()
-            self.db_logger.write(
-                f"borg list failed (exit {ret}): {detail}", level="ERROR"
-            )
+            logs.append((f"borg list failed (exit {ret}): {detail}", "ERROR"))
             hint = _failure_hint(detail)
             if hint:
-                self.db_logger.write(hint, level="ERROR")
-            self.set_status('failed')
-            return
+                logs.append((hint, "ERROR"))
+            return CollectResult(logs=logs, status='failed')
 
         latest_epoch, archive_count = self._newest_archive(stdout)
 
         if latest_epoch is None:
-            self.db_logger.write(
-                "Could not parse borg output — no archive timestamps found",
-                level="ERROR"
-            )
+            logs.append(("Could not parse borg output — no archive timestamps found", "ERROR"))
             snippet = (stdout or stderr or "").strip()[:500]
             if snippet:
-                self.db_logger.write(f"Raw output was: {snippet}", level="ERROR")
-            self.set_status('failed')
-            return
+                logs.append((f"Raw output was: {snippet}", "ERROR"))
+            return CollectResult(logs=logs, status='failed')
 
-        self._log_repo_details(stdout)
-        self._store_archives(stdout)
-
-        self.db_metrics.metric('archive_count', float(archive_count))
-        self.db_metrics.metric('last_backup_epoch', float(latest_epoch))
+        logs.extend(self._repo_detail_logs(stdout))
+        archives, archive_info = self._archive_details(stdout)
+        metrics = {'archive_count': float(archive_count), 'last_backup_epoch': float(latest_epoch)}
+        metadata = {}
+        if archives:
+            metrics['archive_list'] = float(len(archives))
+            metadata['archive_list'] = json.dumps({'archives': archives, 'repository': archive_info})
 
         if archive_count == 0 or latest_epoch == 0:
-            self.db_logger.write("No archives in repository", level="WARNING")
-            self.set_status('failed')
-            return
+            logs.append(("No archives in repository", "WARNING"))
+            return CollectResult(metrics=metrics, metadata=metadata, logs=logs, status='failed')
 
         age = int(time.time()) - latest_epoch
         if age > self.max_age:
-            self.db_logger.write(
+            logs.append((
                 f"Last archive was {format_age(age)}, exceeds max_age of "
                 f"{format_duration(self.max_age)}",
-                level="WARNING"
-            )
-            self.set_status('failed')
+                "WARNING",
+            ))
+            status = 'failed'
         else:
-            self.db_logger.write(
-                f"Last archive {format_age(age)}", level="INFO"
-            )
-            self.set_status('online')
+            logs.append((f"Last archive {format_age(age)}", "INFO"))
+            status = 'online'
 
-        if self.collect_stats:
-            await self._collect_repo_stats()
+        if self.collect_stats and len(results) > 1:
+            stats_metrics, stats_metadata, stats_logs, merged_archives = self._parse_repo_stats(
+                results[1], archives, archive_info,
+            )
+            metrics.update(stats_metrics)
+            metadata.update(stats_metadata)
+            logs.extend(stats_logs)
+            if merged_archives is not None:
+                metrics['archive_list'] = float(len(merged_archives))
+                metadata['archive_list'] = json.dumps({'archives': merged_archives, 'repository': archive_info})
+
+        return CollectResult(metrics=metrics, metadata=metadata, logs=logs, status=status)
 
     def _newest_archive(self, stdout: str) -> (Optional[int], int):
         try:
@@ -331,8 +334,9 @@ class BorgCollectorPlugin(CollectorPlugin):
 
         return archives, info
 
-    def _log_repo_details(self, stdout: str) -> None:
+    def _repo_detail_logs(self, stdout: str) -> List[tuple]:
         archives, info = self._archive_details(stdout)
+        logs = []
 
         if info:
             parts = []
@@ -343,52 +347,54 @@ class BorgCollectorPlugin(CollectorPlugin):
             if info.get('last_modified'):
                 parts.append(f"last_modified={info['last_modified']}")
             if parts:
-                self.db_logger.write("Repository: " + ", ".join(parts), level="INFO")
+                logs.append(("Repository: " + ", ".join(parts), "INFO"))
 
         if not archives:
-            return
+            return logs
 
-        self.db_logger.write(
-            f"{len(archives)} most recent archive(s):", level="INFO"
-        )
+        logs.append((f"{len(archives)} most recent archive(s):", "INFO"))
         for archive in archives:
             age = (
                 format_age(int(time.time()) - archive['epoch'])
                 if archive['epoch'] else "unknown age"
             )
-            self.db_logger.write(
-                f"  {archive['name']} ({age})", level="INFO"
-            )
+            logs.append((f"  {archive['name']} ({age})", "INFO"))
+        return logs
 
-    async def _collect_repo_stats(self) -> None:
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(self._info_command())
+    def _parse_repo_stats(self, info_result: CmdResult, archives: List[Dict[str, Any]],
+                          archive_info: Dict[str, Any]):
+        """Pure: parses `borg info` output. Returns
+        (metrics, metadata, logs, merged_archives_or_None)."""
+        ret, stdout, stderr = info_result.exit_code, info_result.stdout, info_result.stderr
         if ret != 0:
-            self.db_logger.write(
-                f"borg info failed (exit {ret}): {(stderr or stdout).strip()[:200]}",
-                level="WARNING",
-            )
-            return
+            return {}, {}, [(f"borg info failed (exit {ret}): {(stderr or stdout).strip()[:200]}", "WARNING")], None
 
-        self._merge_archive_sizes(stdout)
+        sizes = self._parse_archive_sizes(stdout)
+        merged_archives = None
+        if sizes and archives:
+            merged_archives = [dict(a) for a in archives]
+            for archive in merged_archives:
+                entry = sizes.get(archive.get('name'))
+                if entry:
+                    archive.update(entry)
 
         stats = self._parse_stats(stdout)
         if not stats:
-            self.db_logger.write("Could not parse borg info output", level="WARNING")
-            return
+            return {}, {}, [("Could not parse borg info output", "WARNING")], merged_archives
 
-        for key, value in stats.items():
-            self.db_metrics.metric(key, float(value))
-
+        metrics = {key: float(value) for key, value in stats.items()}
+        logs = []
         original = stats.get('original_size', 0)
         deduplicated = stats.get('deduplicated_size', 0)
         if original and deduplicated:
             ratio = original / deduplicated
-            self.db_metrics.metric('dedup_ratio', ratio)
-            self.db_logger.write(
+            metrics['dedup_ratio'] = ratio
+            logs.append((
                 f"Repo size: {_format_bytes(deduplicated)} on disk for "
                 f"{_format_bytes(original)} of data ({ratio:.1f}x reduction)",
-                level="INFO",
-            )
+                "INFO",
+            ))
+        return metrics, {}, logs, merged_archives
 
     def _parse_stats(self, stdout: str) -> Dict[str, float]:
         try:
@@ -446,29 +452,8 @@ class BorgCollectorPlugin(CollectorPlugin):
                 out[name] = entry
         return out
 
-    def _merge_archive_sizes(self, stdout: str) -> None:
-        sizes = self._parse_archive_sizes(stdout)
-        if not sizes:
-            return
-        archives, info = self.cached_archives()
-        if not archives:
-            return
-        for archive in archives:
-            entry = sizes.get(archive.get('name'))
-            if entry:
-                archive.update(entry)
-        payload = json.dumps({'archives': archives, 'repository': info})
-        self.db_metrics.metric('archive_list', float(len(archives)), metadata=payload)
-
-    def _store_archives(self, stdout: str) -> None:
-        archives, info = self._archive_details(stdout)
-        if not archives:
-            return
-        payload = json.dumps({'archives': archives, 'repository': info})
-        self.db_metrics.metric('archive_list', float(len(archives)), metadata=payload)
-
     def cached_archives(self) -> (List[Dict[str, Any]], Dict[str, Any]):
-        metric = self.latest_metric('archive_list')
+        metric = self.storage.latest_metric('archive_list')
         if metric is None or not metric.metadata:
             return [], {}
         try:
@@ -490,59 +475,39 @@ class BorgCollectorPlugin(CollectorPlugin):
              'variant': 'secondary', 'icon': 'fact_check'},
         ]
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        if action_id in ('run_backup', 'dry_run_backup'):
-            return await self._run_backup(dry_run=(action_id == 'dry_run_backup'))
-        return False
+    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[JobPlan, CollectResult]]:
+        if action_id not in ('run_backup', 'dry_run_backup'):
+            return None
 
-    async def _run_backup(self, dry_run: bool = False) -> bool:
         if not self.repo:
-            self.db_logger.write("Cannot back up: no 'repo' configured", level="ERROR")
-            return False
+            return CollectResult.failed("Cannot back up: no 'repo' configured")
         if not self.source_paths:
-            self.db_logger.write(
-                "Cannot back up: no 'source_paths' configured", level="ERROR"
-            )
-            return False
+            return CollectResult.failed("Cannot back up: no 'source_paths' configured")
 
+        dry_run = action_id == 'dry_run_backup'
         kind = 'dry-run' if dry_run else 'backup'
         command = self._backup_command(dry_run=dry_run)
-        self.db_logger.write(
-            f"Starting {kind}: {_redact(command)}", level="INFO"
-        )
+        return JobPlan(kind=kind, command=command, redacted=_redact(command))
+
+    def job_on_line(self, action_id: str, **kwargs):
+        if action_id not in ('run_backup', 'dry_run_backup'):
+            return None
 
         def on_line(stream: str, text: str) -> None:
-            self._handle_backup_line(self.job_controller.current_job_id(), stream, text)
+            self._handle_backup_line(self.network.current_job_id(), stream, text)
+        return on_line
 
-        try:
-            _job_id, exit_code = await self.job_controller.run_job(
-                kind=kind,
-                command=command,
-                redacted=_redact(command),
-                on_line=on_line,
-            )
-        except JobRejected as e:
-            self.db_logger.write(str(e), level="WARNING")
-            return False
-
-        self.db.set_job_progress(
-            _job_id,
-            f"{kind.capitalize()} completed" if exit_code == 0
-            else f"{kind.capitalize()} finished (exit {exit_code})",
-        )
+    def interpret_job(self, action_id: str, exit_code: int, **kwargs):
+        kind = 'dry-run' if action_id == 'dry_run_backup' else 'backup'
 
         if exit_code == 0:
-            self.db_logger.write(f"{kind.capitalize()} completed successfully", level="INFO")
-            return True
-
+            return CollectResult(logs=[(f"{kind.capitalize()} completed successfully", "INFO")], success=True)
         if exit_code == 1:
-            self.db_logger.write(
-                f"{kind.capitalize()} completed with warnings (exit 1)", level="WARNING"
+            return CollectResult(
+                logs=[(f"{kind.capitalize()} completed with warnings (exit 1)", "WARNING")],
+                success=True,
             )
-            return True
-
-        self.db_logger.write(f"{kind.capitalize()} failed (exit {exit_code})", level="ERROR")
-        return False
+        return CollectResult.failed(f"{kind.capitalize()} failed (exit {exit_code})")
 
     def _handle_backup_line(self, job_id: Optional[int], stream: str, text: str) -> None:
         if job_id is None or not text.startswith('{'):
@@ -575,7 +540,7 @@ class BorgCollectorPlugin(CollectorPlugin):
             level = (record.get('levelname') or 'INFO').upper()
             message = record.get('message') or ''
             if message and level in ('WARNING', 'ERROR', 'CRITICAL'):
-                self.db_logger.write(f"borg: {message}", level=level)
+                self.storage.apply(CollectResult(logs=[(f"borg: {message}", level)]))
 
 
 class BorgUIPlugin(UIPlugin):
@@ -593,10 +558,10 @@ class BorgUIPlugin(UIPlugin):
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
         )
-        page = self.page()
+        page = self.ui.page()
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('repo_card'):
             info_card('REPO', repo or '--')
         with layout.cell('maxage_card'):
@@ -616,13 +581,13 @@ class BorgUIPlugin(UIPlugin):
         with layout.cell('jobs'):
             update_jobs = self._render_jobs_panel(source_paths)
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page, title='EVENTS', limit=100,
-                                                        full_height=True)
+            self.ui.events_table(page, title='EVENTS', limit=100,
+                                 full_height=True)
 
         safe_timer(2.0, update_jobs)
 
         def update():
-            m = self.latest_metric('last_backup_epoch')
+            m = self.storage.latest_metric('last_backup_epoch')
             epoch_val = m.value if m else None
 
             self._update_stat_cards(size_label, dedup_label, count_label)
@@ -653,15 +618,15 @@ class BorgUIPlugin(UIPlugin):
         page.start()
 
     def _update_stat_cards(self, size_label, dedup_label, count_label) -> None:
-        dedup_metric = self.latest_metric('deduplicated_size')
+        dedup_metric = self.storage.latest_metric('deduplicated_size')
         size_label.text = (
             _format_bytes(dedup_metric.value) if dedup_metric else '--'
         )
 
-        ratio_metric = self.latest_metric('dedup_ratio')
+        ratio_metric = self.storage.latest_metric('dedup_ratio')
         dedup_label.text = f"{ratio_metric.value:.1f}x" if ratio_metric else '--'
 
-        count_metric = self.latest_metric('archive_count')
+        count_metric = self.storage.latest_metric('archive_count')
         count_label.text = str(int(count_metric.value)) if count_metric else '--'
 
     def _render_archives_table(self):
@@ -711,7 +676,7 @@ class BorgUIPlugin(UIPlugin):
         table.update()
 
     def cached_archives(self) -> (List[Dict[str, Any]], Dict[str, Any]):
-        metric = self.latest_metric('archive_list')
+        metric = self.storage.latest_metric('archive_list')
         if metric is None or not metric.metadata:
             return [], {}
         try:
@@ -754,12 +719,12 @@ class BorgUIPlugin(UIPlugin):
             ).classes('w-full border-none')
 
             def update():
-                running = self.job_controller.is_running()
+                running = self.network.is_running()
                 run_btn.set_enabled(bool(source_paths) and not running)
                 cancel_btn.set_visibility(running)
 
                 if running:
-                    job = self.db.get_job(self.job_controller.current_job_id())
+                    job = self.db.get_job(self.network.current_job_id())
                     progress = (job or {}).get('progress') or 'Starting...'
                     progress_label.text = progress
                     progress_label.style(f"color: {STATUS_COLORS['online']}")
@@ -777,7 +742,7 @@ class BorgUIPlugin(UIPlugin):
                         'state': j['state'],
                         'duration': format_duration(j['duration']),
                     }
-                    for j in self.job_controller.recent(limit=10)
+                    for j in self.network.recent(limit=10)
                 ]
                 jobs_table.update()
 
@@ -792,7 +757,7 @@ class BorgUIPlugin(UIPlugin):
         if not source_paths:
             ui.notify('No source_paths configured for this monitor', type='negative')
             return
-        if self.job_controller.is_running():
+        if self.network.is_running():
             ui.notify('A job is already running', type='warning')
             return
 
@@ -805,7 +770,7 @@ class BorgUIPlugin(UIPlugin):
 
     async def _do_cancel_backup(self) -> None:
         from nicegui import ui
-        if await self.job_controller.cancel():
+        if await self.network.cancel():
             ui.notify('Cancellation requested', type='warning')
         else:
             ui.notify('No job is running', type='info')

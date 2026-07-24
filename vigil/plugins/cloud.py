@@ -1,6 +1,7 @@
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _MD = "169.254.169.254"
@@ -42,8 +43,8 @@ _DEFAULT_LAYOUT = [
 
 
 class CloudCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.provider = str(config.get('provider', 'auto')).lower()
 
     def _cmds(self):
@@ -52,42 +53,38 @@ class CloudCollectorPlugin(CollectorPlugin):
             return [(self.provider, table[self.provider])]
         return list(table.items())
 
-    async def on_collect(self):
-        for name, cmd in self._cmds():
-            ret, stdout, stderr = await self.ssh_collector.fetch_output(cmd)
-            if ret == 7 or (ret != 0 and not stdout.strip()):
+    def commands(self) -> List[Command]:
+        return [Command(cmd) for _, cmd in self._cmds()]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        import json
+
+        for result in results:
+            if result.exit_code == 7 or (result.exit_code != 0 and not result.stdout.strip()):
                 continue
 
-            fields = _parse_kv(stdout)
+            fields = _parse_kv(result.stdout)
             if not fields.get('provider'):
                 continue
 
-            for key, value in fields.items():
-                if value:
-                    self.db_logger.write(f"{key}={value}", level="INFO")
-            self.db_metrics.metric('on_cloud', 1.0)
-            self._store_fields(fields)
-            self.db_logger.write(
+            logs = [(f"{key}={value}", "INFO") for key, value in fields.items() if value]
+            logs.append((
                 f"Detected {fields.get('provider')} instance "
                 f"{fields.get('instance_id', '?')} ({fields.get('instance_type', '?')})",
-                level="INFO"
+                "INFO",
+            ))
+            return CollectResult(
+                metrics={'on_cloud': 1.0},
+                logs=logs,
+                status='online',
+                settings={f"cloud:{self.id}": json.dumps(fields)},
             )
-            self.set_status('online')
-            return
 
-        self.db_metrics.metric('on_cloud', 0.0)
-        self.db_logger.write("No cloud metadata endpoint responded — not a recognized cloud host", level="INFO")
-        self.set_status('offline')
-
-    def _store_fields(self, fields: Dict[str, str]):
-        import json
-        try:
-            self.db.set_setting(f"cloud:{self.id}", json.dumps(fields))
-        except Exception:
-            pass
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(
+            metrics={'on_cloud': 0.0},
+            logs=[("No cloud metadata endpoint responded — not a recognized cloud host", "INFO")],
+            status='offline',
+        )
 
 
 class CloudUIPlugin(UIPlugin):
@@ -98,10 +95,10 @@ class CloudUIPlugin(UIPlugin):
         from vigil.web.ui.components import info_card
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page()
+        page = self.ui.page()
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('provider_card'):
             provider_label = info_card('PROVIDER', '--')
         with layout.cell('type_card'):
@@ -111,10 +108,10 @@ class CloudUIPlugin(UIPlugin):
                 'display: flex; flex-wrap: wrap; gap: 0.75rem; width: 100%'
             )
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update():
-            raw = self.db.get_setting(f"cloud:{self.id}")
+            raw = self.storage.get_setting(f"cloud:{self.id}")
             if not raw:
                 provider_label.text = 'NONE'
                 return

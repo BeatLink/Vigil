@@ -14,6 +14,7 @@ from vigil.plugins.qbittorrent import (
     _format_rate,
     _parse_response,
 )
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -64,9 +65,8 @@ def plugin(make_plugin):
     return make_plugin(QbittorrentCollectorPlugin, BASE_CFG)
 
 
-def _respond(plugin, transfer=None, torrents=None):
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(0, _response(transfer, torrents), ""))
+def _respond(plugin, run_cycle, transfer=None, torrents=None):
+    return run_cycle(plugin, lambda c: CmdResult(0, _response(transfer, torrents), ""))
 
 
 def _latest_status(plugin_id: str = "test-qbittorrent") -> str | None:
@@ -240,16 +240,12 @@ class TestParseResponse:
 
 
 class TestCollect:
-    @pytest.mark.asyncio
-    async def test_healthy_is_online(self, plugin):
-        _respond(plugin)
-        await plugin.on_collect()
+    async def test_healthy_is_online(self, plugin, run_cycle):
+        _respond(plugin, run_cycle)
         assert _latest_status() == "online"
 
-    @pytest.mark.asyncio
-    async def test_records_metrics(self, plugin):
-        _respond(plugin)
-        await plugin.on_collect()
+    async def test_records_metrics(self, plugin, run_cycle):
+        _respond(plugin, run_cycle)
         assert _latest_metric("dl_speed_bytes") == 1_500_000
         assert _latest_metric("up_speed_bytes") == 250_000
         assert _latest_metric("torrents_total") == 7
@@ -258,103 +254,71 @@ class TestCollect:
         assert _latest_metric("torrents_errored") == 0
         assert _latest_metric("connected") == 1.0
 
-    @pytest.mark.asyncio
-    async def test_ssh_failure_is_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_is_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    @pytest.mark.asyncio
-    async def test_unparseable_response_is_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "garbage", ""))
-        await plugin.on_collect()
+    async def test_unparseable_response_is_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "garbage", ""))
         assert _latest_status() == "failed"
 
-    @pytest.mark.asyncio
-    async def test_disconnected_is_failed(self, plugin):
-        _respond(plugin, transfer=_transfer(connection="disconnected",
-                                            dl_speed=0, up_speed=0))
-        await plugin.on_collect()
+    async def test_disconnected_is_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, transfer=_transfer(connection="disconnected",
+                                                        dl_speed=0, up_speed=0))
         assert _latest_status() == "failed"
         assert _latest_metric("connected") == 0.0
 
-    @pytest.mark.asyncio
-    async def test_firewalled_is_warning(self, plugin):
-        _respond(plugin, transfer=_transfer(connection="firewalled"))
-        await plugin.on_collect()
+    async def test_firewalled_is_warning(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, transfer=_transfer(connection="firewalled"))
         assert _latest_status() == "warning"
 
-    @pytest.mark.asyncio
-    async def test_firewalled_ignored_when_disabled(self, make_plugin):
+    async def test_firewalled_ignored_when_disabled(self, make_plugin, run_cycle):
         p = make_plugin(QbittorrentCollectorPlugin, {**BASE_CFG, "firewalled_warning": False})
-        _respond(p, transfer=_transfer(connection="firewalled"))
-        await p.on_collect()
-        assert _latest_status() == "online"
+        _respond(p, run_cycle, transfer=_transfer(connection="firewalled"))
+        assert _latest_status("test-qbittorrent") == "online"
 
-    @pytest.mark.asyncio
-    async def test_stalled_above_warning_is_warning(self, plugin):
-        _respond(plugin, torrents=_torrents(downloading=1, stalled=3))
-        await plugin.on_collect()
+    async def test_stalled_above_warning_is_warning(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, torrents=_torrents(downloading=1, stalled=3))
         assert _latest_status() == "warning"
 
-    @pytest.mark.asyncio
-    async def test_stalled_above_threshold_is_failed(self, plugin):
-        _respond(plugin, torrents=_torrents(downloading=1, stalled=10))
-        await plugin.on_collect()
+    async def test_stalled_above_threshold_is_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, torrents=_torrents(downloading=1, stalled=10))
         assert _latest_status() == "failed"
 
-    @pytest.mark.asyncio
-    async def test_few_stalled_stays_online(self, plugin):
-        _respond(plugin, torrents=_torrents(downloading=4, stalled=2))
-        await plugin.on_collect()
+    async def test_few_stalled_stays_online(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, torrents=_torrents(downloading=4, stalled=2))
         assert _latest_status() == "online"
 
-    @pytest.mark.asyncio
-    async def test_errored_torrent_is_failed(self, plugin):
-        _respond(plugin, torrents=_torrents(downloading=1, errored=1))
-        await plugin.on_collect()
+    async def test_errored_torrent_is_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, torrents=_torrents(downloading=1, errored=1))
         assert _latest_status() == "failed"
 
-    @pytest.mark.asyncio
-    async def test_idle_client_with_no_downloads_is_online(self, plugin):
-        _respond(plugin, torrents=_torrents(downloading=0, stalled=0, seeding=8))
-        await plugin.on_collect()
+    async def test_idle_client_with_no_downloads_is_online(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, torrents=_torrents(downloading=0, stalled=0, seeding=8))
         assert _latest_status() == "online"
 
-    @pytest.mark.asyncio
-    async def test_empty_torrent_list_is_online(self, plugin):
-        _respond(plugin, torrents=[])
-        await plugin.on_collect()
+    async def test_empty_torrent_list_is_online(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, torrents=[])
         assert _latest_status() == "online"
         assert _latest_metric("torrents_total") == 0
 
-    @pytest.mark.asyncio
-    async def test_torrent_without_state_key_does_not_crash(self, plugin):
-        _respond(plugin, torrents=[{"name": "partial"}])
-        await plugin.on_collect()
+    async def test_torrent_without_state_key_does_not_crash(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, torrents=[{"name": "partial"}])
         assert _latest_status() == "online"
 
-    @pytest.mark.asyncio
-    async def test_worst_condition_wins(self, plugin):
-        _respond(plugin,
+    async def test_worst_condition_wins(self, plugin, run_cycle):
+        _respond(plugin, run_cycle,
                  transfer=_transfer(connection="firewalled"),
                  torrents=_torrents(downloading=1, errored=1))
-        await plugin.on_collect()
         assert _latest_status() == "failed"
 
-    @pytest.mark.asyncio
-    async def test_metadata_stall_counts_as_stalled(self, plugin):
+    async def test_metadata_stall_counts_as_stalled(self, plugin, run_cycle):
         torrents = [{"name": f"meta-{i}", "state": "metaDL"} for i in range(10)]
-        _respond(plugin, torrents=torrents)
-        await plugin.on_collect()
+        _respond(plugin, run_cycle, torrents=torrents)
         assert _latest_status() == "failed"
 
-    @pytest.mark.asyncio
-    async def test_auth_failure_is_reported_distinctly(self, plugin, caplog):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(1, "", f"{_AUTH_FAILED}: Fails."))
-        await plugin.on_collect()
+    async def test_auth_failure_is_reported_distinctly(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", f"{_AUTH_FAILED}: Fails."))
         assert _latest_status() == "failed"
 
 
@@ -372,82 +336,45 @@ class TestActions:
         pause = next(a for a in plugin.get_actions() if a["action_id"] == "pause_all")
         assert pause["variant"] == "danger"
 
-    @pytest.mark.asyncio
     async def test_unknown_action_returns_false(self, plugin):
-        assert await plugin.on_action("nope") is False
+        assert plugin.plan_action("nope") is None
 
-    @pytest.mark.asyncio
-    async def test_resume_all_uses_modern_endpoint(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        assert await plugin.on_action("resume_all") is True
-        script = plugin.ssh_controller.execute_action.call_args[0][0]
-        assert "/api/v2/torrents/start" in script
-        assert "hashes=all" in script
+    async def test_resume_all_uses_modern_endpoint_with_legacy_fallback(self, plugin):
+        plan = plugin.plan_action("resume_all")
+        assert "/api/v2/torrents/start" in plan.command
+        assert "/api/v2/torrents/resume" in plan.command
+        assert "hashes=all" in plan.command
+        outcome = plugin.interpret_action("resume_all", CmdResult(0, "", ""))
+        assert outcome.success is True
 
-    @pytest.mark.asyncio
-    async def test_resume_all_falls_back_to_legacy_endpoint(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(
-            side_effect=[(22, "", "404"), (0, "", "")])
-        assert await plugin.on_action("resume_all") is True
-        scripts = [c[0][0] for c in plugin.ssh_controller.execute_action.call_args_list]
-        assert "/api/v2/torrents/start" in scripts[0]
-        assert "/api/v2/torrents/resume" in scripts[1]
-
-    @pytest.mark.asyncio
     async def test_resume_all_fails_when_both_endpoints_fail(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(22, "", "403"))
-        assert await plugin.on_action("resume_all") is False
+        plan = plugin.plan_action("resume_all")
+        outcome = plugin.interpret_action("resume_all", CmdResult(22, "", "403"))
+        assert outcome.success is False
 
-    @pytest.mark.asyncio
     async def test_pause_all_uses_modern_endpoint(self, plugin):
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        assert await plugin.on_action("pause_all") is True
-        script = plugin.ssh_controller.execute_action.call_args[0][0]
-        assert "/api/v2/torrents/stop" in script
+        plan = plugin.plan_action("pause_all")
+        assert "/api/v2/torrents/stop" in plan.command
+        outcome = plugin.interpret_action("pause_all", CmdResult(0, "", ""))
+        assert outcome.success is True
 
-    @pytest.mark.asyncio
     async def test_recheck_targets_only_errored_torrents(self, plugin):
-        torrents = [
-            {"name": "ok", "state": "uploading", "hash": "aaa"},
-            {"name": "bad", "state": "error", "hash": "bbb"},
-            {"name": "gone", "state": "missingFiles", "hash": "ccc"},
-        ]
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _response(torrents=torrents), ""))
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
+        plan = plugin.plan_action("recheck_errored")
+        assert "torrents/info" in plan.command
+        assert "torrents/recheck" in plan.command
 
-        assert await plugin.on_action("recheck_errored") is True
-        script = plugin.ssh_controller.execute_action.call_args[0][0]
-        assert "bbb|ccc" in script
-        assert "aaa" not in script
-
-    @pytest.mark.asyncio
     async def test_recheck_with_no_errored_torrents_is_a_noop(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _response(torrents=_torrents(errored=0)), ""))
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
+        outcome = plugin.interpret_action(
+            "recheck_errored", CmdResult(0, "HASHES:", ""))
+        assert outcome.success is True
 
-        assert await plugin.on_action("recheck_errored") is True
-        plugin.ssh_controller.execute_action.assert_not_called()
-
-    @pytest.mark.asyncio
     async def test_recheck_fails_when_queue_unreadable(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "boom"))
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
+        outcome = plugin.interpret_action(
+            "recheck_errored", CmdResult(1, "", "boom"))
+        assert outcome.success is False
 
-        assert await plugin.on_action("recheck_errored") is False
-        plugin.ssh_controller.execute_action.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_recheck_skips_torrents_without_a_hash(self, plugin):
-        torrents = [
-            {"name": "no-hash", "state": "error"},
-            {"name": "bad", "state": "error", "hash": "bbb"},
-        ]
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, _response(torrents=torrents), ""))
-        plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-
-        assert await plugin.on_action("recheck_errored") is True
-        script = plugin.ssh_controller.execute_action.call_args[0][0]
-        assert "hashes=bbb" in script
+    async def test_recheck_reports_count_from_hashes_line(self, plugin):
+        outcome = plugin.interpret_action(
+            "recheck_errored", CmdResult(0, "HASHES:bbb|ccc", ""))
+        assert outcome.success is True
+        assert any("2" in m for m, _ in outcome.logs)

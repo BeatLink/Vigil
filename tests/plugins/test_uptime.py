@@ -43,69 +43,69 @@ def _latest_metric(plugin_name: str, metric: str):
 
 
 class TestUptimeCollection:
-    async def test_successful_ping_sets_online(self, plugin):
+    async def test_successful_ping_sets_online(self, plugin, run_local_cycle_async):
         stdout = b"64 bytes from example.host: icmp_seq=1 ttl=64 time=5.2 ms\n"
         proc = _mock_process(0, stdout)
         with patch("vigil.plugins.uptime.asyncio.create_subprocess_exec",
                    AsyncMock(return_value=proc)):
-            await plugin.on_collect()
+            await run_local_cycle_async(plugin)
         assert _latest_status("test-uptime") == "online"
 
-    async def test_successful_ping_records_latency(self, plugin):
+    async def test_successful_ping_records_latency(self, plugin, run_local_cycle_async):
         stdout = b"64 bytes from 1.2.3.4: icmp_seq=1 ttl=64 time=12.5 ms\n"
         proc = _mock_process(0, stdout)
         with patch("vigil.plugins.uptime.asyncio.create_subprocess_exec",
                    AsyncMock(return_value=proc)):
-            await plugin.on_collect()
+            await run_local_cycle_async(plugin)
         latency = _latest_metric("test-uptime", "latency_ms")
         assert latency == pytest.approx(12.5)
 
-    async def test_successful_ping_records_up_metric(self, plugin):
+    async def test_successful_ping_records_up_metric(self, plugin, run_local_cycle_async):
         stdout = b"1 packets transmitted, 1 received, time=1.0 ms\n"
         proc = _mock_process(0, stdout)
         with patch("vigil.plugins.uptime.asyncio.create_subprocess_exec",
                    AsyncMock(return_value=proc)):
-            await plugin.on_collect()
+            await run_local_cycle_async(plugin)
         assert _latest_metric("test-uptime", "up") == pytest.approx(1.0)
 
-    async def test_failed_ping_sets_failed(self, plugin):
+    async def test_failed_ping_sets_failed(self, plugin, run_local_cycle_async):
         proc = _mock_process(1, b"", b"Request timed out")
         with patch("vigil.plugins.uptime.asyncio.create_subprocess_exec",
                    AsyncMock(return_value=proc)):
-            await plugin.on_collect()
+            await run_local_cycle_async(plugin)
         assert _latest_status("test-uptime") == "failed"
 
-    async def test_failed_ping_records_up_zero(self, plugin):
+    async def test_failed_ping_records_up_zero(self, plugin, run_local_cycle_async):
         proc = _mock_process(1, b"", b"Network unreachable")
         with patch("vigil.plugins.uptime.asyncio.create_subprocess_exec",
                    AsyncMock(return_value=proc)):
-            await plugin.on_collect()
+            await run_local_cycle_async(plugin)
         assert _latest_metric("test-uptime", "up") == pytest.approx(0.0)
 
-    async def test_subprocess_exception_sets_failed(self, plugin):
+    async def test_subprocess_exception_sets_failed(self, plugin, run_local_cycle_async):
         with patch("vigil.plugins.uptime.asyncio.create_subprocess_exec",
                    side_effect=OSError("ping not found")):
-            await plugin.on_collect()
+            await run_local_cycle_async(plugin)
         assert _latest_status("test-uptime") == "failed"
 
-    async def test_no_latency_recorded_on_failure(self, plugin):
+    async def test_no_latency_recorded_on_failure(self, plugin, run_local_cycle_async):
         proc = _mock_process(1, b"", b"")
         with patch("vigil.plugins.uptime.asyncio.create_subprocess_exec",
                    AsyncMock(return_value=proc)):
-            await plugin.on_collect()
+            await run_local_cycle_async(plugin)
         assert _latest_metric("test-uptime", "latency_ms") is None
 
-    async def test_missing_latency_in_output_not_recorded(self, plugin):
+    async def test_missing_latency_in_output_not_recorded(self, plugin, run_local_cycle_async):
         stdout = b"1 packets transmitted, 1 received\n"
         proc = _mock_process(0, stdout)
         with patch("vigil.plugins.uptime.asyncio.create_subprocess_exec",
                    AsyncMock(return_value=proc)):
-            await plugin.on_collect()
+            await run_local_cycle_async(plugin)
         assert _latest_status("test-uptime") == "online"
         assert _latest_metric("test-uptime", "latency_ms") is None
 
 
 class TestUptimeActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("restart") is False
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("restart") is None
+        assert plugin.plan_action("anything") is None

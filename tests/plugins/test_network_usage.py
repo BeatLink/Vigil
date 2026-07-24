@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.network_usage import NetworkUsageCollectorPlugin, _parse_net_dev, _auto_detect_interface, _format_rate
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -122,92 +122,81 @@ class TestFormatRate:
 
 
 class TestNetworkUsageCollection:
-    async def test_normal_collection_sets_online(self, plugin):
+    async def test_normal_collection_sets_online(self, plugin, run_cycle):
         stdout = _two_snapshots(
             {"lo": (0, 0), "eth0": (1_000_000, 500_000)},
             {"lo": (0, 0), "eth0": (1_001_024, 500_512)},
         )
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "online"
 
-    async def test_rx_metric_recorded(self, plugin):
+    async def test_rx_metric_recorded(self, plugin, run_cycle):
         stdout = _two_snapshots(
             {"eth0": (0, 0)},
             {"eth0": (1024, 0)},
         )
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_metric("test-net", "rx_kbps") == pytest.approx(1.0)
 
-    async def test_tx_metric_recorded(self, plugin):
+    async def test_tx_metric_recorded(self, plugin, run_cycle):
         stdout = _two_snapshots(
             {"eth0": (0, 0)},
             {"eth0": (0, 2048)},
         )
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_metric("test-net", "tx_kbps") == pytest.approx(2.0)
 
-    async def test_auto_detects_busiest_interface(self, plugin):
+    async def test_auto_detects_busiest_interface(self, plugin, run_cycle):
         stdout = _two_snapshots(
             {"lo": (0, 0), "eth0": (1_000_000, 0), "wlan0": (100, 0)},
             {"lo": (0, 0), "eth0": (1_001_024, 0), "wlan0": (200, 0)},
         )
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert plugin._active_interface == "eth0"
         assert _latest_status() == "online"
 
-    async def test_explicit_interface_overrides_auto_detect(self, explicit_plugin):
+    async def test_explicit_interface_overrides_auto_detect(self, explicit_plugin, run_cycle):
         stdout = _two_snapshots(
             {"eth0": (0, 0), "wlan0": (9_999_999, 0)},
             {"eth0": (512, 0), "wlan0": (9_999_999, 0)},
         )
-        explicit_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await explicit_plugin.on_collect()
+        run_cycle(explicit_plugin, lambda c: CmdResult(0, stdout, ""))
         assert explicit_plugin._active_interface == "eth0"
         assert _latest_metric("test-net-explicit", "rx_kbps") == pytest.approx(0.5)
 
-    async def test_counter_reset_clamped_to_zero(self, plugin):
+    async def test_counter_reset_clamped_to_zero(self, plugin, run_cycle):
         stdout = _two_snapshots(
             {"eth0": (5000, 0)},
             {"eth0": (100, 0)},
         )
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_metric("test-net", "rx_kbps") == pytest.approx(0.0)
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(-1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_malformed_output_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "garbage output", ""))
-        await plugin.on_collect()
+    async def test_malformed_output_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "garbage output", ""))
         assert _latest_status() == "failed"
 
-    async def test_missing_interface_sets_failed(self, explicit_plugin):
+    async def test_missing_interface_sets_failed(self, explicit_plugin, run_cycle):
         stdout = _two_snapshots({"wlan0": (0, 0)}, {"wlan0": (1024, 0)})
-        explicit_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await explicit_plugin.on_collect()
+        run_cycle(explicit_plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status("test-net-explicit") == "failed"
 
-    async def test_no_usable_interface_sets_failed(self, plugin):
+    async def test_no_usable_interface_sets_failed(self, plugin, run_cycle):
         stdout = _two_snapshots({"lo": (0, 0), "veth0": (0, 0)}, {"lo": (0, 0), "veth0": (0, 0)})
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "failed"
 
-    async def test_idle_interface_records_zero_rates(self, plugin):
+    async def test_idle_interface_records_zero_rates(self, plugin, run_cycle):
         stdout = _two_snapshots({"eth0": (1000, 2000)}, {"eth0": (1000, 2000)})
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, stdout, ""))
         assert _latest_metric("test-net", "rx_kbps") == pytest.approx(0.0)
         assert _latest_metric("test-net", "tx_kbps") == pytest.approx(0.0)
 
 
 class TestNetworkUsageActions:
-    async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+    async def test_on_action_always_returns_none(self, plugin):
+        assert plugin.plan_action("anything") is None

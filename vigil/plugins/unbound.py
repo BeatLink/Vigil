@@ -1,8 +1,9 @@
 import re
 import shlex
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
@@ -58,8 +59,8 @@ _DEFAULT_LAYOUT = [
 
 
 class UnboundCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.control_cmd = config.get('control_cmd', 'unbound-control stats_noreset')
         self.query_host = config.get('query_host', '127.0.0.1')
         self.query_port = int(config.get('query_port', 53))
@@ -69,23 +70,22 @@ class UnboundCollectorPlugin(CollectorPlugin):
         self.servfail_threshold = float(config.get('servfail_threshold', 20))
         self.min_queries = int(config.get('min_queries', 20))
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         script = _build_probe_script(
             self.control_cmd, self.query_host, self.query_port,
             self.query_domain, self.query_timeout,
         )
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
+        return [Command(script)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to query Unbound: {stderr.strip()}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to query Unbound: {stderr.strip()}")
 
         try:
             stats_raw, query_output = _split_response(stdout)
         except ValueError as e:
-            self.db_logger.write(str(e), level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(str(e))
 
         stats = _parse_stats(stats_raw)
         resolved = _resolved_ok(query_output)
@@ -100,12 +100,14 @@ class UnboundCollectorPlugin(CollectorPlugin):
         cache_total = cache_hits + cache_miss
         cache_rate = (100.0 * cache_hits / cache_total) if cache_total else 0.0
 
-        self.db_metrics.metric('resolved_ok', 1.0 if resolved else 0.0)
-        self.db_metrics.metric('queries_total', total_answered)
-        self.db_metrics.metric('servfail_total', servfail)
-        self.db_metrics.metric('servfail_rate_pct', servfail_rate)
-        self.db_metrics.metric('cache_hit_rate_pct', cache_rate)
-        self.db_metrics.metric('uptime_seconds', uptime)
+        metrics = {
+            'resolved_ok': 1.0 if resolved else 0.0,
+            'queries_total': total_answered,
+            'servfail_total': servfail,
+            'servfail_rate_pct': servfail_rate,
+            'cache_hit_rate_pct': cache_rate,
+            'uptime_seconds': uptime,
+        }
 
         problems = []
         level = 'online'
@@ -140,11 +142,7 @@ class UnboundCollectorPlugin(CollectorPlugin):
             parts.append("| " + "; ".join(problems))
 
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-        self.db_logger.write(' | '.join(parts), level=log_level)
-        self.set_status(level)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
 
 
 class UnboundUIPlugin(UIPlugin):

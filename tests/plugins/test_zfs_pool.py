@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.zfs_pool import ZFSPoolCollectorPlugin
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -37,61 +38,37 @@ def _latest_usage() -> float | None:
 
 
 class TestZFSPoolCollection:
-    async def test_below_threshold_is_online(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "data-pool\t50%", "")
-        )
-        await plugin.on_collect()
+    async def test_below_threshold_is_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "data-pool\t50%", ""))
         assert _latest_status() == "online"
 
-    async def test_usage_metric_recorded(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "data-pool\t50%", "")
-        )
-        await plugin.on_collect()
+    async def test_usage_metric_recorded(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "data-pool\t50%", ""))
         assert _latest_usage() == pytest.approx(50.0)
 
-    async def test_at_threshold_is_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "data-pool\t90%", "")
-        )
-        await plugin.on_collect()
+    async def test_at_threshold_is_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "data-pool\t90%", ""))
         assert _latest_status() == "failed"
 
-    async def test_above_threshold_is_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "data-pool\t95%", "")
-        )
-        await plugin.on_collect()
+    async def test_above_threshold_is_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "data-pool\t95%", ""))
         assert _latest_status() == "failed"
 
-    async def test_high_usage_metric_recorded(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "data-pool\t95%", "")
-        )
-        await plugin.on_collect()
+    async def test_high_usage_metric_recorded(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "data-pool\t95%", ""))
         assert _latest_usage() == pytest.approx(95.0)
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(-1, "", "connection timed out")
-        )
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "connection timed out"))
         assert _latest_status() == "failed"
 
-    async def test_malformed_output_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "unexpected output", "")
-        )
-        await plugin.on_collect()
+    async def test_malformed_output_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "unexpected output", ""))
         assert _latest_status() == "failed"
 
-    async def test_custom_threshold_respected(self, make_plugin):
+    async def test_custom_threshold_respected(self, make_plugin, run_cycle):
         plugin = make_plugin(ZFSPoolCollectorPlugin, {**POOL_CFG, "id": "pool-75", "threshold": 75})
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, "data-pool\t80%", "")
-        )
-        await plugin.on_collect()
+        run_cycle(plugin, lambda c: CmdResult(0, "data-pool\t80%", ""))
         with db.connection_context():
             row = StatusHistory.select().where(
                 StatusHistory.collector_id == "pool-75"
@@ -99,4 +76,4 @@ class TestZFSPoolCollection:
         assert row.state == "failed"
 
     async def test_on_action_always_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

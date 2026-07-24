@@ -2,9 +2,10 @@ import asyncio
 import platform
 import re
 import logging
-from typing import Dict, Any
+from typing import Any, Callable, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
@@ -15,48 +16,67 @@ _DEFAULT_LAYOUT = [
 
 
 class UptimeCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
 
+    def commands(self) -> List[Command]:
+        return []
 
-    async def on_collect(self):
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        return CollectResult()
+
+    def local_call(self) -> Optional[Callable[[], Any]]:
         host = self.target
 
-        is_windows = platform.system().lower() == 'windows'
-        cmd = ['ping', '-n' if is_windows else '-c', '1', '-W', '2', host]
+        async def _ping():
+            is_windows = platform.system().lower() == 'windows'
+            cmd = ['ping', '-n' if is_windows else '-c', '1', '-W', '2', host]
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout, stderr = await process.communicate()
+                return {
+                    'exception': None,
+                    'returncode': process.returncode,
+                    'stdout': stdout.decode(),
+                    'stderr': stderr.decode(),
+                }
+            except Exception as e:
+                return {'exception': str(e), 'returncode': None, 'stdout': '', 'stderr': ''}
 
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+        return _ping
+
+    def parse_local(self, result: Any) -> CollectResult:
+        host = self.target
+
+        if result['exception'] is not None:
+            logging.error(f"Uptime plugin error for {host}: {result['exception']}")
+            return CollectResult(
+                metrics={'up': 0.0},
+                logs=[(f"Ping execution failed: {result['exception']}", "ERROR")],
+                status='failed',
             )
-            stdout, stderr = await process.communicate()
 
-            if process.returncode == 0:
-                output = stdout.decode()
-                self.db_logger.write(f"Host {host} is reachable.", level="INFO")
-                self.db_metrics.metric("up", 1.0)
-                self.set_status('online')
+        if result['returncode'] == 0:
+            metrics = {'up': 1.0}
+            latency_match = re.search(r'time=([\d.]+)\s*ms', result['stdout'])
+            if latency_match:
+                metrics['latency_ms'] = float(latency_match.group(1))
+            return CollectResult(
+                metrics=metrics,
+                logs=[(f"Host {host} is reachable.", "INFO")],
+                status='online',
+            )
 
-                latency_match = re.search(r'time=([\d.]+)\s*ms', output)
-                if latency_match:
-                    latency = float(latency_match.group(1))
-                    self.db_metrics.metric("latency_ms", latency)
-            else:
-                err_msg = stderr.decode().strip() or "Request timed out"
-                self.db_logger.write(f"Host {host} is unreachable: {err_msg}", level="ERROR")
-                self.db_metrics.metric("up", 0.0)
-                self.set_status('failed')
-
-        except Exception as e:
-            logging.error(f"Uptime plugin error for {host}: {e}")
-            self.db_logger.write(f"Ping execution failed: {str(e)}", level="ERROR")
-            self.db_metrics.metric("up", 0.0)
-            self.set_status('failed')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        err_msg = result['stderr'].strip() or "Request timed out"
+        return CollectResult(
+            metrics={'up': 0.0},
+            logs=[(f"Host {host} is unreachable: {err_msg}", "ERROR")],
+            status='failed',
+        )
 
 
 class UptimeUIPlugin(UIPlugin):

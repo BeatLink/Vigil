@@ -1,6 +1,7 @@
 from typing import Dict, Any, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _FAIL = "FAIL"
@@ -75,50 +76,51 @@ _DEFAULT_LAYOUT = [
 
 
 class PortsCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.timeout = int(config.get('timeout', 5))
         self.checks: List[Dict[str, Any]] = config.get('checks', [])
         for check in self.checks:
             if 'name' not in check:
                 check['name'] = check['url'] if check.get('url') else f"{check.get('host', 'localhost')}:{check.get('port')}"
             check['metric'] = _safe_metric_name(check['name'])
-        self._states: Dict[str, tuple] = {}
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         if not self.checks:
-            self.db_logger.write("No checks configured", level="WARNING")
-            self.set_status('offline')
-            return
+            return []
+        return [Command(_build_probe_script(self.checks, self.timeout))]
 
-        script = _build_probe_script(self.checks, self.timeout)
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        if not self.checks:
+            return CollectResult.failed("No checks configured", level="WARNING", status='offline')
+
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Probe script failed to run: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Probe script failed to run: {stderr}")
 
-        results = _parse_results(stdout, len(self.checks))
+        parsed = _parse_results(stdout, len(self.checks))
+        metrics: Dict[str, float] = {}
         down: List[str] = []
         for i, check in enumerate(self.checks):
-            latency = results.get(i)
+            latency = parsed.get(i)
             up = latency is not None
-            self._states[check['name']] = (up, latency)
-            self.db_metrics.metric(f"{check['metric']}_up", 1.0 if up else 0.0)
+            metrics[f"{check['metric']}_up"] = 1.0 if up else 0.0
             if up:
-                self.db_metrics.metric(f"{check['metric']}_latency_ms", latency)
+                metrics[f"{check['metric']}_latency_ms"] = latency
             else:
                 down.append(check['name'])
 
         if down:
-            self.db_logger.write(f"{len(down)} check(s) down: {', '.join(down)}", level="ERROR")
-            self.set_status('failed')
-        else:
-            self.db_logger.write(f"All {len(self.checks)} check(s) reachable", level="INFO")
-            self.set_status('online')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+            return CollectResult(
+                metrics=metrics,
+                logs=[(f"{len(down)} check(s) down: {', '.join(down)}", "ERROR")],
+                status='failed',
+            )
+        return CollectResult(
+            metrics=metrics,
+            logs=[(f"All {len(self.checks)} check(s) reachable", "INFO")],
+            status='online',
+        )
 
 
 class PortsUIPlugin(UIPlugin):
@@ -130,10 +132,10 @@ class PortsUIPlugin(UIPlugin):
         from vigil.web.ui.theme import STATUS_COLORS
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page()
+        page = self.ui.page()
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('up_card'):
             up_label = info_card('REACHABLE', '--')
         with layout.cell('down_card'):
@@ -144,7 +146,7 @@ class PortsUIPlugin(UIPlugin):
             for check in checks:
                 history_chart(page, f"{check['name']} LATENCY (ms)", self.id, f"{check['metric']}_latency_ms")
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update_cards():
             if not checks:
@@ -152,7 +154,7 @@ class PortsUIPlugin(UIPlugin):
             up = 0
             down = 0
             for check in checks:
-                m = self.latest_metric(f"{check['metric']}_up")
+                m = self.storage.latest_metric(f"{check['metric']}_up")
                 if m is None:
                     continue
                 if m.value >= 1.0:

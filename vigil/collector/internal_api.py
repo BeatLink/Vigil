@@ -64,7 +64,7 @@ def create_internal_app(engine: Any) -> FastAPI:
         if plugin is None:
             return JSONResponse({'error': 'not found'}, status_code=404)
         try:
-            success = await plugin.on_action(req.action_id, **req.kwargs)
+            success = await engine.dispatch_action(plugin, req.action_id, **req.kwargs)
         except Exception as e:
             logging.error(f"internal_api: action {req.action_id!r} on {monitor_id!r} failed: {e}")
             return JSONResponse({'error': str(e)}, status_code=500)
@@ -75,7 +75,7 @@ def create_internal_app(engine: Any) -> FastAPI:
         plugin = _find(monitor_id)
         if plugin is None:
             return JSONResponse({'error': 'not found'}, status_code=404)
-        collected = await plugin.run_cycle()
+        collected = await engine.run_cycle_now(plugin)
         return JSONResponse({'collected': bool(collected)})
 
     @app.post('/internal/ssh/{monitor_id}')
@@ -83,10 +83,8 @@ def create_internal_app(engine: Any) -> FastAPI:
         plugin = _find(monitor_id)
         if plugin is None:
             return JSONResponse({'error': 'not found'}, status_code=404)
-        status, stdout, stderr = await plugin.ssh_controller.execute_action(
-            req.command, timeout=req.timeout,
-        )
-        return JSONResponse({'status': status, 'stdout': stdout, 'stderr': stderr})
+        result = await plugin.network.execute_raw(req.command, timeout=req.timeout)
+        return JSONResponse({'status': result.exit_code, 'stdout': result.stdout, 'stderr': result.stderr})
 
     @app.get('/internal/job/{monitor_id}/running')
     def job_is_running(monitor_id: str):
@@ -94,19 +92,20 @@ def create_internal_app(engine: Any) -> FastAPI:
         if plugin is None:
             return JSONResponse({'error': 'not found'}, status_code=404)
         return JSONResponse({
-            'running': plugin.job_controller.is_running(),
-            'job_id': plugin.job_controller.current_job_id(),
+            'running': plugin.network.is_running(),
+            'job_id': plugin.network.current_job_id(),
         })
 
     @app.post('/internal/job/{monitor_id}/start')
     async def job_start(monitor_id: str, req: JobStartRequest):
         from vigil.collector.controllers.job_controller import JobRejected
+        from vigil.collector.orchestration.types import JobPlan
         plugin = _find(monitor_id)
         if plugin is None:
             return JSONResponse({'error': 'not found'}, status_code=404)
         try:
-            job_id, exit_code = await plugin.job_controller.run_job(
-                req.kind, req.command, redacted=req.redacted, timeout=req.timeout,
+            job_id, exit_code = await plugin.network.run_job_plan(
+                JobPlan(req.kind, req.command, redacted=req.redacted, timeout=req.timeout),
             )
         except JobRejected as e:
             return JSONResponse({'error': str(e)}, status_code=409)
@@ -117,7 +116,7 @@ def create_internal_app(engine: Any) -> FastAPI:
         plugin = _find(monitor_id)
         if plugin is None:
             return JSONResponse({'error': 'not found'}, status_code=404)
-        return JSONResponse({'cancelled': plugin.job_controller.cancel()})
+        return JSONResponse({'cancelled': plugin.network.cancel()})
 
     @app.post('/internal/push/{monitor_id}')
     def push(monitor_id: str, req: PushRequest):

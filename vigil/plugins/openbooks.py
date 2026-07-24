@@ -1,8 +1,9 @@
 import json
 import shlex
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _MSG_TYPE_STATUS = 0
@@ -42,49 +43,55 @@ _DEFAULT_LAYOUT = [
 
 
 class OpenbooksCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.ws_url = config.get('ws_url', 'ws://127.0.0.1:9777/ws')
         self.probe_timeout = int(config.get('probe_timeout', 8))
 
-    async def on_collect(self):
-        script = _build_probe_script(self.ws_url, self.probe_timeout)
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
+    def commands(self) -> List[Command]:
+        return [Command(_build_probe_script(self.ws_url, self.probe_timeout))]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(
-                f"WebSocket probe failed: {stderr.strip() or 'timed out or connection refused'}",
-                level="ERROR")
-            self.db_metrics.metric('bridge_connected', 0.0)
-            self.set_status('failed')
-            return
+            return CollectResult(
+                metrics={'bridge_connected': 0.0},
+                logs=[(
+                    f"WebSocket probe failed: {stderr.strip() or 'timed out or connection refused'}",
+                    "ERROR",
+                )],
+                status='failed',
+            )
 
         try:
             msg_type, appearance = _parse_response(stdout)
         except ValueError as e:
-            self.db_logger.write(str(e), level="ERROR")
-            self.db_metrics.metric('bridge_connected', 0.0)
-            self.set_status('failed')
-            return
+            return CollectResult(
+                metrics={'bridge_connected': 0.0},
+                logs=[(str(e), "ERROR")],
+                status='failed',
+            )
 
         connected = msg_type == _MSG_TYPE_CONNECT and appearance == _APPEARANCE_SUCCESS
-        self.db_metrics.metric('bridge_connected', 1.0 if connected else 0.0)
+        metrics = {'bridge_connected': 1.0 if connected else 0.0}
 
         if connected:
-            self.db_logger.write("IRC bridge connected", level="INFO")
-            self.set_status('online')
-            return
+            return CollectResult(
+                metrics=metrics,
+                logs=[("IRC bridge connected", "INFO")],
+                status='online',
+            )
 
         if msg_type == _MSG_TYPE_STATUS and appearance == _APPEARANCE_DANGER:
-            self.db_logger.write(
-                "IRC bridge reported a connection failure", level="ERROR")
+            message = "IRC bridge reported a connection failure"
         else:
-            self.db_logger.write(
-                f"Unexpected response (type={msg_type}, appearance={appearance})",
-                level="ERROR")
-        self.set_status('failed')
+            message = f"Unexpected response (type={msg_type}, appearance={appearance})"
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(
+            metrics=metrics,
+            logs=[(message, "ERROR")],
+            status='failed',
+        )
 
 
 class OpenbooksUIPlugin(UIPlugin):

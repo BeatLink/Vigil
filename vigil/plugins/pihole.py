@@ -1,9 +1,10 @@
 import json
 import shlex
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from vigil.core.common.time_utils import parse_duration
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
@@ -119,8 +120,8 @@ _DEFAULT_LAYOUT = [
 
 
 class PiholeCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:80')
         self.api_password = config.get('api_password')
         self.api_password_command = config.get('api_password_command')
@@ -131,23 +132,22 @@ class PiholeCollectorPlugin(CollectorPlugin):
         self.api_timeout = int(config.get('api_timeout', 10))
         self.gravity_timeout = int(config.get('gravity_timeout', 120))
 
-    async def on_collect(self):
+    def commands(self) -> List[Command]:
         script = _build_fetch_script(
             self.api_url, self.api_timeout,
             self.api_password_command, self.api_password,
         )
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(script)
+        return [Command(script)]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to query Pi-hole API: {stderr.strip()}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to query Pi-hole API: {stderr.strip()}")
 
         try:
             summary, blocking = _parse_response(stdout)
         except ValueError as e:
-            self.db_logger.write(str(e), level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(str(e))
 
         queries = summary.get('queries', {})
         gravity = summary.get('gravity', {})
@@ -163,22 +163,24 @@ class PiholeCollectorPlugin(CollectorPlugin):
         domains_blocked = float(gravity.get('domains_being_blocked', 0) or 0)
         blocking_enabled = blocking.get('blocking') == 'enabled'
 
-        self.db_metrics.metric('block_rate_pct', block_rate)
-        self.db_metrics.metric('queries_total', total)
-        self.db_metrics.metric('queries_blocked', blocked)
-        self.db_metrics.metric('queries_forwarded', float(queries.get('forwarded', 0) or 0))
-        self.db_metrics.metric('queries_cached', float(queries.get('cached', 0) or 0))
-        self.db_metrics.metric('unique_domains', float(queries.get('unique_domains', 0) or 0))
-        self.db_metrics.metric('gravity_domains', domains_blocked)
-        self.db_metrics.metric('clients_active', float(clients.get('active', 0) or 0))
-        self.db_metrics.metric('blocking_enabled', 1.0 if blocking_enabled else 0.0)
+        metrics = {
+            'block_rate_pct': block_rate,
+            'queries_total': total,
+            'queries_blocked': blocked,
+            'queries_forwarded': float(queries.get('forwarded', 0) or 0),
+            'queries_cached': float(queries.get('cached', 0) or 0),
+            'unique_domains': float(queries.get('unique_domains', 0) or 0),
+            'gravity_domains': domains_blocked,
+            'clients_active': float(clients.get('active', 0) or 0),
+            'blocking_enabled': 1.0 if blocking_enabled else 0.0,
+        }
 
         gravity_age: Optional[float] = None
         last_update = gravity.get('last_update')
         if last_update:
             import time as _time
             gravity_age = max(0.0, _time.time() - float(last_update))
-            self.db_metrics.metric('gravity_age_seconds', gravity_age)
+            metrics['gravity_age_seconds'] = gravity_age
 
         problems = []
         level = 'online'
@@ -228,8 +230,11 @@ class PiholeCollectorPlugin(CollectorPlugin):
             parts.append("| " + "; ".join(problems))
 
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-        self.db_logger.write(' | '.join(parts), level=log_level)
-        self.set_status(level)
+        return CollectResult(
+            metrics=metrics,
+            logs=[(' | '.join(parts), log_level)],
+            status=level,
+        )
 
     def get_actions(self) -> List[Dict[str, str]]:
         return [
@@ -239,35 +244,35 @@ class PiholeCollectorPlugin(CollectorPlugin):
              'variant': 'secondary', 'icon': 'refresh'},
         ]
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
+    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, CollectResult]]:
         if action_id == 'enable_blocking':
             script = _build_blocking_script(
                 self.api_url, self.api_timeout, self.api_password_command,
                 self.api_password, enabled=True,
             )
-            status, _, stderr = await self.ssh_controller.execute_action(script)
-            if status != 0:
-                self.db_logger.write(
-                    f"Failed to enable blocking: {stderr.strip()}", level="ERROR")
-                return False
-            self.db_logger.write("Blocking enabled", level="INFO")
-            return True
+            return ActionPlan(script)
 
         if action_id == 'update_gravity':
             script = _build_gravity_script(
                 self.api_url, self.gravity_timeout, self.api_password_command,
                 self.api_password,
             )
-            status, _, stderr = await self.ssh_controller.execute_action(
-                script, timeout=self.gravity_timeout)
-            if status != 0:
-                self.db_logger.write(
-                    f"Gravity update failed: {stderr.strip()}", level="ERROR")
-                return False
-            self.db_logger.write("Gravity update triggered", level="INFO")
-            return True
+            return ActionPlan(script, timeout=self.gravity_timeout)
 
-        return False
+        return None
+
+    def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
+        if action_id == 'enable_blocking':
+            if result.exit_code != 0:
+                return CollectResult.failed(f"Failed to enable blocking: {result.stderr.strip()}")
+            return CollectResult(logs=[("Blocking enabled", "INFO")], success=True)
+
+        if action_id == 'update_gravity':
+            if result.exit_code != 0:
+                return CollectResult.failed(f"Gravity update failed: {result.stderr.strip()}")
+            return CollectResult(logs=[("Gravity update triggered", "INFO")], success=True)
+
+        return result.exit_code == 0
 
 
 class PiholeUIPlugin(UIPlugin):
@@ -300,7 +305,7 @@ class PiholeUIPlugin(UIPlugin):
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),
         )
-        page = self.page(metric_names=[
+        page = self.ui.page(metric_names=[
             'block_rate_pct', 'queries_total', 'gravity_domains',
             'gravity_age_seconds', 'clients_active', 'blocking_enabled',
         ])
@@ -316,7 +321,7 @@ class PiholeUIPlugin(UIPlugin):
             return 'ENABLED' if v >= 1.0 else 'DISABLED'
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('block_rate_card'):
             block_rate_label = info_card('BLOCK RATE', pct_formatter(None)).bind_text_from(
                 page.model, ('metrics', 'block_rate_pct'), backward=pct_formatter)
@@ -334,7 +339,7 @@ class PiholeUIPlugin(UIPlugin):
         with layout.cell('chart'):
             history_chart(page, 'BLOCK RATE (%)', self.id, 'block_rate_pct')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update_colors():
             block_rate = page.model.metrics.get('block_rate_pct')

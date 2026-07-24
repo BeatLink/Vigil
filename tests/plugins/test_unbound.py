@@ -10,6 +10,7 @@ from vigil.plugins.unbound import (
     _resolved_ok,
     _split_response,
 )
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -55,9 +56,8 @@ def plugin(make_plugin):
     return make_plugin(UnboundCollectorPlugin, BASE_CFG)
 
 
-def _respond(plugin, stats=None, query_output=None):
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(0, _response(stats, query_output), ""))
+def _respond(plugin, run_cycle, stats=None, query_output=None):
+    run_cycle(plugin, lambda c: CmdResult(0, _response(stats, query_output), ""))
 
 
 def _latest_status(plugin_id: str = "test-unbound") -> str | None:
@@ -132,63 +132,53 @@ class TestSplitResponse:
 
 
 class TestUnboundCollection:
-    async def test_healthy_sets_online(self, plugin):
-        _respond(plugin)
-        await plugin.on_collect()
+    async def test_healthy_sets_online(self, plugin, run_cycle):
+        _respond(plugin, run_cycle)
         assert _latest_status() == "online"
 
-    async def test_metrics_recorded(self, plugin):
-        _respond(plugin, _stats(total=5000, hits=4200, miss=800, servfail=0))
-        await plugin.on_collect()
+    async def test_metrics_recorded(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _stats(total=5000, hits=4200, miss=800, servfail=0))
         assert _latest_metric("queries_total") == 5000
         assert _latest_metric("resolved_ok") == 1.0
         assert _latest_metric("cache_hit_rate_pct") == pytest.approx(84.0)
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_garbage_response_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "no separator", ""))
-        await plugin.on_collect()
+    async def test_garbage_response_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "no separator", ""))
         assert _latest_status() == "failed"
 
 
 class TestResolutionFailure:
-    async def test_failed_resolution_sets_failed(self, plugin):
-        _respond(plugin, query_output=_query_fail())
-        await plugin.on_collect()
+    async def test_failed_resolution_sets_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, query_output=_query_fail())
         assert _latest_status() == "failed"
 
-    async def test_resolved_ok_metric_reflects_failure(self, plugin):
-        _respond(plugin, query_output=_query_fail())
-        await plugin.on_collect()
+    async def test_resolved_ok_metric_reflects_failure(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, query_output=_query_fail())
         assert _latest_metric("resolved_ok") == 0.0
 
 
 class TestServfailThresholds:
-    async def test_high_servfail_rate_sets_failed(self, plugin):
-        _respond(plugin, _stats(total=1000, servfail=250))
-        await plugin.on_collect()
+    async def test_high_servfail_rate_sets_failed(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _stats(total=1000, servfail=250))
         assert _latest_status() == "failed"
 
-    async def test_moderate_servfail_rate_sets_warning(self, plugin):
-        _respond(plugin, _stats(total=1000, servfail=80))
-        await plugin.on_collect()
+    async def test_moderate_servfail_rate_sets_warning(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _stats(total=1000, servfail=80))
         assert _latest_status() == "warning"
 
-    async def test_low_query_volume_is_not_judged(self, plugin):
-        _respond(plugin, _stats(total=5, servfail=5))
-        await plugin.on_collect()
+    async def test_low_query_volume_is_not_judged(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _stats(total=5, servfail=5))
         assert _latest_status() == "online"
 
-    async def test_worst_condition_wins(self, plugin):
-        _respond(plugin, _stats(total=1000, servfail=250), query_output=_query_fail())
-        await plugin.on_collect()
+    async def test_worst_condition_wins(self, plugin, run_cycle):
+        _respond(plugin, run_cycle, _stats(total=1000, servfail=250), query_output=_query_fail())
         assert _latest_status() == "failed"
 
 
 class TestUnboundActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

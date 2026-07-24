@@ -1,7 +1,6 @@
-from unittest.mock import AsyncMock
-
 import pytest
 
+pytestmark = pytest.mark.asyncio
 from vigil.plugins.mosquitto import (
     MosquittoCollectorPlugin,
     _TIMED_OUT,
@@ -9,6 +8,7 @@ from vigil.plugins.mosquitto import (
     _auth_flags,
     _build_probe_script,
 )
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -30,12 +30,12 @@ def plugin(make_plugin):
     return make_plugin(MosquittoCollectorPlugin, BASE_CFG)
 
 
-def _respond_ok(plugin, nonce="vigil-probe-abc123"):
-    plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, nonce, ""))
+def _ok(nonce="vigil-probe-abc123"):
+    return CmdResult(0, nonce, "")
 
 
-def _respond_failure(plugin, stderr):
-    plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", stderr))
+def _failure(stderr):
+    return CmdResult(1, "", stderr)
 
 
 def _latest_status(plugin_id: str = "test-mosquitto") -> str | None:
@@ -93,38 +93,32 @@ class TestBuildProbeScript:
 
 
 class TestMosquittoCollection:
-    async def test_successful_roundtrip_sets_online(self, plugin):
-        _respond_ok(plugin)
-        await plugin.on_collect()
+    async def test_successful_roundtrip_sets_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _ok())
         assert _latest_status() == "online"
 
-    async def test_successful_roundtrip_records_metrics(self, plugin):
-        _respond_ok(plugin)
-        await plugin.on_collect()
+    async def test_successful_roundtrip_records_metrics(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _ok())
         assert _latest_metric("roundtrip_ok") == 1.0
         assert _latest_metric("roundtrip_ms") is not None
 
-    async def test_timeout_sets_failed(self, plugin):
-        _respond_failure(plugin, _TIMED_OUT)
-        await plugin.on_collect()
+    async def test_timeout_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _failure(_TIMED_OUT))
         assert _latest_status() == "failed"
 
-    async def test_timeout_records_roundtrip_ok_as_zero(self, plugin):
-        _respond_failure(plugin, _TIMED_OUT)
-        await plugin.on_collect()
+    async def test_timeout_records_roundtrip_ok_as_zero(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _failure(_TIMED_OUT))
         assert _latest_metric("roundtrip_ok") == 0.0
 
-    async def test_mismatch_sets_failed(self, plugin):
-        _respond_failure(plugin, f"{_MISMATCH}: expected a, got b")
-        await plugin.on_collect()
+    async def test_mismatch_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _failure(f"{_MISMATCH}: expected a, got b"))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        _respond_failure(plugin, "connection refused")
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _failure("connection refused"))
         assert _latest_status() == "failed"
 
 
 class TestMosquittoActions:
-    async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+    async def test_on_action_always_returns_none(self, plugin):
+        assert plugin.plan_action("anything") is None

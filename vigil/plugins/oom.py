@@ -1,6 +1,7 @@
-from typing import Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 
@@ -23,77 +24,79 @@ _DEFAULT_LAYOUT = [
 
 
 class OomCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.alert_for  = int(config.get('alert_for', 3))
         self.is_warning = bool(config.get('is_warning', False))
         self._last_total: Optional[int] = None
         self._since_kill: Optional[int] = None
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output("cat /proc/vmstat")
+    def commands(self) -> List[Command]:
+        return [Command("cat /proc/vmstat")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to read /proc/vmstat: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to read /proc/vmstat: {stderr}")
 
         total = _extract_counter(stdout, 'oom_kill')
         if total is None:
-            self.db_logger.write(
-                "No 'oom_kill' counter in /proc/vmstat (kernel too old?)", level="WARNING"
-            )
-            self.set_status('offline')
-            return
+            return CollectResult.failed(
+                "No 'oom_kill' counter in /proc/vmstat (kernel too old?)",
+                level="WARNING", status='offline')
 
-        self.db_metrics.metric('oom_kills_total', float(total))
+        metrics = {'oom_kills_total': float(total)}
 
         previous, self._last_total = self._last_total, total
 
         if previous is None:
-            self.db_logger.write(
-                f"Baseline established: {total} OOM kill(s) since boot", level="INFO"
+            return CollectResult(
+                metrics=metrics,
+                logs=[(f"Baseline established: {total} OOM kill(s) since boot", "INFO")],
+                status='online',
             )
-            self.set_status('online')
-            return
 
         if total < previous:
-            self.db_logger.write(
-                f"OOM counter reset ({previous} -> {total}); host likely rebooted",
-                level="INFO"
+            return CollectResult(
+                metrics=metrics,
+                logs=[(f"OOM counter reset ({previous} -> {total}); host likely rebooted", "INFO")],
+                status='online',
             )
-            self.set_status('online')
-            return
 
         delta = total - previous
-        self.db_metrics.metric('oom_kills_new', float(delta))
+        metrics['oom_kills_new'] = float(delta)
 
         if delta > 0:
             self._since_kill = 0
-            self.db_logger.write(
-                f"{delta} OOM kill(s) since last check — the kernel terminated "
-                f"process(es) to reclaim memory ({total} total since boot)",
-                level="WARNING" if self.is_warning else "ERROR"
+            return CollectResult(
+                metrics=metrics,
+                logs=[(
+                    f"{delta} OOM kill(s) since last check — the kernel terminated "
+                    f"process(es) to reclaim memory ({total} total since boot)",
+                    "WARNING" if self.is_warning else "ERROR",
+                )],
+                status='warning' if self.is_warning else 'failed',
             )
-            self.set_status('warning' if self.is_warning else 'failed')
-            return
 
         if self._since_kill is not None:
             self._since_kill += 1
             if self._since_kill < self.alert_for:
-                self.db_logger.write(
-                    f"No new OOM kills ({self._since_kill}/{self.alert_for} "
-                    f"collections since the last one)",
-                    level="WARNING"
+                return CollectResult(
+                    metrics=metrics,
+                    logs=[(
+                        f"No new OOM kills ({self._since_kill}/{self.alert_for} "
+                        f"collections since the last one)",
+                        "WARNING",
+                    )],
+                    status='warning',
                 )
-                self.set_status('warning')
-                return
             self._since_kill = None
 
-        self.db_logger.write(f"No OOM kills ({total} total since boot)", level="INFO")
-        self.set_status('online')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(
+            metrics=metrics,
+            logs=[(f"No OOM kills ({total} total since boot)", "INFO")],
+            status='online',
+        )
 
 
 class OomUIPlugin(UIPlugin):

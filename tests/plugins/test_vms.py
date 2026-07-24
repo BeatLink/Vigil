@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.vms import VmsCollectorPlugin, _parse_row
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -57,60 +58,50 @@ class TestParseRow:
 
 
 class TestVmsCollection:
-    async def test_running_and_off_online(self, make_plugin):
+    async def test_running_and_off_online(self, make_plugin, run_cycle):
         p = make_plugin(VmsCollectorPlugin, _cfg())
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _LIST, ""))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, _LIST, ""))
         assert _latest_status() == "online"
         assert _latest_metric("vms_running") == pytest.approx(2.0)
         assert _latest_metric("vms_total") == pytest.approx(3.0)
 
-    async def test_paused_is_warning(self, make_plugin):
+    async def test_paused_is_warning(self, make_plugin, run_cycle):
         p = make_plugin(VmsCollectorPlugin, _cfg())
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _LIST_PAUSED, ""))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, _LIST_PAUSED, ""))
         assert _latest_status() == "warning"
 
-    async def test_expected_off_failed(self, make_plugin):
+    async def test_expected_off_failed(self, make_plugin, run_cycle):
         p = make_plugin(VmsCollectorPlugin, _cfg(expect_running=["db"]))
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _LIST, ""))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, _LIST, ""))
         assert _latest_status() == "failed"
 
-    async def test_expected_running_online(self, make_plugin):
+    async def test_expected_running_online(self, make_plugin, run_cycle):
         p = make_plugin(VmsCollectorPlugin, _cfg(expect_running=["web", "cache"]))
-        p.ssh_collector.fetch_output = AsyncMock(return_value=(0, _LIST, ""))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(0, _LIST, ""))
         assert _latest_status() == "online"
 
-    async def test_virsh_missing_offline(self, make_plugin):
+    async def test_virsh_missing_offline(self, make_plugin, run_cycle):
         p = make_plugin(VmsCollectorPlugin, _cfg())
-        p.ssh_collector.fetch_output = AsyncMock(
-            return_value=(127, "", "bash: virsh: command not found"))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(127, "", "bash: virsh: command not found"))
         assert _latest_status() == "offline"
 
-    async def test_libvirt_unreachable_failed(self, make_plugin):
+    async def test_libvirt_unreachable_failed(self, make_plugin, run_cycle):
         p = make_plugin(VmsCollectorPlugin, _cfg())
-        p.ssh_collector.fetch_output = AsyncMock(
-            return_value=(1, "", "error: failed to connect to the hypervisor"))
-        await p.on_collect()
+        run_cycle(p, lambda c: CmdResult(1, "", "error: failed to connect to the hypervisor"))
         assert _latest_status() == "failed"
 
 
 class TestVmsActions:
     async def test_start_listed_vm(self, make_plugin):
         p = make_plugin(VmsCollectorPlugin, _cfg(expect_running=["web"]))
-        p.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        assert await p.on_action("start:web") is True
-        cmd = p.ssh_controller.execute_action.call_args[0][0]
-        assert "start" in cmd and "web" in cmd
+        plan = p.plan_action("start:web")
+        assert "start" in plan.command and "web" in plan.command
+        assert p.interpret_action("start:web", CmdResult(0, "", "")) is True
 
     async def test_refuse_unlisted_vm(self, make_plugin):
         p = make_plugin(VmsCollectorPlugin, _cfg(expect_running=["web"]))
-        p.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        assert await p.on_action("start:evil") is False
-        p.ssh_controller.execute_action.assert_not_called()
+        plan = p.plan_action("start:evil")
+        assert plan.success is False
 
     async def test_actions_list(self, make_plugin):
         p = make_plugin(VmsCollectorPlugin, _cfg(expect_running=["web"]))

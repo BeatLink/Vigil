@@ -136,3 +136,42 @@ class RemoteJobController:
 
     def output(self, job_id: int, after_seq: int = -1, limit: int = 500) -> list:
         return self._db.job_output(job_id, after_seq=after_seq, limit=limit)
+
+
+class RemoteNetworkOrchestrator:
+    """Web-side counterpart to the collector's NetworkOrchestrator. There's no
+    local SSH connection to pool here — everything funnels through
+    CollectorClient HTTP calls into the collector's internal API. Exposes the
+    same execute()/run_job_plan() shape as the collector side for API
+    symmetry, plus execute_raw() for one-off ad hoc commands built by web-side
+    dialogs (e.g. viewing a unit file) that aren't modeled as a named action."""
+
+    def __init__(self, client: CollectorClient, monitor_id: str, db: Any):
+        self._ssh = RemoteSSHController(client, monitor_id)
+        self._job = RemoteJobController(client, monitor_id, db)
+
+    async def execute_raw(self, command: str, timeout: Optional[float] = None) -> Tuple[int, str, str]:
+        return await self._ssh.execute_action(command, timeout=timeout)
+
+    async def execute(self, plan: Any) -> Tuple[int, str, str]:
+        return await self._ssh.execute_action(plan.command, timeout=plan.timeout)
+
+    async def run_job_plan(self, plan: Any, on_line=None) -> Tuple[int, int]:
+        return await self._job.run_job(
+            plan.kind, plan.command, redacted=plan.redacted, on_line=on_line, timeout=plan.timeout,
+        )
+
+    def is_running(self) -> bool:
+        return self._job.is_running()
+
+    def current_job_id(self) -> Optional[int]:
+        return self._job.current_job_id()
+
+    async def cancel(self) -> bool:
+        return await self._job.cancel()
+
+    def recent(self, limit: int = 20, kind: Optional[str] = None) -> list:
+        return self._job.recent(limit=limit, kind=kind)
+
+    def output(self, job_id: int, after_seq: int = -1, limit: int = 500) -> list:
+        return self._job.output(job_id, after_seq=after_seq, limit=limit)

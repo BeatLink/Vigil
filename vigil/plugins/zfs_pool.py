@@ -1,6 +1,7 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 
@@ -12,38 +13,31 @@ _DEFAULT_LAYOUT = [
 
 
 class ZFSPoolCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.pool = config.get('pool')
         self.threshold = int(config.get('threshold', 90))
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(
-            f"zpool list -H -o name,capacity {self.pool}"
-        )
+    def commands(self) -> List[Command]:
+        return [Command(f"zpool list -H -o name,capacity {self.pool}")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         if ret != 0:
-            self.db_logger.write(f"zpool list failed: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"zpool list failed: {stderr}")
 
         try:
             usage_pct = float(stdout.strip().split()[1].rstrip('%'))
         except (IndexError, ValueError) as e:
-            self.db_logger.write(f"Failed to parse zpool output '{stdout.strip()}': {e}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to parse zpool output '{stdout.strip()}': {e}")
 
-        self.db_metrics.metric("usage_pct", usage_pct)
         level = "WARNING" if usage_pct >= self.threshold else "INFO"
-        self.db_logger.write(
-            f"Pool {self.pool}: {usage_pct:.1f}% used (threshold {self.threshold}%)",
-            level=level
+        return CollectResult(
+            metrics={"usage_pct": usage_pct},
+            logs=[(f"Pool {self.pool}: {usage_pct:.1f}% used (threshold {self.threshold}%)", level)],
+            status='failed' if usage_pct >= self.threshold else 'online',
         )
-        self.set_status('failed' if usage_pct >= self.threshold else 'online')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
 
 
 class ZFSPoolUIPlugin(UIPlugin):

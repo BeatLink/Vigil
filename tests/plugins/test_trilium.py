@@ -5,7 +5,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.trilium import TriliumCollectorPlugin, _age_hours, _parse_response
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
+
+pytestmark = pytest.mark.asyncio
 
 
 BASE_CFG = {
@@ -35,9 +38,9 @@ def plugin(make_plugin):
     return make_plugin(TriliumCollectorPlugin, BASE_CFG)
 
 
-def _respond(plugin, hours_ago=1.0, total_notes=5000):
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(0, _response(hours_ago, total_notes), ""))
+def _run(plugin, run_cycle, hours_ago=1.0, total_notes=5000):
+    payload = _response(hours_ago, total_notes)
+    run_cycle(plugin, lambda c: CmdResult(0, payload, ""))
 
 
 def _latest_status(plugin_id: str = "test-trilium") -> str | None:
@@ -75,33 +78,27 @@ class TestParseResponse:
 
 
 class TestTriliumCollection:
-    async def test_recent_modification_sets_online(self, plugin):
-        _respond(plugin, hours_ago=1.0)
-        await plugin.on_collect()
+    async def test_recent_modification_sets_online(self, plugin, run_cycle):
+        _run(plugin, run_cycle, hours_ago=1.0)
         assert _latest_status() == "online"
 
-    async def test_stale_modification_sets_warning(self, plugin):
-        _respond(plugin, hours_ago=100.0)
-        await plugin.on_collect()
+    async def test_stale_modification_sets_warning(self, plugin, run_cycle):
+        _run(plugin, run_cycle, hours_ago=100.0)
         assert _latest_status() == "warning"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_bad_token_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(
-            return_value=(0, '{"error": "unauthorized"}', ""))
-        await plugin.on_collect()
+    async def test_bad_token_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, '{"error": "unauthorized"}', ""))
         assert _latest_status() == "failed"
 
-    async def test_records_note_count(self, plugin):
-        _respond(plugin, total_notes=1234)
-        await plugin.on_collect()
+    async def test_records_note_count(self, plugin, run_cycle):
+        _run(plugin, run_cycle, total_notes=1234)
         assert _latest_metric("notes_total") == 1234
 
 
 class TestTriliumActions:
     async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+        assert plugin.plan_action("anything") is None

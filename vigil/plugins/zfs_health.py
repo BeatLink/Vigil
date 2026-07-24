@@ -1,6 +1,7 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _UNHEALTHY = {'DEGRADED', 'FAULTED', 'OFFLINE', 'UNAVAIL', 'REMOVED'}
@@ -12,20 +13,20 @@ _DEFAULT_LAYOUT = [
 
 
 class ZFSHealthCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(
-            "zpool list -H -o name,health 2>&1"
-        )
+    def commands(self) -> List[Command]:
+        return [Command("zpool list -H -o name,health 2>&1")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         if ret != 0 and not stdout.strip():
-            self.db_logger.write(f"zpool list failed: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"zpool list failed: {stderr}")
 
         ok, degraded = 0, 0
+        logs = []
         for line in stdout.splitlines():
             parts = line.strip().split()
             if len(parts) != 2:
@@ -33,24 +34,20 @@ class ZFSHealthCollectorPlugin(CollectorPlugin):
             pool, health = parts
             if health in _UNHEALTHY:
                 degraded += 1
-                self.db_logger.write(f"Pool {pool}: {health}", level="ERROR")
+                logs.append((f"Pool {pool}: {health}", "ERROR"))
             else:
                 ok += 1
-                self.db_logger.write(f"Pool {pool}: {health}", level="INFO")
+                logs.append((f"Pool {pool}: {health}", "INFO"))
 
         total = ok + degraded
         if total == 0:
-            self.db_logger.write("No ZFS pools found", level="WARNING")
-            self.set_status('offline')
-            return
+            return CollectResult(logs=[("No ZFS pools found", "WARNING")], status='offline')
 
-        self.db_metrics.metric("pools_total", total)
-        self.db_metrics.metric("pools_ok", ok)
-        self.db_metrics.metric("pools_degraded", degraded)
-        self.set_status('failed' if degraded > 0 else 'online')
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(
+            metrics={"pools_total": total, "pools_ok": ok, "pools_degraded": degraded},
+            logs=logs,
+            status='failed' if degraded > 0 else 'online',
+        )
 
 
 class ZFSHealthUIPlugin(UIPlugin):

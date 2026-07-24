@@ -1,6 +1,7 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional, Union
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 
 _PS_FMT = "ps -a --format '{{.Names}}\t{{.State}}'"
@@ -16,24 +17,24 @@ _DEFAULT_LAYOUT = [
 
 
 class ContainersCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.runtime = config.get('runtime', 'docker')
         self.expect_running = set(config.get('expect_running', []) or [])
         self.stopped_warning = bool(config.get('stopped_warning', True))
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(f"{self.runtime} {_PS_FMT} 2>&1")
+    def commands(self) -> List[Command]:
+        return [Command(f"{self.runtime} {_PS_FMT} 2>&1")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         combined = f"{stdout}\n{stderr}".lower()
         if ret != 0 and ('command not found' in combined or 'not found' in combined):
-            self.db_logger.write(f"{self.runtime} not installed on target", level="WARNING")
-            self.set_status('offline')
-            return
+            return CollectResult.failed(f"{self.runtime} not installed on target",
+                                        level="WARNING", status='offline')
         if ret != 0:
-            self.db_logger.write(f"'{self.runtime} ps' failed: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"'{self.runtime} ps' failed: {stderr}")
 
         running: List[str] = []
         stopped: List[str] = []
@@ -54,40 +55,35 @@ class ContainersCollectorPlugin(CollectorPlugin):
                 stopped.append(cname)
 
         total = len(running) + len(stopped) + len(benign)
-        self.db_metrics.metric('containers_total', float(total))
-        self.db_metrics.metric('containers_running', float(len(running)))
-        self.db_metrics.metric('containers_stopped', float(len(stopped)))
+        metrics = {
+            'containers_total': float(total),
+            'containers_running': float(len(running)),
+            'containers_stopped': float(len(stopped)),
+        }
 
         if total == 0:
-            self.db_logger.write("No containers found", level="INFO")
-            self.set_status('online')
-            return
+            return CollectResult(metrics=metrics, logs=[("No containers found", "INFO")], status='online')
 
         running_set = set(running)
         missing = sorted(self.expect_running - running_set)
         if missing:
-            self.db_logger.write(f"Expected containers not running: {', '.join(missing)}", level="ERROR")
-            self.set_status('failed')
-            self._log_stopped(stopped)
-            return
+            logs = [(f"Expected containers not running: {', '.join(missing)}", "ERROR")]
+            if stopped:
+                logs.append((f"Stopped: {', '.join(stopped)}", "WARNING"))
+            return CollectResult(metrics=metrics, logs=logs, status='failed')
 
         if self.stopped_warning and stopped:
-            self.db_logger.write(
-                f"{len(running)} running, {len(stopped)} stopped: {', '.join(stopped)}",
-                level="WARNING"
+            return CollectResult(
+                metrics=metrics,
+                logs=[(f"{len(running)} running, {len(stopped)} stopped: {', '.join(stopped)}", "WARNING")],
+                status='warning',
             )
-            self.set_status('warning')
-            return
 
-        self.db_logger.write(
-            f"{len(running)} running, {len(stopped)} stopped, {len(benign)} paused/created",
-            level="INFO"
+        return CollectResult(
+            metrics=metrics,
+            logs=[(f"{len(running)} running, {len(stopped)} stopped, {len(benign)} paused/created", "INFO")],
+            status='online',
         )
-        self.set_status('online')
-
-    def _log_stopped(self, stopped: List[str]):
-        if stopped:
-            self.db_logger.write(f"Stopped: {', '.join(stopped)}", level="WARNING")
 
     def get_actions(self) -> List[Dict[str, str]]:
         actions = []
@@ -100,19 +96,19 @@ class ContainersCollectorPlugin(CollectorPlugin):
             })
         return actions
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
+    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, CollectResult]]:
         if action_id.startswith('restart:'):
             cname = action_id.split(':', 1)[1]
             if cname not in self.expect_running:
-                self.db_logger.write(f"Refusing to restart unlisted container {cname!r}", level="ERROR")
-                return False
-            status, _, stderr = await self.ssh_controller.execute_action(
-                f"{self.runtime} restart {_shquote(cname)}"
-            )
-            if status != 0:
-                self.db_logger.write(f"Restart of {cname} failed: {stderr}", level="ERROR")
-            return status == 0
-        return False
+                return CollectResult.failed(f"Refusing to restart unlisted container {cname!r}")
+            return ActionPlan(f"{self.runtime} restart {_shquote(cname)}")
+        return None
+
+    def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
+        if action_id.startswith('restart:') and result.exit_code != 0:
+            cname = action_id.split(':', 1)[1]
+            return CollectResult.failed(f"Restart of {cname} failed: {result.stderr}")
+        return result.exit_code == 0
 
 
 class ContainersUIPlugin(UIPlugin):

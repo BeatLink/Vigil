@@ -14,11 +14,12 @@ GROUP_CFG = {
 
 @pytest.fixture
 def group(db_manager):
-    with patch("vigil.collector.plugin_base.SSHConnection") as MockSSH, \
-         patch("vigil.collector.plugin_base.SSHCollector"), \
-         patch("vigil.collector.plugin_base.SSHController"):
+    from vigil.collector.orchestration.network_orchestrator import SSHConnectionPool
+    with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection") as MockSSH, \
+         patch("vigil.collector.orchestration.network_orchestrator.SSHCollector"), \
+         patch("vigil.collector.orchestration.network_orchestrator.SSHController"):
         MockSSH.from_config.return_value = MagicMock(host="localhost")
-        plugin = GroupCollectorPlugin("test-group", GROUP_CFG, db_manager)
+        plugin = GroupCollectorPlugin("test-group", GROUP_CFG, db_manager, SSHConnectionPool())
     return plugin
 
 
@@ -29,6 +30,10 @@ def _make_child(plugin_id: str, status: str, db_manager) -> MagicMock:
     child.name = f"Child {plugin_id}"
     child.children = []
     return child
+
+
+def _aggregated(group, db_manager):
+    return group._aggregate_status(db_manager.latest_statuses())
 
 
 class TestSeverityOrder:
@@ -47,66 +52,66 @@ class TestStatusAggregation:
             _make_child("a", "online", db_manager),
             _make_child("b", "online", db_manager),
         ]
-        assert group._get_aggregated_status() == "online"
+        assert _aggregated(group, db_manager) == "online"
 
     def test_one_failed_aggregates_failed(self, group, db_manager):
         group.children = [
             _make_child("a", "online", db_manager),
             _make_child("b", "failed", db_manager),
         ]
-        assert group._get_aggregated_status() == "failed"
+        assert _aggregated(group, db_manager) == "failed"
 
     def test_failed_beats_warning(self, group, db_manager):
         group.children = [
             _make_child("a", "warning", db_manager),
             _make_child("b", "failed", db_manager),
         ]
-        assert group._get_aggregated_status() == "failed"
+        assert _aggregated(group, db_manager) == "failed"
 
     def test_warning_beats_online(self, group, db_manager):
         group.children = [
             _make_child("a", "online", db_manager),
             _make_child("b", "warning", db_manager),
         ]
-        assert group._get_aggregated_status() == "warning"
+        assert _aggregated(group, db_manager) == "warning"
 
     def test_warning_beats_offline(self, group, db_manager):
         group.children = [
             _make_child("a", "offline", db_manager),
             _make_child("b", "warning", db_manager),
         ]
-        assert group._get_aggregated_status() == "warning"
+        assert _aggregated(group, db_manager) == "warning"
 
-    def test_no_children_returns_online(self, group):
+    def test_no_children_returns_online(self, group, db_manager):
         group.children = []
-        assert group._get_aggregated_status() == "online"
+        assert _aggregated(group, db_manager) == "online"
 
-    def test_child_with_no_history_treated_as_offline(self, group):
+    def test_child_with_no_history_treated_as_offline(self, group, db_manager):
         child = MagicMock()
         child.id = "never-polled"
         child.children = []
         group.children = [child]
-        assert group._get_aggregated_status() == "offline"
+        assert _aggregated(group, db_manager) == "offline"
 
     def test_mixed_online_and_offline_returns_offline(self, group, db_manager):
         group.children = [
             _make_child("a", "online", db_manager),
             _make_child("b", "offline", db_manager),
         ]
-        assert group._get_aggregated_status() == "offline"
+        assert _aggregated(group, db_manager) == "offline"
 
     def test_all_failed_returns_failed(self, group, db_manager):
         group.children = [
             _make_child("a", "failed", db_manager),
             _make_child("b", "failed", db_manager),
         ]
-        assert group._get_aggregated_status() == "failed"
+        assert _aggregated(group, db_manager) == "failed"
 
 
 class TestOnCollect:
-    async def test_writes_aggregated_status_to_db(self, group, db_manager):
+    async def test_writes_aggregated_status_to_db(self, group, db_manager, run_local_cycle):
         group.children = [_make_child("child-x", "online", db_manager)]
-        await group.on_collect()
+        run_local_cycle(group)
         with db.connection_context():
             row = StatusHistory.select().where(
                 StatusHistory.collector_id == "test-group"
@@ -114,12 +119,12 @@ class TestOnCollect:
         assert row is not None
         assert row.state == "online"
 
-    async def test_propagates_failed_child_to_group(self, group, db_manager):
+    async def test_propagates_failed_child_to_group(self, group, db_manager, run_local_cycle):
         group.children = [
             _make_child("child-ok", "online", db_manager),
             _make_child("child-bad", "failed", db_manager),
         ]
-        await group.on_collect()
+        run_local_cycle(group)
         with db.connection_context():
             row = StatusHistory.select().where(
                 StatusHistory.collector_id == "test-group"
@@ -127,4 +132,4 @@ class TestOnCollect:
         assert row.state == "failed"
 
     async def test_on_action_always_false(self, group):
-        assert await group.on_action("restart") is False
+        assert group.plan_action("restart") is None

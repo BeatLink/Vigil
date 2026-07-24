@@ -1,8 +1,10 @@
-from unittest.mock import AsyncMock
+import json
 
 import pytest
 
+pytestmark = pytest.mark.asyncio
 from vigil.plugins.frigate import FrigateCollectorPlugin, _build_fetch_script, _parse_response
+from vigil.collector.orchestration.types import CmdResult
 from vigil.core.data.database import db, StatusHistory, Metric
 
 
@@ -33,10 +35,8 @@ def plugin(make_plugin):
     return make_plugin(FrigateCollectorPlugin, BASE_CFG)
 
 
-def _respond(plugin, stats=None):
-    import json
-    plugin.ssh_collector.fetch_output = AsyncMock(
-        return_value=(0, json.dumps(stats if stats is not None else _stats()), ""))
+def _result(stats=None):
+    return CmdResult(0, json.dumps(stats if stats is not None else _stats()), "")
 
 
 def _latest_status(plugin_id: str = "test-frigate") -> str | None:
@@ -76,60 +76,53 @@ class TestParseResponse:
 
 
 class TestFrigateCollection:
-    async def test_excellent_quality_sets_online(self, plugin):
-        _respond(plugin)
-        await plugin.on_collect()
+    async def test_excellent_quality_sets_online(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result())
         assert _latest_status() == "online"
 
-    async def test_unusable_quality_sets_failed(self, plugin):
-        _respond(plugin, _stats(cameras={
+    async def test_unusable_quality_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(_stats(cameras={
             "front_door": {"camera_fps": 0.0, "connection_quality": "unusable",
                            "stalls_last_hour": 5, "reconnects_last_hour": 12}
-        }))
-        await plugin.on_collect()
+        })))
         assert _latest_status() == "failed"
 
-    async def test_poor_quality_sets_warning(self, plugin):
-        _respond(plugin, _stats(cameras={
+    async def test_poor_quality_sets_warning(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(_stats(cameras={
             "front_door": {"camera_fps": 1.0, "connection_quality": "poor",
                            "stalls_last_hour": 2, "reconnects_last_hour": 1}
-        }))
-        await plugin.on_collect()
+        })))
         assert _latest_status() == "warning"
 
-    async def test_worst_camera_wins(self, plugin):
-        _respond(plugin, _stats(cameras={
+    async def test_worst_camera_wins(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _result(_stats(cameras={
             "good_cam": {"camera_fps": 5.0, "connection_quality": "excellent",
                         "stalls_last_hour": 0, "reconnects_last_hour": 0},
             "bad_cam": {"camera_fps": 0.0, "connection_quality": "unusable",
                        "stalls_last_hour": 10, "reconnects_last_hour": 20},
-        }))
-        await plugin.on_collect()
+        })))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin):
-        plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "connection refused"))
-        await plugin.on_collect()
+    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_camera_filter_excludes_others(self, make_plugin):
+    async def test_camera_filter_excludes_others(self, make_plugin, run_cycle):
         p = make_plugin(FrigateCollectorPlugin, {**BASE_CFG, "cameras": ["only_this"]})
-        _respond(p, _stats(cameras={
+        run_cycle(p, lambda c: _result(_stats(cameras={
             "only_this": {"camera_fps": 5.0, "connection_quality": "excellent",
                          "stalls_last_hour": 0, "reconnects_last_hour": 0},
             "ignored": {"camera_fps": 0.0, "connection_quality": "unusable",
                        "stalls_last_hour": 100, "reconnects_last_hour": 100},
-        }))
-        await p.on_collect()
+        })))
         assert _latest_status("test-frigate") == "online"
 
-    async def test_no_matching_cameras_sets_warning(self, make_plugin):
+    async def test_no_matching_cameras_sets_warning(self, make_plugin, run_cycle):
         p = make_plugin(FrigateCollectorPlugin, {**BASE_CFG, "cameras": ["nonexistent"]})
-        _respond(p)
-        await p.on_collect()
+        run_cycle(p, lambda c: _result())
         assert _latest_status("test-frigate") == "warning"
 
 
 class TestFrigateActions:
-    async def test_on_action_always_returns_false(self, plugin):
-        assert await plugin.on_action("anything") is False
+    async def test_on_action_always_returns_none(self, plugin):
+        assert plugin.plan_action("anything") is None

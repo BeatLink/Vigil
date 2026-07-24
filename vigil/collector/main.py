@@ -7,6 +7,8 @@ import sys
 import time
 from typing import List, Optional, Dict
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.network_orchestrator import SSHConnectionPool
+from vigil.collector.orchestration.types import JobPlan
 from vigil.core.data.config_file import ConfigFileManager as VigilConfig
 from vigil.core.data.database import DatabaseManager as VigilDatabase
 from peewee import OperationalError
@@ -26,6 +28,9 @@ class VigilEngine:
         self.plugins: List[CollectorPlugin] = []
         self.log_retention_days = self.config_loader.log_retention_days
         self._last_prune = 0.0
+        self.ssh_pool = SSHConnectionPool()
+        self._collecting: Dict[str, bool] = {}
+        self._last_collected: Dict[str, float] = {}
         if db_path_override:
             self.db_path = db_path_override
         else:
@@ -63,7 +68,7 @@ class VigilEngine:
 
                 for _, obj in inspect.getmembers(module, inspect.isclass):
                     if issubclass(obj, CollectorPlugin) and obj is not CollectorPlugin:
-                        plugin_instance = obj(name, plugin_cfg, self.db)
+                        plugin_instance = obj(name, plugin_cfg, self.db, self.ssh_pool)
                         
                         if 'children' in plugin_cfg:
                             plugin_instance.children = self.setup_modules(plugin_cfg['children'])
@@ -133,11 +138,70 @@ class VigilEngine:
             yield p
             yield from VigilEngine._flatten(p.children)
 
+    async def _run_cycle(self, plugin: CollectorPlugin) -> bool:
+        """The orchestration loop: async/IO lives here, plugin.commands()/
+        parse() (or local_call()/parse_local() for non-SSH plugins) are
+        pure and never touched directly by anything but this."""
+        local_fn = plugin.local_call()
+        if local_fn is not None:
+            local_result = await plugin.local_io.run(local_fn)
+            result = plugin.parse_local(local_result)
+        else:
+            commands = plugin.commands()
+            results = await plugin.network.run(commands) if commands else []
+            result = plugin.parse(results)
+        plugin.storage.apply(result)
+        return True
+
+    async def run_cycle_now(self, plugin: CollectorPlugin) -> bool:
+        """Single-flight wrapper for out-of-band (web-poll-triggered)
+        collection, sharing the same reentrancy guard as the scheduler."""
+        if self._collecting.get(plugin.id):
+            logging.debug(f"{plugin.name}: previous collection still running, skipping poll-triggered cycle")
+            return False
+        self._collecting[plugin.id] = True
+        try:
+            return await self._run_cycle(plugin)
+        finally:
+            self._last_collected[plugin.id] = time.monotonic()
+            self._collecting[plugin.id] = False
+
+    async def dispatch_action(self, plugin: CollectorPlugin, action_id: str, **kwargs) -> bool:
+        from vigil.collector.orchestration.types import CollectResult, LocalActionPlan
+
+        plan = plugin.plan_action(action_id, **kwargs)
+        if plan is None:
+            return False
+        if isinstance(plan, CollectResult):
+            plugin.storage.apply(plan)
+            return plan.success
+        if isinstance(plan, JobPlan):
+            on_line = plugin.job_on_line(action_id, **kwargs)
+            _, status = await plugin.network.run_job_plan(plan, on_line=on_line)
+            outcome = plugin.interpret_job(action_id, status, **kwargs)
+            if isinstance(outcome, CollectResult):
+                plugin.storage.apply(outcome)
+                return outcome.success
+            return outcome
+        if isinstance(plan, LocalActionPlan):
+            local_result = await plugin.local_io.run(plan.call)
+            outcome = plugin.interpret_local_action(action_id, local_result, **kwargs)
+            if isinstance(outcome, CollectResult):
+                plugin.storage.apply(outcome)
+                return outcome.success
+            return outcome
+        result = await plugin.network.execute(plan)
+        outcome = plugin.interpret_action(action_id, result, **kwargs)
+        if isinstance(outcome, CollectResult):
+            plugin.storage.apply(outcome)
+            return outcome.success
+        return outcome
+
     async def _monitor_loop(self, plugin: CollectorPlugin):
         await asyncio.sleep(random.uniform(0, STARTUP_JITTER_SECONDS))
         while True:
             try:
-                await plugin.run_cycle()
+                await self.run_cycle_now(plugin)
             except Exception as e:
                 logging.error(f"Plugin execution error ({plugin.name}): {e}")
             await asyncio.sleep(plugin.interval)

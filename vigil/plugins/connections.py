@@ -1,7 +1,8 @@
-from typing import Dict, Any
+from typing import Dict, Any, List
 from collections import Counter
 
 from vigil.collector.plugin_base import CollectorPlugin
+from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
@@ -43,35 +44,33 @@ _DEFAULT_LAYOUT = [
 
 
 class ConnectionsCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any):
-        super().__init__(name, config, db)
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
         self.total_warning   = int(config.get('total_warning',   500))
         self.total_threshold = int(config.get('total_threshold', 1000))
 
-    async def on_collect(self):
-        ret, stdout, stderr = await self.ssh_collector.fetch_output(
-            "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null"
-        )
+    def commands(self) -> List[Command]:
+        return [Command("cat /proc/net/tcp /proc/net/tcp6 2>/dev/null")]
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            self.db_logger.write(f"Failed to read /proc/net/tcp: {stderr}", level="ERROR")
-            self.set_status('failed')
-            return
+            return CollectResult.failed(f"Failed to read /proc/net/tcp: {stderr}")
 
         counts = _parse_states(stdout)
         total = sum(counts.values())
 
-        for state in _TCP_STATES.values():
-            self.db_metrics.metric(state.lower(), float(counts.get(state, 0)))
-        self.db_metrics.metric('total', float(total))
+        metrics = {state.lower(): float(counts.get(state, 0)) for state in _TCP_STATES.values()}
+        metrics['total'] = float(total)
 
         overall = _level_for(total, self.total_warning, self.total_threshold)
         log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
         summary = ', '.join(f"{s}={counts[s]}" for s in sorted(counts)) or "no connections"
-        self.db_logger.write(f"{total} TCP connections ({summary})", level=log_level)
-        self.set_status(overall)
-
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        return False
+        return CollectResult(
+            metrics=metrics,
+            logs=[(f"{total} TCP connections ({summary})", log_level)],
+            status=overall,
+        )
 
 
 class ConnectionsUIPlugin(UIPlugin):
@@ -87,12 +86,12 @@ class ConnectionsUIPlugin(UIPlugin):
         total_threshold = int(self.config.get('total_threshold', 1000))
 
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
-        page = self.page(metric_names=['total', 'established', 'listen', 'time_wait'])
+        page = self.ui.page(metric_names=['total', 'established', 'listen', 'time_wait'])
 
         _int_or_dash = FORMATTERS['int_rounded']
 
         with layout.cell('host_card'):
-            self.internal_modules['ui']['host_card']()
+            self.ui.host_card()
         with layout.cell('total_card'):
             total_label = info_card('TOTAL', '--').bind_text_from(
                 page.model, ('metrics', 'total'), backward=_int_or_dash)
@@ -110,7 +109,7 @@ class ConnectionsUIPlugin(UIPlugin):
         with layout.cell('established_chart'):
             history_chart(page, 'ESTABLISHED', self.id, 'established')
         with layout.cell('events'):
-            self.internal_modules['ui']['events_table'](page)
+            self.ui.events_table(page)
 
         def update_color():
             total = page.model.metrics.get('total')
