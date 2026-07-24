@@ -3,15 +3,9 @@ from typing import Dict, Any, List
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# `virsh list --all` output has a header + separator then rows:
-#   Id   Name        State
-#   1    web         running
-#   -    db          shut off
-# --name would be simpler but drops state; we parse the State column instead.
 _LIST_CMD = "virsh list --all"
 
 _RUNNING_STATES = {'running'}
-# Not running, but an expected/benign resting state (not an error).
 _BENIGN_STATES = {'shut off', 'shutoff'}
 
 _DEFAULT_LAYOUT = [
@@ -26,40 +20,20 @@ def _shquote(s: str) -> str:
 
 
 def _parse_row(line: str):
-    """Parse one `virsh list --all` row into (name, state). Returns (None, None) for
-    header/separator/blank lines."""
     stripped = line.strip()
     if not stripped or stripped.startswith('---') or set(stripped) <= set('- '):
         return None, None
     parts = line.split()
-    # Header row: "Id Name State"
     if parts[:2] == ['Id', 'Name'] or (parts and parts[0] == 'Id'):
         return None, None
     if len(parts) < 3:
         return None, None
-    # Columns: Id, Name, State... — Id is a number or '-'; State can be 2 words.
     name = parts[1]
     state = ' '.join(parts[2:]).lower()
     return name, state
 
 
 class VmsCollectorPlugin(CollectorPlugin):
-    """
-    Monitors libvirt/KVM virtual machines over SSH via `virsh list --all`.
-
-    Records how many domains are running vs. off. By default any domain in an
-    error state (paused, crashed, pmsuspended) drives warning; "shut off" is
-    treated as benign. If `expect_running` lists domain names, any of those not
-    running drives status to failed and exposes a per-VM Start action.
-
-    Config options:
-      uri              libvirt connection URI (default: qemu:///system)
-      expect_running   List of domain names that must be running (optional)
-      offline_warning  Any non-running, non-benign domain => warning (default: true)
-
-    Provides per-expected-VM Start and Shutdown actions.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.uri = config.get('uri', 'qemu:///system')
@@ -87,8 +61,8 @@ class VmsCollectorPlugin(CollectorPlugin):
             return
 
         running: List[str] = []
-        stopped: List[str] = []   # error-ish states
-        benign: List[str] = []    # shut off
+        stopped: List[str] = []
+        benign: List[str] = []
         for line in stdout.splitlines():
             name, state = _parse_row(line)
             if name is None:
@@ -159,17 +133,6 @@ class VmsCollectorPlugin(CollectorPlugin):
 
 
 class VmsUIPlugin(UIPlugin):
-    """Dashboard rendering for the vms monitor — declarative, see UI_SPEC. See
-    VmsCollectorPlugin for collection/action logic — get_actions()/on_action()
-    are inherited from UIPlugin, which proxies to the collector's live
-    instance, so this class needs no knowledge of expect_running itself.
-
-    running_card keeps its fixed 'online' color from the pre-UI_SPEC version
-    (not a threshold — it was unconditionally green whenever a value was
-    present) via a trivial local color rule, since "stopped" vs "running"
-    reads more clearly at a glance with that distinction than without.
-    """
-
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -193,7 +156,4 @@ from vigil.web.ui.spec import register_color_rule
 
 @register_color_rule('vms_always_online')
 def _vms_running_color(v):
-    """Always the 'online' color once a value is present — running_card was
-    unconditionally green pre-UI_SPEC (no separate threshold on this page for
-    "how many should be running"), just dash-colored while unknown."""
     return None if v is None else 'online'

@@ -1,25 +1,9 @@
-"""
-Root-level fixtures shared across all test modules.
-
-Key design decisions:
-- Uses a file-based SQLite temp DB (not :memory:) so that Peewee's
-  connection_context() pattern works correctly across multiple open/close cycles.
-- SSHConnection, SSHCollector, and SSHController are patched during plugin __init__
-  so plugins instantiate cleanly without real network access.
-- After instantiation, ssh_collector / ssh_controller are replaced with fresh
-  MagicMocks so each test can configure return values independently.
-"""
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
 @pytest.fixture(autouse=True)
 def _synchronous_db_writes():
-    """
-    Run DB writes inline during tests so a write is immediately visible to the
-    next read. In production writes are queued to a background thread (to keep
-    fsync off the event loop); tests don't want that indirection.
-    """
     from vigil.core.data.database import _writer
     prev = _writer.synchronous
     _writer.synchronous = True
@@ -29,7 +13,6 @@ def _synchronous_db_writes():
 
 @pytest.fixture
 def db_manager(tmp_path):
-    """DatabaseManager backed by a temp SQLite file. Cleans up on teardown."""
     from vigil.core.data.database import DatabaseManager, db
     if not db.is_closed():
         db.close()
@@ -41,11 +24,6 @@ def db_manager(tmp_path):
 
 @pytest.fixture
 def make_plugin(db_manager):
-    """
-    Factory fixture: creates any BasePlugin subclass with all external deps mocked.
-    Returns a callable: make_plugin(PluginClass, extra_config_dict).
-    The plugin's ssh_collector and ssh_controller are fresh AsyncMocks for per-test control.
-    """
     def factory(cls, extra_config=None):
         cfg = {
             "name": "test-plugin",
@@ -71,21 +49,14 @@ def make_plugin(db_manager):
             )
             plugin = cls(cfg["name"], cfg, db_manager)
 
-        # Replace with fresh mocks that each test controls directly
         plugin.ssh_collector = MagicMock(
             fetch_output=AsyncMock(return_value=(0, "", ""))
         )
         plugin.ssh_controller = MagicMock(
             execute_action=AsyncMock(return_value=(0, "", ""))
         )
-        # The job controller is kept real (backed by the temp DB) so job
-        # lifecycle and persistence are genuinely exercised; only the SSH
-        # connection under it is mocked. Tests drive it by setting
-        # plugin.job_controller.ssh.execute_streaming.
         from vigil.collector.controllers.job_controller import JobController
         mock_ssh = MagicMock()
-        # execute_streaming() is a coroutine on the real SSHConnection
-        # (asyncssh-based — see ssh_connector.py).
         mock_ssh.execute_streaming = AsyncMock(return_value=(0, ""))
         plugin.job_controller = JobController(
             mock_ssh, db_manager, cfg["id"], mock_conn.host

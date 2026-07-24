@@ -83,7 +83,6 @@ class TestSmartDiskCollection:
         output = "PASS /dev/sda\nsome random noise\nFAIL /dev/sdb"
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, output, ""))
         await plugin.on_collect()
-        # noise line is ignored, total = 2
         assert _latest_metric("disks_total") == 2
 
     async def test_ssh_failure_sets_failed(self, plugin):

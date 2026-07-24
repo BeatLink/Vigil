@@ -1,41 +1,3 @@
-"""
-OpenBooks IRC-bridge health via a live WebSocket connect probe.
-
-Complements a `systemd_service` monitor on openbooks rather than replacing
-it. That one answers "is the web server alive"; this one answers "is the
-IRC bridge to irc.irchighway.net actually connected", which is a different
-failure — OpenBooks' HTTP server keeps serving its UI shell perfectly well
-even when the underlying IRC client has failed to connect or been
-disconnected, since the two are wired together only over the WebSocket, not
-reflected in anything HTTP-visible.
-
-OpenBooks has no REST health endpoint and, per its source, logs nothing
-distinctive on a successful IRC join — the only place connection status
-surfaces at all is the WebSocket protocol used by its own web UI: a client
-sends a CONNECT request (`{"type": 1, "payload": {}}`) and the server
-replies with a CONNECT response whose `payload.appearance` says whether the
-IRC join succeeded. This plugin does exactly that and nothing else, then
-disconnects immediately.
-
-That immediacy matters for a reason specific to this app: OpenBooks serves
-only one connected WebSocket client at a time (its stated design, not a bug)
-— a monitor that stayed connected would occupy that slot and lock out real
-use of the search UI. The probe therefore opens, sends one message, reads
-one reply, and closes within the configured timeout, spending as little
-time in that slot as a poll reasonably can.
-
-Run over SSH via `websocat` (a WebSocket CLI client) rather than a Python
-WebSocket library, matching how every other plugin's remote check runs a
-CLI tool on the monitored host instead of connecting from Vigil's own
-process.
-
-Config options:
-  ws_url        WebSocket URL, as seen from the monitored host (default:
-                ws://127.0.0.1:9777/ws)
-  probe_timeout Seconds allowed for the whole connect/reply/close round trip
-                (default: 8 — the app's own connect flow includes a short
-                internal delay, so this needs headroom beyond a bare ping)
-"""
 import json
 import shlex
 from typing import Any, Dict, Optional, Tuple
@@ -43,7 +5,6 @@ from typing import Any, Dict, Optional, Tuple
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# OpenBooks' own message type/appearance enums (server/messages.go).
 _MSG_TYPE_STATUS = 0
 _MSG_TYPE_CONNECT = 1
 _APPEARANCE_SUCCESS = 1
@@ -53,12 +14,6 @@ _CONNECT_REQUEST = json.dumps({"type": _MSG_TYPE_CONNECT, "payload": {}})
 
 
 def _build_probe_script(ws_url: str, timeout: int) -> str:
-    """
-    Build a shell script that sends one CONNECT request over websocat and
-    prints the first reply. `-n1` closes the connection after one message
-    each way rather than staying open, so the single-client slot is held
-    for as little time as this round trip actually takes.
-    """
     return (
         f'echo {shlex.quote(_CONNECT_REQUEST)} | '
         f'timeout {int(timeout)} websocat -n1 {shlex.quote(ws_url)}'
@@ -66,7 +21,6 @@ def _build_probe_script(ws_url: str, timeout: int) -> str:
 
 
 def _parse_response(stdout: str) -> Tuple[int, int]:
-    """Return (type, appearance) from the first JSON reply line."""
     for line in stdout.splitlines():
         line = line.strip()
         if not line:
@@ -88,8 +42,6 @@ _DEFAULT_LAYOUT = [
 
 
 class OpenbooksCollectorPlugin(CollectorPlugin):
-    """Monitors OpenBooks' IRC bridge connectivity via a WebSocket connect probe."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.ws_url = config.get('ws_url', 'ws://127.0.0.1:9777/ws')
@@ -136,8 +88,6 @@ class OpenbooksCollectorPlugin(CollectorPlugin):
 
 
 class OpenbooksUIPlugin(UIPlugin):
-    """Dashboard rendering for the openbooks monitor — declarative, see UI_SPEC."""
-
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {

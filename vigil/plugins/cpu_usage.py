@@ -12,7 +12,6 @@ _SEVERITY = {'online': 0, 'warning': 1, 'failed': 2}
 
 
 def _parse_cpu_line(line: str) -> Tuple[int, int]:
-    """Return (total_jiffies, idle_jiffies) from a /proc/stat cpu line."""
     parts = line.split()
     user, nice, system, idle = int(parts[1]), int(parts[2]), int(parts[3]), int(parts[4])
     iowait  = int(parts[5]) if len(parts) > 5 else 0
@@ -41,17 +40,6 @@ _DEFAULT_LAYOUT = [
 
 
 class CpuUsageCollectorPlugin(CollectorPlugin):
-    """
-    Monitors CPU utilization over SSH.
-
-    Takes two /proc/stat snapshots one second apart in a single SSH command
-    and computes the usage delta — no agents or extra tools required.
-
-    Config options:
-      cpu_warning    CPU % that triggers warning (default: 70)
-      cpu_threshold  CPU % that triggers failed  (default: 85)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.cpu_warning   = int(config.get('cpu_warning',   70))
@@ -94,14 +82,6 @@ class CpuUsageCollectorPlugin(CollectorPlugin):
 
 
 class CpuUsageUIPlugin(UIPlugin):
-    """Dashboard rendering for the cpu_usage monitor — declarative, see UI_SPEC.
-
-    cpu_card's color is config-driven (cpu_warning/cpu_threshold), so the
-    threshold rule is registered per-instance in __init__ (same pattern as
-    disk_space.py) and UI_SPEC is a property so it can reference the
-    instance-specific rule name.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.cpu_warning   = int(config.get('cpu_warning',   70))

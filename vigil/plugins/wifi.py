@@ -6,13 +6,6 @@ from vigil.core.common.plugin_utils import level_for as _level_for
 
 
 def _parse_wireless(stdout: str) -> Dict[str, Tuple[float, float]]:
-    """Parse /proc/net/wireless into {iface: (link_quality, signal_dbm)}.
-
-    Columns (after the two header lines) are:
-      iface: status  link  level  noise  ...
-    `link` is the link quality and `level` is the signal level in dBm. Both
-    fields often carry a trailing '.' in the file, which we strip.
-    """
     result: Dict[str, Tuple[float, float]] = {}
     for line in stdout.splitlines():
         if ':' not in line:
@@ -32,7 +25,6 @@ def _parse_wireless(stdout: str) -> Dict[str, Tuple[float, float]]:
 
 
 def _auto_detect_interface(stats: Dict[str, Tuple[float, float]]) -> Optional[str]:
-    """Return the wireless interface with the strongest link quality."""
     if not stats:
         return None
     return max(stats, key=lambda i: stats[i][0])
@@ -47,22 +39,6 @@ _DEFAULT_LAYOUT = [
 
 
 class WifiCollectorPlugin(CollectorPlugin):
-    """
-    Monitors WiFi link quality and signal strength over SSH via
-    /proc/net/wireless — no wireless tools required on the remote host.
-
-    Status is derived from link quality (a 0-70 scale on most drivers):
-    lower quality is worse, so the warning/critical bounds are treated as
-    floors — quality below `quality_warning` warns, below `quality_threshold`
-    fails.
-
-    Config options:
-      interface          (optional) explicit wireless iface, e.g. "wlan0".
-                         Omit to auto-detect the strongest link.
-      quality_warning    Link quality that triggers warning (default: 40)
-      quality_threshold  Link quality that triggers failed  (default: 20)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.interface: Optional[str] = config.get('interface')
@@ -71,7 +47,6 @@ class WifiCollectorPlugin(CollectorPlugin):
         self._active_interface: Optional[str] = self.interface
 
     def _level_for_quality(self, quality: float) -> str:
-        """Lower quality is worse, so treat the bounds as floors."""
         if quality <= self.quality_threshold:
             return 'failed'
         if quality <= self.quality_warning:
@@ -117,21 +92,14 @@ class WifiCollectorPlugin(CollectorPlugin):
 
 
 class WifiUIPlugin(UIPlugin):
-    """Dashboard rendering for the wifi monitor."""
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.interface: Optional[str] = self.config.get('interface')
         self.quality_warning   = float(self.config.get('quality_warning',   40))
         self.quality_threshold = float(self.config.get('quality_threshold', 20))
-        # Unlike the collector, the UI process never observes a live
-        # collection, so auto-detected interfaces only become known once a
-        # metric has been recorded; an explicit `interface` config is known
-        # immediately.
         self._active_interface: Optional[str] = self.interface
 
     def _level_for_quality(self, quality: float) -> str:
-        """Lower quality is worse, so treat the bounds as floors."""
         if quality <= self.quality_threshold:
             return 'failed'
         if quality <= self.quality_warning:
@@ -143,10 +111,6 @@ class WifiUIPlugin(UIPlugin):
         from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.theme import STATUS_COLORS
 
-        # Two charts (quality_chart/signal_chart) don't fit UI_SPEC's single
-        # 'chart' key, so this stays a manual layout+page build — but reuses
-        # the shared 'int' / a locally-scoped signal formatter rather than
-        # redefining every card's dash text from scratch.
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
         page = self.page(metric_names=['link_quality', 'signal_dbm'])
 

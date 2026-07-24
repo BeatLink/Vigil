@@ -1,23 +1,3 @@
-"""
-Collector-side internal API.
-
-Vigil runs as two OS processes: a collector (polls targets, owns live plugin
-instances) and a web process (serves the dashboard, reads the shared SQLite
-DB directly). Almost everything the web process needs is a plain DB read —
-but a few things only make sense against a live SSH connection, which exists
-only here: triggering an action (restart a service, kill a process), an
-ad-hoc SSH control command a plugin builds internally (e.g. service_list.py's
-"view unit file"), job control (borg backup start/cancel), "Poll Now", and
-recording a push-monitor heartbeat.
-
-This module is that seam: a small FastAPI app, bound to loopback only, that
-the web process's remote_proxy client calls. It is not a public API — it has
-no auth of its own and must never be reachable from anywhere but the web
-process on the same host (see register_internal_api's host binding note).
-Vigil's existing REST API (core/api.py) is the public, read-only, optionally
-Basic-Auth-gated surface; this one is private plumbing between Vigil's own
-two processes.
-"""
 import hmac
 import logging
 from typing import Any, Dict, Optional
@@ -28,12 +8,10 @@ from pydantic import BaseModel
 
 
 def _tokens_match(given: str, expected: str) -> bool:
-    """Constant-time token comparison, so a wrong guess can't be timed."""
     return hmac.compare_digest(given, expected)
 
 
 def _flatten(plugins):
-    """Yield every plugin instance in the tree (groups and leaves)."""
     for p in plugins:
         yield p
         yield from _flatten(p.children)
@@ -64,15 +42,6 @@ class PushRequest(BaseModel):
 
 
 def create_internal_app(engine: Any) -> FastAPI:
-    """
-    Build the collector's internal API app.
-
-    Kept as a separate FastAPI instance (not mounted on the same app as the
-    public REST API) so it can be bound to its own loopback-only port —
-    accidentally exposing it alongside the public API on a public bind
-    address would let anyone who reaches Vigil run arbitrary commands on
-    every monitored host.
-    """
     app = FastAPI(title="vigil-internal", docs_url=None, redoc_url=None)
 
     def _find(monitor_id: str):
@@ -111,16 +80,6 @@ def create_internal_app(engine: Any) -> FastAPI:
 
     @app.post('/internal/ssh/{monitor_id}')
     async def ssh_execute(monitor_id: str, req: SSHCommandRequest):
-        """
-        Run a pre-built command through a plugin's SSHController.
-
-        `command` is always constructed server-side by trusted plugin code
-        (e.g. service_list.py's "view unit file" button), the same as when
-        ssh_controller.execute_action was called in-process — this endpoint
-        does not change that trust model, it only relocates where the call
-        happens. It must stay unreachable from anywhere but the web process
-        (see register_internal_api).
-        """
         plugin = _find(monitor_id)
         if plugin is None:
             return JSONResponse({'error': 'not found'}, status_code=404)
@@ -162,16 +121,6 @@ def create_internal_app(engine: Any) -> FastAPI:
 
     @app.post('/internal/push/{monitor_id}')
     def push(monitor_id: str, req: PushRequest):
-        """
-        Record a push-monitor heartbeat.
-
-        The token check happens here, not in the web process's /api/push
-        route: `plugin.token` is config the collector-side PushCollectorPlugin
-        holds (see push.py), and the web process's UIPlugin never has it —
-        forwarding the caller's token here for the collector to verify
-        against the real one, rather than the web process trying to check it
-        itself, means the secret is compared in exactly one place.
-        """
         from vigil.plugins.push import PushCollectorPlugin
         plugin = _find(monitor_id)
         if plugin is None or not isinstance(plugin, PushCollectorPlugin):
@@ -187,14 +136,6 @@ def create_internal_app(engine: Any) -> FastAPI:
 
 
 async def run_internal_api(engine: Any, host: str = '127.0.0.1', port: int = 8081):
-    """
-    Serve the internal API as an asyncio task on the collector's own event
-    loop, alongside VigilEngine.run()'s monitor scheduler.
-
-    Bound to `host` (loopback by default — see the module docstring on why
-    this must never be a public bind address) rather than reusing the
-    dashboard's NiceGUI/FastAPI app, which listens on the public port.
-    """
     import uvicorn
     app = create_internal_app(engine)
     config = uvicorn.Config(app, host=host, port=port, log_level='warning')

@@ -1,9 +1,3 @@
-"""
-Integration tests for VigilEngine.
-
-These tests exercise real plugin loading via importlib and a real temp-file database,
-but mock SSH connections so no actual network calls are made.
-"""
 import asyncio
 import pytest
 import yaml
@@ -117,8 +111,6 @@ class TestPluginLoading:
 
 
 class TestSSHDefaultsMerge:
-    """Global ssh_defaults are merged into each plugin's ssh_config."""
-
     def test_defaults_applied_to_ssh_config(self, tmp_path):
         db_path = str(tmp_path / "test.db")
         cfg_path = _write_config(tmp_path, {
@@ -192,8 +184,8 @@ class TestLogRetention:
         with patch("vigil.collector.plugin_base.SSHConnection"):
             engine = VigilEngine(cfg_path)
         engine.db = MagicMock()
-        engine._maybe_prune_logs()          # first call prunes
-        engine._maybe_prune_logs()          # immediate second call is throttled
+        engine._maybe_prune_logs()
+        engine._maybe_prune_logs()
         assert engine.db.prune_logs.call_count == 1
         engine.db.prune_logs.assert_called_with(30)
 
@@ -211,8 +203,6 @@ class TestLogRetention:
 
 
 class TestFlatten:
-    """_flatten yields every monitor in the tree, groups and leaves alike."""
-
     def test_flattens_nested_tree(self):
         leaf = MagicMock(id="leaf", children=[])
         mid = MagicMock(id="mid", children=[leaf])
@@ -225,22 +215,12 @@ class TestFlatten:
 
 
 class TestPerMonitorScheduling:
-    """
-    Each monitor is driven by its own independent task/loop (_monitor_loop),
-    not a shared tick. A group polls on its own schedule too — it aggregates
-    by re-reading live child status from the DB (GroupPlugin.on_collect), so
-    it has no ordering dependency on when its children last ran.
-    """
-
     async def test_monitor_loop_reschedules_using_plugin_interval(self):
-        # _monitor_loop sleeps `plugin.interval` between calls; patch sleep to
-        # observe both the startup jitter and the interval, and to stop the
-        # otherwise-infinite loop after a couple of iterations.
         calls = []
 
         async def fake_sleep(seconds):
             calls.append(seconds)
-            if len(calls) >= 3:  # jitter, then two interval sleeps
+            if len(calls) >= 3:
                 raise asyncio.CancelledError()
 
         plugin = MagicMock(id="p", interval=42)
@@ -252,13 +232,9 @@ class TestPerMonitorScheduling:
                 await engine._monitor_loop(plugin)
 
         assert plugin.run_cycle.await_count == 2
-        # First sleep is the startup jitter (0..STARTUP_JITTER_SECONDS); the
-        # rest are the monitor's own interval, independent of any other
-        # monitor's schedule.
         assert calls[1:] == [42, 42]
 
     async def test_a_crashing_monitor_keeps_polling(self):
-        # One monitor raising must not end its own loop, let alone anyone else's.
         calls = []
 
         async def fake_sleep(seconds):
@@ -295,22 +271,19 @@ class TestPerMonitorScheduling:
 
         def spy_create_task(coro, *a, **kw):
             created.append(coro)
-            coro.close()  # never actually run it — just observe scheduling
+            coro.close()
             return MagicMock()
 
         with patch("vigil.collector.main.asyncio.create_task", side_effect=spy_create_task):
             with patch.object(engine, "_prune_loop", AsyncMock()):
                 await engine.run()
 
-        # One task per monitor (groups included), plus the internal API task.
         monitor_tasks = [c for c in created if c.cr_code.co_name == "_monitor_loop"]
         assert len(monitor_tasks) == 2
         assert any(c.cr_code.co_name == "_run_internal_api" for c in created)
 
 
 class TestExceptionIsolation:
-    """A crashing plugin must not prevent other plugins from running."""
-
     async def test_exception_does_not_stop_sibling(self):
         ran = []
 

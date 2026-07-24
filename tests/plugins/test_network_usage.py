@@ -19,7 +19,6 @@ BASE_CFG = {
 
 
 def _make_net_dev(ifaces: dict) -> str:
-    """Build a /proc/net/dev block from {iface: (rx_bytes, tx_bytes)}."""
     lines = [NET_DEV_HEADER]
     for iface, (rx, tx) in ifaces.items():
         lines.append(f"  {iface}: {rx} 100 0 0 0 0 0 0 {tx} 50 0 0 0 0 0 0\n")
@@ -60,10 +59,6 @@ def _latest_metric(name: str, metric: str):
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 
-
-# ---------------------------------------------------------------------------
-# Unit tests for pure parsing helpers
-# ---------------------------------------------------------------------------
 
 class TestParseNetDev:
     def test_parses_rx_and_tx(self):
@@ -126,10 +121,6 @@ class TestFormatRate:
         assert _format_rate(2048.0) == "2.0 MB/s"
 
 
-# ---------------------------------------------------------------------------
-# Collection integration tests
-# ---------------------------------------------------------------------------
-
 class TestNetworkUsageCollection:
     async def test_normal_collection_sets_online(self, plugin):
         stdout = _two_snapshots(
@@ -141,7 +132,6 @@ class TestNetworkUsageCollection:
         assert _latest_status() == "online"
 
     async def test_rx_metric_recorded(self, plugin):
-        # eth0 gains 1024 rx bytes in 1 second → 1.0 KB/s
         stdout = _two_snapshots(
             {"eth0": (0, 0)},
             {"eth0": (1024, 0)},
@@ -151,7 +141,6 @@ class TestNetworkUsageCollection:
         assert _latest_metric("test-net", "rx_kbps") == pytest.approx(1.0)
 
     async def test_tx_metric_recorded(self, plugin):
-        # eth0 gains 2048 tx bytes in 1 second → 2.0 KB/s
         stdout = _two_snapshots(
             {"eth0": (0, 0)},
             {"eth0": (0, 2048)},
@@ -171,7 +160,6 @@ class TestNetworkUsageCollection:
         assert _latest_status() == "online"
 
     async def test_explicit_interface_overrides_auto_detect(self, explicit_plugin):
-        # wlan0 has more total traffic but eth0 is explicitly configured
         stdout = _two_snapshots(
             {"eth0": (0, 0), "wlan0": (9_999_999, 0)},
             {"eth0": (512, 0), "wlan0": (9_999_999, 0)},
@@ -182,7 +170,6 @@ class TestNetworkUsageCollection:
         assert _latest_metric("test-net-explicit", "rx_kbps") == pytest.approx(0.5)
 
     async def test_counter_reset_clamped_to_zero(self, plugin):
-        # rx decreases between samples (counter wrap/reset) — should record 0
         stdout = _two_snapshots(
             {"eth0": (5000, 0)},
             {"eth0": (100, 0)},
@@ -202,14 +189,12 @@ class TestNetworkUsageCollection:
         assert _latest_status() == "failed"
 
     async def test_missing_interface_sets_failed(self, explicit_plugin):
-        # eth0 is configured but only wlan0 appears in output
         stdout = _two_snapshots({"wlan0": (0, 0)}, {"wlan0": (1024, 0)})
         explicit_plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
         await explicit_plugin.on_collect()
         assert _latest_status("test-net-explicit") == "failed"
 
     async def test_no_usable_interface_sets_failed(self, plugin):
-        # Only virtual/loopback interfaces present
         stdout = _two_snapshots({"lo": (0, 0), "veth0": (0, 0)}, {"lo": (0, 0), "veth0": (0, 0)})
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
         await plugin.on_collect()

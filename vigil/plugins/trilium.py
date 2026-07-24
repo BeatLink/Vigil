@@ -1,39 +1,3 @@
-"""
-Trilium Notes write-activity health via the ETAPI metrics endpoint.
-
-Complements a `systemd_service` monitor on trilium-server rather than
-replacing it. That one answers "is the process alive"; this one answers "is
-the note database actually still being written to", which is a different
-failure — Trilium can serve its login page and API perfectly while, say, the
-underlying SQLite file has gone read-only or a sync partner stopped applying
-changes, and every liveness check stays green throughout.
-
-Trilium's ETAPI exposes no explicit health/sync-status field (there is no
-public, documented endpoint for that — the wiki-mentioned internal sync-check
-route is session-cookie-authenticated for the web client only, not part of
-ETAPI, and not worth depending on). The best available proxy is
-`statistics.lastModified` from `/etapi/metrics?format=json`: if notes are
-being actively used, this timestamp keeps advancing; if it goes stale for
-longer than expected, either nothing is being written (which may be entirely
-normal overnight) or something is actually broken. Because "normal" here
-depends heavily on how the notes are used, this defaults to a generous
-staleness window and is meant to be tuned per-instance rather than trusted
-out of the box.
-
-Authenticates with an ETAPI token generated once by hand — see trilium.nix
-for why that step cannot be made declarative.
-
-Config options:
-  api_url            Base URL of the Trilium instance, as seen from the
-                     monitored host (default: http://127.0.0.1:8080)
-  token              ETAPI token. Prefer token_command.
-  token_command      Command run on the monitored host whose stdout is the
-                     token (e.g. "cat /run/secrets/trilium_etapi_token").
-                     Takes precedence over `token`.
-  stale_warning      Hours since the last note modification at which status
-                     is warning (default: 72 — three days)
-  api_timeout        Seconds allowed for the remote curl call (default: 10)
-"""
 import json
 import shlex
 import time
@@ -100,8 +64,6 @@ _DEFAULT_LAYOUT = [
 
 
 class TriliumCollectorPlugin(CollectorPlugin):
-    """Monitors Trilium note write-activity via the ETAPI metrics endpoint."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8080')
@@ -138,7 +100,6 @@ class TriliumCollectorPlugin(CollectorPlugin):
         if last_modified_age is not None:
             self.db_metrics.metric('last_modified_age_hours', last_modified_age)
 
-        # --- status ---------------------------------------------------------
         if last_modified_age is None:
             self.db_logger.write(
                 "No 'lastModified' timestamp in ETAPI response", level="WARNING")
@@ -168,13 +129,6 @@ class TriliumCollectorPlugin(CollectorPlugin):
 
 
 class TriliumUIPlugin(UIPlugin):
-    """Dashboard rendering for the trilium monitor — declarative, see UI_SPEC.
-    lastmod_card's color is config-driven (stale_warning), so it's a
-    per-instance rule. The '{age} ago' text format is structurally different
-    from any FORMATTERS entry (age + trailing ' ago'), so it's registered
-    locally rather than reusing a generic age formatter.
-    """
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.stale_warning = float(self.config.get('stale_warning', 72))

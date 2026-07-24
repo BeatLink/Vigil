@@ -44,7 +44,6 @@ class TestPushCollection:
     async def test_stale_push_is_failed(self, make_plugin):
         p = make_plugin(PushCollectorPlugin, _cfg(max_age=60))
         p.record_push(status="up")
-        # Backdate the heartbeat past max_age without waiting in real time.
         p.db_metrics.metric("last_push_epoch", time.time() - 120)
         await p.on_collect()
         assert _latest_status("test-push") == "failed"

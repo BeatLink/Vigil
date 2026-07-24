@@ -16,7 +16,6 @@ TCP_HEADER = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when
 
 
 def _make_tcp(states: list) -> str:
-    """Build a /proc/net/tcp block; `states` is a list of 2-digit hex state codes."""
     lines = [TCP_HEADER]
     for i, st in enumerate(states):
         lines.append(f"   {i}: 0100007F:0050 00000000:0000 {st} 00000000:00000000 00:00000000 00000000     0        0 0\n")

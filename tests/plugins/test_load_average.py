@@ -20,15 +20,12 @@ CFG_WITH_THRESHOLDS = {
     "load_threshold": 100.0,
 }
 
-# Raw load tuples (1m, 5m, 15m) — tests use cpus=4
-# Percentages = raw / 4 * 100
-_LOAD_OK      = (1.2, 1.0, 0.8)   # 1m → 30%  → online  (below 70%)
-_LOAD_WARNING = (3.2, 2.8, 2.4)   # 1m → 80%  → warning (between 70% and 100%)
-_LOAD_FAILED  = (5.0, 4.8, 4.6)   # 1m → 125% → failed  (above 100%)
+_LOAD_OK      = (1.2, 1.0, 0.8)
+_LOAD_WARNING = (3.2, 2.8, 2.4)
+_LOAD_FAILED  = (5.0, 4.8, 4.6)
 
 
 def _make_output(load, cpus=4):
-    """load: (1m, 5m, 15m) tuple; cpus: int"""
     return (
         f"LOAD:{load[0]} {load[1]} {load[2]} 1/100 12345\n"
         f"CPUS:{cpus}\n"
@@ -80,7 +77,6 @@ class TestLevelFor:
 
 class TestLoadAverageCollection:
     async def test_load_pct_metrics_recorded(self, plugin):
-        # (1.2 / 4) * 100 = 30%, (1.0 / 4) * 100 = 25%, (0.8 / 4) * 100 = 20%
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _make_output(_LOAD_OK, cpus=4), ""))
         await plugin.on_collect()
         assert _latest_metric("load_pct_1m")  == pytest.approx(30.0)
@@ -88,14 +84,12 @@ class TestLoadAverageCollection:
         assert _latest_metric("load_pct_15m") == pytest.approx(20.0)
 
     async def test_pct_scales_with_core_count(self, plugin):
-        # Same raw load, 8 cores → half the percentage
         plugin.ssh_collector.fetch_output = AsyncMock(
             return_value=(0, _make_output((2.0, 2.0, 2.0), cpus=8), ""))
         await plugin.on_collect()
         assert _latest_metric("load_pct_1m") == pytest.approx(25.0)
 
     async def test_no_thresholds_always_online(self, plugin):
-        # BASE_CFG has no thresholds — any load stays online
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _make_output(_LOAD_FAILED, cpus=4), ""))
         await plugin.on_collect()
         assert _latest_status() == "online"
@@ -119,7 +113,6 @@ class TestLoadAverageCollection:
         assert _latest_status("test-load-thresh") == "failed"
 
     async def test_missing_cpus_line_falls_back_to_1(self, plugin):
-        # Without CPUS: line the raw load is used as-is (core count = 1)
         plugin.ssh_collector.fetch_output = AsyncMock(
             return_value=(0, "LOAD:2.0 1.5 1.0 1/100 12345\n", ""))
         await plugin.on_collect()

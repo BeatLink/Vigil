@@ -1,17 +1,3 @@
-"""
-HTTP Basic Auth for Vigil's dashboard and REST API.
-
-Vigil ships with no authentication by default (see README roadmap) — anyone
-who can reach the port gets full read access plus the ability to trigger
-control actions (restart services, kill processes, etc.). This module adds an
-opt-in shared-credential gate: when `auth.username` and `auth.password` (or
-`auth.password_file`) are set in config.yaml, every request must present
-matching HTTP Basic credentials.
-
-Registered as ASGI middleware on the NiceGUI/FastAPI app so it covers the
-dashboard pages, the REST API, and the Prometheus /metrics endpoint uniformly
-— no per-route wiring to keep in sync as routes are added.
-"""
 import hmac
 import logging
 from pathlib import Path
@@ -42,10 +28,6 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         self._password = password
 
     async def dispatch(self, request: Request, call_next):
-        # Push monitors are checked in by external scripts/cron jobs with no
-        # reason to hold the dashboard's shared admin credentials — they
-        # authenticate with their own per-monitor token instead (checked in
-        # the route itself, see api.py's push handler).
         if request.url.path.startswith('/api/push/'):
             return await call_next(request)
 
@@ -68,7 +50,6 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
         except (ValueError, UnicodeDecodeError):
             return False
         username, _, password = decoded.partition(':')
-        # Constant-time comparison avoids leaking match length via timing.
         return (
             hmac.compare_digest(username, self._username)
             and hmac.compare_digest(password, self._password)
@@ -76,7 +57,6 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
 
 
 def register_auth(app: Any, auth_settings: Dict[str, Any]) -> None:
-    """Attach Basic Auth middleware if `auth.username`/`password` are configured."""
     username = auth_settings.get('username')
     password = _read_password(auth_settings)
 

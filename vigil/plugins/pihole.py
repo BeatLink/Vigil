@@ -1,65 +1,3 @@
-"""
-Pi-hole DNS statistics via the v6 REST API.
-
-Complements a `systemd_service` monitor on pihole-ftl rather than replacing it.
-That one answers "is the process alive"; this one answers "is it still doing its
-job", which is a different failure. The case that motivates it: gravity (the
-blocklist database) fails to rebuild, so Pi-hole keeps resolving happily while
-blocking nothing. Every liveness check stays green through that — the service is
-up, the web UI answers, the port is open — and the only visible symptom is a
-block rate that quietly fell to zero.
-
-Two signals carry that:
-
-  block rate      Share of queries blocked. A collapse toward zero means gravity
-                  is loaded but matching nothing.
-  gravity age     Time since the blocklist last rebuilt. Catches the same fault
-                  earlier, before enough queries accumulate to move the rate.
-
-Both are checked because they fail on different clocks: a stale list that still
-matches keeps the rate healthy, and a freshly rebuilt but empty list keeps the
-age healthy. Neither alone is sufficient.
-
-The API is read over SSH with curl rather than from Vigil's own process: FTL
-binds its API to the Pi-hole host's loopback, so it is not reachable across the
-network. This matches how `ports` probes from the remote host.
-
-Pi-hole 6 replaced the old `admin/api.php` with `/api/*` and normally requires a
-session token. Where the API is reachable without one (the default for local
-requests), no credentials are needed; set `api_password` if the instance
-requires authentication.
-
-Config options:
-  api_url             Base URL of the Pi-hole API, as seen from the monitored
-                      host (default: http://127.0.0.1:80)
-  api_password        App password, if the instance requires authentication.
-                      Prefer api_password_command over inlining a secret here.
-  api_password_command
-                      Command run on the monitored host whose stdout is the
-                      password (e.g. "cat /run/secrets/pihole_api").
-  block_rate_warning  Block % below which status is warning (default: 5)
-  block_rate_threshold
-                      Block % below which status is failed  (default: 1)
-  gravity_max_age     Blocklist age past which status is warning (default: 8d)
-  min_queries         Queries needed before the block rate is judged at all
-                      (default: 100). Below this the ratio is noise — a freshly
-                      restarted FTL legitimately shows 0% after two queries.
-
-Control actions:
-
-  Enable Blocking    Turns blocking back on with no timer, for the "blocking is
-                      DISABLED" fault this monitor flags. Safe to fire any time
-                      blocking is off, whether that was deliberate or not — it
-                      is not offered when blocking already reads enabled.
-  Update Gravity      Rebuilds the blocklist database, the remediation for both
-                      an empty gravity list and a stale one. Run on demand
-                      rather than on a timer here: an automatic rebuild retry
-                      would mask a blocklist source that is failing every time.
-
-Disabling blocking is deliberately not offered as a button: it is the one state
-this monitor exists to catch, so a dashboard control for it would let a
-mis-click quietly recreate the fault it watches for.
-"""
 import json
 import shlex
 from typing import Any, Dict, List, Optional, Tuple
@@ -68,23 +6,11 @@ from vigil.core.common.time_utils import parse_duration
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# Marks the end of the summary payload so both API responses can be fetched in
-# one SSH round trip and split apart again. A newline-free sentinel that cannot
-# occur in JSON.
 _SEP = "@@VIGIL_SPLIT@@"
 
 
 def _auth_preamble(base: str, timeout: int, password_command: Optional[str],
                    password: Optional[str]) -> Tuple[List[str], str]:
-    """
-    Build the shell lines that exchange a password for a session id, and the
-    curl flags that carry it.
-
-    Returns (lines, auth_flags). When no credentials are configured the lines
-    are empty and the flags blank, matching an instance reachable without auth.
-    The password is resolved on the monitored host when `password_command` is
-    used, so it never passes through Vigil.
-    """
     if not (password_command or password):
         return [], ''
 
@@ -94,8 +20,6 @@ def _auth_preamble(base: str, timeout: int, password_command: Optional[str],
     else:
         lines.append(f"__pw={shlex.quote(password)}")
 
-    # Exchange the password for a session id. jq is not assumed present, so
-    # the sid is pulled out with sed.
     lines.append(
         f'__sid=$(curl -s -m {timeout} -X POST {shlex.quote(base + "/api/auth")} '
         f'-H "Content-Type: application/json" '
@@ -107,12 +31,6 @@ def _auth_preamble(base: str, timeout: int, password_command: Optional[str],
 
 def _build_fetch_script(api_url: str, timeout: int, password_command: Optional[str],
                         password: Optional[str]) -> str:
-    """
-    Build a shell script that fetches the summary and blocking-status endpoints.
-
-    Authenticates first when a password is supplied, reusing the returned
-    session id (SID) for both calls.
-    """
     base = api_url.rstrip('/')
     lines = ["set -e"]
 
@@ -127,12 +45,6 @@ def _build_fetch_script(api_url: str, timeout: int, password_command: Optional[s
 
 def _build_blocking_script(api_url: str, timeout: int, password_command: Optional[str],
                            password: Optional[str], enabled: bool) -> str:
-    """
-    Build a shell script that POSTs a new blocking state.
-
-    `--fail` turns a rejected request (e.g. an expired session) into a non-zero
-    exit rather than a "successful" curl that merely fetched an error body.
-    """
     base = api_url.rstrip('/')
     lines = ["set -e"]
 
@@ -151,14 +63,6 @@ def _build_blocking_script(api_url: str, timeout: int, password_command: Optiona
 
 def _build_gravity_script(api_url: str, timeout: int, password_command: Optional[str],
                           password: Optional[str]) -> str:
-    """
-    Build a shell script that triggers a gravity (blocklist) rebuild.
-
-    `/api/action/gravity` streams progress as Server-Sent Events rather than
-    returning a single JSON body; the stream is discarded and only the exit
-    code is used; a generous timeout is used since a full rebuild can take
-    much longer than the usual API round trip.
-    """
     base = api_url.rstrip('/')
     lines = ["set -e"]
 
@@ -173,12 +77,6 @@ def _build_gravity_script(api_url: str, timeout: int, password_command: Optional
 
 
 def _parse_response(stdout: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """
-    Split and parse the two JSON payloads.
-
-    Raises ValueError with a readable message on anything unparseable, so the
-    caller can log one cause rather than a bare KeyError.
-    """
     if _SEP not in stdout:
         raise ValueError(f"unexpected API response: {stdout[:200]!r}")
     summary_raw, blocking_raw = stdout.split(_SEP, 1)
@@ -191,8 +89,6 @@ def _parse_response(stdout: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     except json.JSONDecodeError as e:
         raise ValueError(f"blocking status was not JSON ({e}): {blocking_raw[:200]!r}") from e
 
-    # An authenticated instance answers 401 with a JSON error body rather than
-    # the expected shape; say so plainly instead of reporting a missing key.
     if 'queries' not in summary:
         if isinstance(summary.get('error'), dict):
             msg = summary['error'].get('message', 'unknown error')
@@ -203,7 +99,6 @@ def _parse_response(stdout: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
 
 def _format_age(seconds: float) -> str:
-    """Format a duration as a compact human-readable string."""
     seconds = int(seconds)
     days, rem = divmod(seconds, 86400)
     hours = rem // 3600
@@ -224,8 +119,6 @@ _DEFAULT_LAYOUT = [
 
 
 class PiholeCollectorPlugin(CollectorPlugin):
-    """Monitors Pi-hole DNS filtering health via the v6 REST API."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.api_url = config.get('api_url', 'http://127.0.0.1:80')
@@ -235,11 +128,7 @@ class PiholeCollectorPlugin(CollectorPlugin):
         self.block_rate_threshold = float(config.get('block_rate_threshold', 1))
         self.gravity_max_age = parse_duration(config.get('gravity_max_age', '8d'))
         self.min_queries = int(config.get('min_queries', 100))
-        # Seconds allowed for the remote curl calls. Distinct from self.timeout,
-        # which bounds the SSH command as a whole and must stay the larger.
         self.api_timeout = int(config.get('api_timeout', 10))
-        # Gravity rebuilds take far longer than a status read, so they get
-        # their own generous deadline rather than inheriting api_timeout.
         self.gravity_timeout = int(config.get('gravity_timeout', 120))
 
     async def on_collect(self):
@@ -266,7 +155,6 @@ class PiholeCollectorPlugin(CollectorPlugin):
 
         total = float(queries.get('total', 0) or 0)
         blocked = float(queries.get('blocked', 0) or 0)
-        # Prefer FTL's own percentage; fall back to computing it when absent.
         block_rate = queries.get('percent_blocked')
         if block_rate is None:
             block_rate = (100.0 * blocked / total) if total else 0.0
@@ -285,9 +173,6 @@ class PiholeCollectorPlugin(CollectorPlugin):
         self.db_metrics.metric('clients_active', float(clients.get('active', 0) or 0))
         self.db_metrics.metric('blocking_enabled', 1.0 if blocking_enabled else 0.0)
 
-        # Gravity age, measured against the monitored host's clock via the
-        # API's own timestamp. Absent on an instance that has never built a
-        # list, which is itself worth reporting.
         gravity_age: Optional[float] = None
         last_update = gravity.get('last_update')
         if last_update:
@@ -295,9 +180,6 @@ class PiholeCollectorPlugin(CollectorPlugin):
             gravity_age = max(0.0, _time.time() - float(last_update))
             self.db_metrics.metric('gravity_age_seconds', gravity_age)
 
-        # --- status ---------------------------------------------------------
-        # Each condition is judged independently and the worst one wins, so a
-        # healthy block rate cannot mask a stale list (or vice versa).
         problems = []
         level = 'online'
 
@@ -308,8 +190,6 @@ class PiholeCollectorPlugin(CollectorPlugin):
                 level = new_level
 
         if not blocking_enabled:
-            # Deliberate but easy to forget: blocking disabled from the UI has
-            # no timer set here, so it stays off until someone notices.
             problems.append("blocking is DISABLED")
             _escalate('failed')
 
@@ -317,8 +197,6 @@ class PiholeCollectorPlugin(CollectorPlugin):
             problems.append("gravity list is empty")
             _escalate('failed')
 
-        # Below min_queries the ratio is dominated by whatever handful of
-        # lookups happened to arrive, so it is not evidence of anything.
         if total >= self.min_queries:
             if block_rate < self.block_rate_threshold:
                 problems.append(
@@ -354,16 +232,6 @@ class PiholeCollectorPlugin(CollectorPlugin):
         self.set_status(level)
 
     def get_actions(self) -> List[Dict[str, str]]:
-        """
-        Expose the remediations for the faults this monitor detects.
-
-        Disabling blocking is deliberately not offered: it is the one state
-        this monitor exists to catch, so a dashboard control for it would let
-        a mis-click quietly recreate the fault it watches for. Enable and
-        gravity-rebuild are both reversible, queue-free operations, matching
-        the "no confirmation step" constraint the dashboard fires actions
-        under.
-        """
         return [
             {'name': 'Enable Blocking', 'action_id': 'enable_blocking',
              'variant': 'primary', 'icon': 'shield'},
@@ -403,18 +271,6 @@ class PiholeCollectorPlugin(CollectorPlugin):
 
 
 class PiholeUIPlugin(UIPlugin):
-    """
-    Dashboard rendering for the pihole monitor — mixed: block_rate_card,
-    queries_card, clients_card, and blocking_card fit UI_SPEC's single-metric
-    card model (block_rate_card's color is config-driven, inverted-direction
-    3-tier threshold — LOW rate is bad, so plugin_utils.level_for's normal
-    "higher is worse" direction doesn't apply; that inversion is expressed as
-    a local per-instance rule). gravity_card combines gravity_domains AND
-    gravity_age_seconds into one "N domains (age old)" string with its own
-    threshold, which doesn't fit the single-metric card model, so it stays a
-    manual bind alongside generic_render()'s output for the rest of the page.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.block_rate_warning = float(config.get('block_rate_warning', 5))

@@ -27,7 +27,6 @@ def _latest_metric(metric, name="test-oom"):
 
 
 def _vmstat(oom_kill=0, include=True):
-    """A realistic /proc/vmstat excerpt, optionally without the oom_kill line."""
     lines = ["nr_free_pages 123456", "pgfault 987654", "pgmajfault 4321"]
     if include:
         lines.append(f"oom_kill {oom_kill}")
@@ -60,7 +59,6 @@ class TestExtractCounter:
 
 class TestBaseline:
     async def test_first_collection_is_baseline(self, plugin):
-        # A non-zero counter on first read is history, not a live incident.
         await _collect(plugin, 5)
         assert _latest_status() == "online"
         assert _latest_metric("oom_kills_total") == pytest.approx(5.0)
@@ -95,23 +93,23 @@ class TestKillDetection:
 class TestAlertDecay:
     async def test_alert_holds_then_clears(self, make_plugin):
         p = make_plugin(OomCollectorPlugin, dict(BASE_CFG, alert_for=3))
-        await _collect(p, 0)          # baseline
-        await _collect(p, 1)          # kill -> failed
+        await _collect(p, 0)
+        await _collect(p, 1)
         assert _latest_status() == "failed"
-        await _collect(p, 1)          # 1/3 -> still warning
+        await _collect(p, 1)
         assert _latest_status() == "warning"
-        await _collect(p, 1)          # 2/3 -> still warning
+        await _collect(p, 1)
         assert _latest_status() == "warning"
-        await _collect(p, 1)          # 3/3 -> decays to online
+        await _collect(p, 1)
         assert _latest_status() == "online"
 
     async def test_new_kill_resets_decay(self, make_plugin):
         p = make_plugin(OomCollectorPlugin, dict(BASE_CFG, alert_for=3))
         await _collect(p, 0)
         await _collect(p, 1)
-        await _collect(p, 1)          # decaying
+        await _collect(p, 1)
         assert _latest_status() == "warning"
-        await _collect(p, 2)          # fresh kill re-escalates
+        await _collect(p, 2)
         assert _latest_status() == "failed"
 
     async def test_alert_for_zero_clears_immediately(self, make_plugin):
@@ -126,12 +124,12 @@ class TestAlertDecay:
 class TestCounterReset:
     async def test_reboot_rebaselines_without_alerting(self, plugin):
         await _collect(plugin, 9)
-        await _collect(plugin, 2)     # counter went backwards: rebooted
+        await _collect(plugin, 2)
         assert _latest_status() == "online"
 
     async def test_kills_after_reboot_still_detected(self, plugin):
         await _collect(plugin, 9)
-        await _collect(plugin, 0)     # rebooted, re-baselined at 0
+        await _collect(plugin, 0)
         await _collect(plugin, 1)
         assert _latest_status() == "failed"
         assert _latest_metric("oom_kills_new") == pytest.approx(1.0)
@@ -144,7 +142,6 @@ class TestFailureModes:
         assert _latest_status() == "failed"
 
     async def test_missing_counter_is_offline(self, plugin):
-        # Old kernel without oom_kill: unmonitored, not healthy.
         await _collect(plugin, 0, include=False)
         assert _latest_status() == "offline"
 

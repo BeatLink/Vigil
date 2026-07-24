@@ -1,18 +1,3 @@
-"""
-Web-process counterpart to VigilEngine (core/main.py).
-
-VigilEngine is the collector: it loads config, builds CollectorPlugin
-instances with real SSH connections, and runs the per-monitor scheduler.
-VigilWebEngine is deliberately much smaller — it loads the same config, opens
-the same shared SQLite database for reads, and builds UIPlugin instances
-(id/name/render_ui only, no SSH) that proxy actions to the collector's
-internal API over CollectorClient. It has no run() and no scheduler: the web
-process only serves the dashboard.
-
-Kept as a separate class rather than a mode flag on VigilEngine so the two
-roles can't accidentally blend — the same reasoning as splitting
-CollectorPlugin/UIPlugin in plugin_base.py.
-"""
 import importlib
 import inspect
 import logging
@@ -36,12 +21,6 @@ class VigilWebEngine:
         else:
             self.db_path = self.config_loader.database_settings.get('path', 'vigil.db')
         try:
-            # Opens the same SQLite file the collector writes to. WAL mode
-            # (see DatabaseManager._connect_and_init) is what makes this
-            # process's reads and the collector's writes safe concurrently;
-            # this process's own writer thread only ever handles UI
-            # preferences (drawer width, tree-expanded state — see
-            # main_dashboard.py), never monitor data.
             self.db = VigilDatabase(self.db_path, write_batch_seconds=self.config_loader.write_batch_seconds)
         except OperationalError as e:
             logging.critical(f"Failed to open database: {e}. Exiting.")
@@ -50,16 +29,6 @@ class VigilWebEngine:
         self.collector_client = CollectorClient(base_url=collector_url)
 
     def setup_ui_modules(self, plugins_cfg: Optional[List[Dict]] = None) -> List[UIPlugin]:
-        """
-        Build the read-side plugin tree: one *UIPlugin instance per
-        configured monitor, holding no SSH connection.
-
-        Mirrors VigilEngine.setup_modules structurally (same recursive
-        children handling, same dynamic module loading by `type`), but
-        matches each plugin module's UIPlugin subclass instead of its
-        CollectorPlugin subclass, and passes collector_client through so
-        on_action/ssh_controller/job_controller can reach the collector.
-        """
         current_level_plugins = []
         target_cfg = plugins_cfg if plugins_cfg is not None else self.config_loader.plugins
 

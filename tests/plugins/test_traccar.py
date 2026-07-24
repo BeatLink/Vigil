@@ -85,7 +85,7 @@ class TestTraccarCollection:
     async def test_disabled_devices_excluded(self, plugin):
         _respond(plugin, [_device(hours_ago=200.0, disabled=True)])
         await plugin.on_collect()
-        assert _latest_status() == "warning"  # no matching enabled devices
+        assert _latest_status() == "warning"
 
     async def test_auth_failure_sets_failed(self, plugin):
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", _AUTH_FAILED))

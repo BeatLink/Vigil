@@ -14,10 +14,8 @@ BASE_CFG = {
 
 
 def _make_diskstats(devices: dict) -> str:
-    """Build a /proc/diskstats block from {name: (sectors_read, sectors_written)}."""
     lines = []
     for i, (name, (rd, wr)) in enumerate(devices.items()):
-        # major minor name reads rd_merged sectors_read time writes wr_merged sectors_written ...
         lines.append(f"   8       {i} {name} 100 0 {rd} 50 200 0 {wr} 80 0 0 0 0")
     return "\n".join(lines) + "\n"
 
@@ -102,7 +100,6 @@ class TestFormatRate:
 
 class TestDiskIoCollection:
     async def test_normal_online(self, plugin):
-        # sda reads 2 sectors (1024 bytes -> 1.0 KB/s), writes 4 (2.0 KB/s)
         stdout = _two_snaps({"sda": (0, 0)}, {"sda": (2, 4)})
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
         await plugin.on_collect()

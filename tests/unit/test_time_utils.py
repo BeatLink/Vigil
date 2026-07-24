@@ -34,7 +34,6 @@ class TestParseDuration:
         assert parse_duration("1d12h") == 86400 + 12 * 3600
 
     def test_compound_all_units(self):
-        # 1w 1d 1h 1m 1s
         expected = 604800 + 86400 + 3600 + 60 + 1
         assert parse_duration("1w1d1h1m1s") == expected
 
@@ -86,12 +85,10 @@ class TestFormatDuration:
         assert format_duration(604800) == "1 Week"
 
     def test_shows_two_most_significant_units(self):
-        # 1h 1m 1s — should show "1 Hour 1 Minute" (top two)
         result = format_duration(3661)
         assert result == "1 Hour 1 Minute"
 
     def test_complex_value(self):
-        # 1d 2h → "1 Day 2 Hours"
         result = format_duration(86400 + 7200)
         assert result == "1 Day 2 Hours"
 

@@ -30,9 +30,8 @@ BASE_CFG = {
 
 def _summary(total=237819, blocked=38288, percent=16.1, domains=347306,
              last_update=None, active_clients=16, forwarded=2344, cached=196457):
-    """A summary payload shaped like Pi-hole 6's /api/stats/summary."""
     if last_update is None:
-        last_update = time.time() - 3600      # rebuilt an hour ago
+        last_update = time.time() - 3600
     return {
         "queries": {
             "total": total,
@@ -48,7 +47,6 @@ def _summary(total=237819, blocked=38288, percent=16.1, domains=347306,
 
 
 def _response(summary=None, blocking="enabled"):
-    """Assemble the two-payload stdout the remote script produces."""
     body = json.dumps(summary if summary is not None else _summary())
     return f'{body}\n{_SEP}\n{json.dumps({"blocking": blocking, "timer": None})}'
 
@@ -107,7 +105,6 @@ class TestBuildFetchScript:
         assert "X-FTL-SID" in script
 
     def test_password_command_runs_on_remote_host(self):
-        # The secret must be resolved remotely, never embedded by Vigil.
         script = _build_fetch_script(
             "http://127.0.0.1:9018", 10, "cat /run/secrets/pihole_api", None)
         assert "cat /run/secrets/pihole_api" in script
@@ -132,8 +129,6 @@ class TestParseResponse:
             _parse_response(f'not json\n{_SEP}\n{{"blocking": "enabled"}}')
 
     def test_auth_error_names_the_cause(self):
-        # A 401 body is valid JSON but the wrong shape; the message should point
-        # at authentication rather than surfacing a missing key.
         body = json.dumps({"error": {"message": "Unauthorized"}})
         with pytest.raises(ValueError, match="api_password"):
             _parse_response(f'{body}\n{_SEP}\n{{"blocking": "enabled"}}')
@@ -183,14 +178,11 @@ class TestBlockRateThresholds:
         assert _latest_status() == "warning"
 
     async def test_collapsed_block_rate_sets_failed(self, plugin):
-        # The motivating failure: gravity loaded but matching nothing.
         _respond(plugin, _summary(total=10000, blocked=20, percent=0.2))
         await plugin.on_collect()
         assert _latest_status() == "failed"
 
     async def test_low_query_volume_is_not_judged(self, plugin):
-        # A freshly restarted FTL shows 0% over a handful of queries; that is
-        # not evidence of a filtering fault.
         _respond(plugin, _summary(total=5, blocked=0, percent=0.0))
         await plugin.on_collect()
         assert _latest_status() == "online"
@@ -208,7 +200,7 @@ class TestGravityHealth:
         assert _latest_status() == "failed"
 
     async def test_stale_gravity_sets_warning(self, plugin):
-        old = time.time() - (86400 * 30)      # 30 days, past the 8d default
+        old = time.time() - (86400 * 30)
         _respond(plugin, _summary(last_update=old))
         await plugin.on_collect()
         assert _latest_status() == "warning"
@@ -243,13 +235,11 @@ class TestBlockingDisabled:
         assert _latest_metric("blocking_enabled") == 0.0
 
     async def test_disabled_outranks_healthy_block_rate(self, plugin):
-        # Blocking off with a historically high rate must not read as healthy.
         _respond(plugin, _summary(percent=16.1), blocking="disabled")
         await plugin.on_collect()
         assert _latest_status() == "failed"
 
     async def test_worst_condition_wins(self, plugin):
-        # Stale list (warning) alongside empty gravity (failed) => failed.
         old = time.time() - (86400 * 30)
         _respond(plugin, _summary(domains=0, last_update=old))
         await plugin.on_collect()
@@ -297,8 +287,6 @@ class TestPiholeActions:
         assert ids == {"enable_blocking", "update_gravity"}
 
     def test_disable_blocking_is_not_offered(self, plugin):
-        # Disabling blocking is the one fault this monitor exists to catch;
-        # a dashboard control for it would let a mis-click recreate it.
         blob = json.dumps(plugin.get_actions()).lower()
         assert "disable" not in blob
 

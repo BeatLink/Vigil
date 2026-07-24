@@ -1,70 +1,9 @@
-"""
-Declarative UI spec for plugin dashboard pages.
-
-A plugin can declare `UI_SPEC` on its `*UIPlugin` class instead of hand-writing
-render_ui(): a dict describing the layout grid, metric cards, chart, and
-whether to show the events/logs tables. `generic_render(plugin, context)`
-interprets it and builds the page — the same PluginPage/PluginModel binding
-machinery (see model.py) underneath, just generated instead of hand-written.
-
-This targets the common case a majority of plugins already reduced to after
-the binding-model migration: a handful of `info_card(...).bind_text_from(...)`
-calls with a small formatter, a layout grid, a chart, an events table. Plugins
-with genuinely bespoke widgets (processes.py's per-row kill buttons, borg.py's
-job panel, service_list.py's unit-file editor) keep a real render_ui() —
-`generic_render()` is a plain function they can still call for the standard
-parts of their page, not a hook every plugin must fit into.
-
-Format/color functions are referenced BY NAME from FORMATTERS/COLOR_RULES
-(below) rather than declared as inline lambdas, so the spec dict stays pure
-data — serializable, diffable, and reusable across plugins without each one
-redefining "show one decimal place" from scratch. A plugin needing a
-genuinely one-off transform registers it under its own key (register_formatter/
-register_color_rule) rather than bending a shared name to fit.
-
-Example (frigate.py, condensed):
-
-    UI_SPEC = {
-        'layout': [
-            ['host_card', 'quality_card', 'fps_card'],
-            ['detector_card', 'stalls_card', 'reconnects_card'],
-            ['chart'],
-            ['events'],
-        ],
-        'cards': {
-            'quality_card': {'metric': 'worst_quality_rank', 'title': 'WORST QUALITY',
-                             'format': 'quality_rank', 'color': 'quality_rank_color'},
-            'fps_card': {'metric': 'camera_fps_total', 'title': 'CAMERA FPS', 'format': 'decimal1'},
-            'detector_card': {'metric': 'detector_inference_ms', 'title': 'INFERENCE', 'format': 'ms1'},
-            'stalls_card': {'metric': 'stalls_last_hour', 'title': 'STALLS/H',
-                            'format': 'int', 'color': 'nonzero_warning'},
-            'reconnects_card': {'metric': 'reconnects_last_hour', 'title': 'RECONNECTS/H',
-                                'format': 'int', 'color': 'nonzero_warning'},
-        },
-        'chart': {'metric': 'camera_fps_total', 'title': 'CAMERA FPS'},
-        'events': True,
-    }
-"""
 from typing import Any, Callable, Dict, Optional
 
-# ---------------------------------------------------------------------------
-# Formatter registry
-#
-# Each formatter takes the raw metric value (float) or None (metric not yet
-# collected) and returns display text. Named variants are kept DISTINCT where
-# existing plugins' hand-written formatters actually differed (rounding
-# precision, dash text) — collapsing e.g. both `.0f` and `.1f` percent
-# formatters into one 'percent' entry would silently change some plugins'
-# rendered output, verified by auditing the real formatters in use before
-# this registry was written (12 plugins' `_pct_or_dash`, split between .0f
-# and .1f precision — both are kept, as 'percent0'/'percent1').
-# ---------------------------------------------------------------------------
 FORMATTERS: Dict[str, Callable[[Optional[float]], str]] = {}
 
 
 def register_formatter(name: str):
-    """Decorator: `@register_formatter('my_thing')` adds a named formatter,
-    for plugins whose card needs a transform not already in FORMATTERS."""
     def wrap(fn):
         FORMATTERS[name] = fn
         return fn
@@ -77,30 +16,18 @@ def _fmt(value):
 
 @register_formatter('int')
 def _int(v):
-    """Truncating int, plain dash — the most common shape, verified against
-    ~15 plugins' `_int_or_dash`/`_exit_text`/etc: str(int(v))."""
     return '--' if v is None else str(int(v))
 
 @register_formatter('int_rounded')
 def _int_rounded(v):
-    """Rounding (not truncating) int, plain dash — distinct from 'int':
-    connections.py/interrupts.py/oom.py's variants use f'{v:.0f}', which
-    rounds (4.9 -> '5') where 'int' truncates (4.9 -> '4'). Kept separate
-    rather than collapsed, since the two round differently."""
     return '--' if v is None else f'{v:.0f}'
 
 @register_formatter('count_comma')
 def _count_comma(v):
-    """Thousands-separated integer, e.g. '12,345', plain dash — for counters
-    (queries, interrupts, archive counts) where a bare int is hard to read.
-    Matches oom.py/unbound.py/trilium.py's `_count_or_dash`."""
     return '--' if v is None else f'{int(v):,}'
 
 @register_formatter('count_comma_rounded')
 def _count_comma_rounded(v):
-    """Thousands-separated, rounding not truncating — interrupts.py's
-    `_rate_or_dash` (f'{v:,.0f}'), distinct from 'count_comma' the same way
-    'int_rounded' differs from 'int'."""
     return '--' if v is None else f'{v:,.0f}'
 
 @register_formatter('decimal1')
@@ -109,64 +36,47 @@ def _decimal1(v):
 
 @register_formatter('percent0')
 def _percent0(v):
-    """'-- %' dash text, 0 decimals — e.g. load_average.py."""
     return '-- %' if v is None else f'{v:.0f}%'
 
 @register_formatter('percent0_plain_dash')
 def _percent0_plain_dash(v):
-    """Plain '--' dash text (no ' %'), 0 decimals — verified distinct from
-    'percent0': some plugins' dash state omits the unit suffix entirely."""
     return '--' if v is None else f'{v:.0f}%'
 
 @register_formatter('percent1')
 def _percent1(v):
-    """'-- %' dash text, 1 decimal — e.g. disk_space.py, cpu_usage.py."""
     return '-- %' if v is None else f'{v:.1f}%'
 
 @register_formatter('percent1_plain_dash')
 def _percent1_plain_dash(v):
-    """Plain '--' dash text, 1 decimal — verified distinct from 'percent1':
-    memory_usage.py/unbound.py's variant omits the ' %' in the dash state."""
     return '--' if v is None else f'{v:.1f}%'
 
 @register_formatter('ms0')
 def _ms0(v):
-    """'--' dash, 0 decimals, ' ms' suffix — calibre_web.py/mosquitto.py/
-    radicale.py's `_latency_text`/`_ms_or_dash`."""
     return '--' if v is None else f'{v:.0f} ms'
 
 @register_formatter('ms1')
 def _ms1(v):
-    """'--' dash, 1 decimal, ' ms' suffix."""
     return '--' if v is None else f'{v:.1f} ms'
 
 @register_formatter('seconds_ms')
 def _latency_ms(v):
-    """'-- ms' dash text (unit in the dash state too), 1 decimal — uptime.py."""
     return '-- ms' if v is None else f'{v:.1f} ms'
 
 @register_formatter('temp_c0')
 def _temp_c0(v):
-    """0-decimal Celsius — gpu.py's `_temp_or_dash`."""
     return '--' if v is None else f'{v:.0f}°C'
 
 @register_formatter('temp_c1')
 def _temp_c1(v):
-    """1-decimal Celsius — temperature.py's `_temp_or_dash`, distinct
-    precision from gpu.py's."""
     return '--' if v is None else f'{v:.1f}°C'
 
 @register_formatter('bytes_gb')
 def _bytes_gb(v):
-    """GB value through plugin_utils.format_bytes (auto MB/GB/TB scaling) —
-    folders.py/disk_space.py's `_gb_or_dash`."""
     from vigil.core.common.plugin_utils import format_bytes
     return '--' if v is None else format_bytes(v)
 
 @register_formatter('kbps_rate')
 def _kbps_rate(v):
-    """KB/s value, auto-scaled to MB/s past 1024, 1 decimal — matches
-    diskio.py/network_usage.py's shared `_format_rate` helper exactly."""
     if v is None:
         return '-- KB/s'
     if v >= 1024:
@@ -175,20 +85,11 @@ def _kbps_rate(v):
 
 @register_formatter('on_off')
 def _on_off(v):
-    """Generic ON/OFF text for a binary metric NOT going through
-    status_card (e.g. a secondary boolean on a page that already has its
-    own status_card for the primary one)."""
     if v is None:
         return 'Checking...'
     return 'ON' if v > 0.5 else 'OFF'
 
 
-# ---------------------------------------------------------------------------
-# Color-rule registry
-#
-# Each rule takes the raw metric value and returns a STATUS_COLORS key
-# ('online'/'warning'/'failed') or None (leave the card's default color).
-# ---------------------------------------------------------------------------
 COLOR_RULES: Dict[str, Callable[[Optional[float]], Optional[str]]] = {}
 
 
@@ -201,22 +102,12 @@ def register_color_rule(name: str):
 
 @register_color_rule('nonzero_warning')
 def _nonzero_warning(v):
-    """Warning color once the metric is above zero — for counters that
-    should read as fine at 0 and worth noticing otherwise (stalls,
-    reconnects, OOM kills)."""
     if v is None:
         return None
     return 'warning' if v > 0 else 'online'
 
 
-
-
 def threshold_color(warning: float, threshold: float):
-    """Factory for a color rule mirroring plugin_utils.level_for — for
-    plugins whose threshold is config-driven rather than a fixed constant,
-    register the result under a plugin-specific name:
-    `register_color_rule('my_threshold')(threshold_color(cfg_warn, cfg_fail))`.
-    """
     def rule(v):
         if v is None:
             return None
@@ -226,27 +117,8 @@ def threshold_color(warning: float, threshold: float):
     return rule
 
 
-# ---------------------------------------------------------------------------
-# Generic renderer
-# ---------------------------------------------------------------------------
-
 def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, Any]] = None,
                    page=None, start: bool = True):
-    """
-    Build a plugin's dashboard page from its UI_SPEC (or an explicitly passed
-    `spec`, for plugins that call this for only PART of their page — see
-    processes.py-style plugins, which render standard cards via this function
-    and a bespoke table by hand around it).
-
-    `page`: pass an existing PluginPage (e.g. one already carrying extra
-    tracked metric names for a caller's own custom widgets) to render into
-    it instead of constructing a fresh one. `start=False` skips calling
-    page.start() — use when the caller has more widgets to add first and
-    will call page.start() itself once everything is built.
-
-    Returns the PluginPage used, so callers extending the page can keep
-    using it (`page.on_refresh(...)`, `page.track_metric(...)`, etc.).
-    """
     from nicegui import ui
     from vigil.web.ui.layout import PluginLayout, make_inline_layout
     from vigil.web.ui.components import info_card, history_chart
@@ -270,9 +142,6 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
     )
 
     if page is None:
-        # status_card excluded: it isn't a page.model.metrics binding like the
-        # others — internal_modules['ui']['status_card'] tracks its own
-        # metric via page.track_metric() once built, below.
         metric_names = [c['metric'] for name, c in cards.items()
                         if 'metric' in c and name != 'status_card']
         if chart_spec:
@@ -283,18 +152,11 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, 
 
     for widget_name, card_spec in cards.items():
         if widget_name == 'host_card' or widget_name == 'status_card':
-            continue  # handled below as special-cased standard widgets
+            continue
 
         title = card_spec['title']
 
         if 'metric' not in card_spec:
-            # Static card: fixed or config-derived text, no DB binding —
-            # e.g. disk_space.py's PATH/THRESHOLD cards, which show
-            # self.path/self.threshold, not a collected metric. 'value' is
-            # a literal; 'value_attr' reads a plugin attribute at render
-            # time (so it reflects this instance's config, not a shared
-            # default) and passes it through 'value_format' if given
-            # (a str.format-style template, e.g. '{}%').
             if 'value_attr' in card_spec:
                 value = getattr(plugin, card_spec['value_attr'])
                 text = card_spec.get('value_format', '{}').format(value)

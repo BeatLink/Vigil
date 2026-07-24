@@ -15,11 +15,6 @@ SEVERITY_ORDER = {
 
 
 class GroupCollectorPlugin(CollectorPlugin):
-    """
-    A container plugin that groups other monitors.
-    Provides an aggregated view of the status of its children.
-    """
-
     async def on_collect(self):
         aggregated_status = self._get_aggregated_status()
         self.set_status(aggregated_status)
@@ -46,21 +41,11 @@ class GroupCollectorPlugin(CollectorPlugin):
 
 
 class GroupUIPlugin(UIPlugin):
-    """
-    Dashboard rendering for the group monitor: an expand/collapse grid of its
-    children's panels. See GroupCollectorPlugin for status aggregation logic
-    (on_collect/on_action) — this class holds only the expand/collapse UI
-    state (persisted per-child open/closed) and the grid layout.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self._expanded: Dict[str, bool] = self._load_expanded()
         self.grid_columns: int = int(config.get('grid_columns', 1))
 
-    # -------------------------------------------------------------------------
-    # Persistence
-    # -------------------------------------------------------------------------
 
     def _setting_key(self) -> str:
         return f'group_expanded_{self.id}'
@@ -80,9 +65,6 @@ class GroupUIPlugin(UIPlugin):
                 value=json.dumps(self._expanded)
             ).on_conflict_replace().execute()
 
-    # -------------------------------------------------------------------------
-    # UI
-    # -------------------------------------------------------------------------
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
@@ -155,10 +137,6 @@ class GroupUIPlugin(UIPlugin):
                         angle = '180deg' if open_now else '0deg'
                         _chev.style(f'color: {TEXT_MUTED}; transition: transform 0.2s; transform: rotate({angle})')
                         self._save_expanded()
-                        # Deferred until first expand: a collapsed panel's
-                        # content (DB queries, per-child polling timers) never
-                        # ran, so most panels in a large group cost nothing
-                        # until the user actually opens them.
                         nonlocal rendered
                         if open_now and not rendered:
                             with _body:

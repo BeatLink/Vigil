@@ -1,51 +1,3 @@
-"""
-FreshRSS feed-refresh staleness via the Fever API.
-
-Complements a `systemd_service` monitor on FreshRSS's php-fpm pool rather than
-replacing it. That one answers "is PHP-FPM alive"; this one answers "are
-feeds actually refreshing", which is a different failure. The case that
-motivates it: PHP-FPM stays up and the web UI answers while the refresh cron
-silently stops running (a cron misconfiguration, a curl option issue — see
-the IPv6 note in freshrss.nix) or one feed's source starts erroring — every
-liveness check stays green while the reader quietly goes stale.
-
-The Fever API is used (rather than FreshRSS's own GReader-compatible API)
-because it is the one that plainly exposes `last_updated_on_time` per feed,
-which is the only field FreshRSS surfaces to say "when did this feed last
-actually update" — there is no explicit error flag or message, so staleness
-of that timestamp is the proxy signal for "this feed is stuck". The top-level
-`last_refreshed_on_time` additionally tells you whether the whole refresh
-cycle itself is still running at all — if that is stale, the fault is
-systemic rather than one feed's source being broken.
-
-The API requires a separate API password (not the web login password) set
-once by hand under Settings > Authentication > API management for the user
-this authenticates as — see freshrss.nix for why that step cannot be made
-declarative. The Fever auth token is `md5("user:apipassword")`, computed
-locally so the API password itself never has to be typed into a request URL.
-
-Config options:
-  api_url            Base URL of the FreshRSS instance, as seen from the
-                     monitored host (default: http://127.0.0.1:80)
-  username           FreshRSS username the API password belongs to
-                     (required).
-  api_password       The Fever API password (not the login password).
-                     Prefer api_password_command.
-  api_password_command
-                     Command run on the monitored host whose stdout is the
-                     API password (e.g. "cat /run/secrets/
-                     freshrss_api_password"). Takes precedence over
-                     `api_password`.
-  feed_stale_warning Hours since a feed's last update at which status is
-                     warning (default: 48)
-  feed_stale_threshold
-                     Hours since a feed's last update at which status is
-                     failed (default: 168 — one week)
-  refresh_stale_warning
-                     Hours since the last full refresh cycle at which
-                     status is warning (default: 6)
-  api_timeout        Seconds allowed for the remote curl call (default: 10)
-"""
 import hashlib
 import json
 import shlex
@@ -59,12 +11,6 @@ from vigil.web.plugin_base import UIPlugin
 def _build_fetch_script(api_url: str, timeout: int, username: str,
                         api_password_command: Optional[str],
                         api_password: Optional[str]) -> str:
-    """
-    Build a shell script that computes the Fever auth token and fetches the
-    feed list. The token is md5("username:apipassword"); computed on the
-    remote host so the password never has to appear in Vigil's own process
-    or logs, matching how password_command works elsewhere.
-    """
     base = api_url.rstrip('/')
     lines = ["set -e"]
 
@@ -111,8 +57,6 @@ _DEFAULT_LAYOUT = [
 
 
 class FreshrssCollectorPlugin(CollectorPlugin):
-    """Monitors FreshRSS feed-refresh staleness via the Fever API."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.api_url = config.get('api_url', 'http://127.0.0.1:80')
@@ -169,7 +113,6 @@ class FreshrssCollectorPlugin(CollectorPlugin):
 
         self.db_metrics.metric('feeds_stale', float(len(stale_warn) + len(stale_fail)))
 
-        # --- status ---------------------------------------------------------
         problems = []
         level = 'online'
 
@@ -211,13 +154,6 @@ class FreshrssCollectorPlugin(CollectorPlugin):
 
 
 class FreshrssUIPlugin(UIPlugin):
-    """Dashboard rendering for the freshrss monitor — declarative, see
-    UI_SPEC. refresh_card's color is config-driven (refresh_stale_warning,
-    single warning tier with no failed tier), so it's a per-instance local
-    rule. stale_card reuses the shared 'nonzero_warning' rule — verified
-    identical semantics (nonzero -> warning, zero -> online).
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.refresh_stale_warning = float(config.get('refresh_stale_warning', 6))

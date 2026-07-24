@@ -1,20 +1,3 @@
-"""
-Web-process proxies to the collector's internal API.
-
-CollectorClient wraps the HTTP calls; RemoteSSHController and
-RemoteJobController give the web process's UIPlugin instances the same
-method names as the collector-side SSHController/JobController (see
-plugin_base.py) so plugin code written against those interfaces
-(self.ssh_controller.execute_action(...), self.job_controller.cancel())
-works unchanged regardless of which process constructed the plugin.
-
-Read-only JobController methods (recent, output, is_running, current_job_id)
-are NOT proxied over HTTP here — they're plain DB queries the web process can
-run directly against the shared SQLite database (WAL mode serves concurrent
-readers regardless of which process is writing), which is faster and keeps
-the collector's internal API surface limited to things that actually require
-a live SSH connection or in-memory job state.
-"""
 import logging
 from typing import Any, Dict, Optional, Tuple
 
@@ -22,19 +5,10 @@ import httpx
 
 
 class CollectorClient:
-    """Thin async HTTP client for the collector's internal API."""
-
     def __init__(self, base_url: str = 'http://127.0.0.1:8081', timeout: float = 65.0):
-        # Default timeout comfortably exceeds SSHController's own
-        # deadline+grace (60s + 15s in the worst case) so this client is
-        # never what times out a slow-but-legitimate action first.
         self._client = httpx.AsyncClient(base_url=base_url, timeout=timeout)
 
     async def actions(self, monitor_id: str) -> list:
-        """Available control actions for a monitor (plugin.get_actions()),
-        fetched fresh each call rather than cached — cheap, in-memory on the
-        collector side, and avoids the UI process ever showing stale buttons
-        for a monitor whose config-derived actions changed."""
         try:
             resp = await self._client.get(f'/internal/actions/{monitor_id}')
             resp.raise_for_status()
@@ -104,18 +78,6 @@ class CollectorClient:
 
     async def push(self, monitor_id: str, token: str, status: str = 'up',
                    msg: Optional[str] = None, value: Optional[float] = None) -> Tuple[int, Dict[str, Any]]:
-        """
-        Record a push-monitor heartbeat via the collector.
-
-        Returns (http_status, body) mirroring the collector's own response —
-        404 not found, 401 bad token, 400 bad status, 200 success — rather
-        than collapsing to a bool, so the web process's /api/push route can
-        pass the real outcome back to the caller instead of guessing. On
-        transport failure (collector unreachable), returns 502 with an
-        error body — distinct from any outcome the collector itself can
-        produce, so the caller can't mistake "collector is down" for
-        "invalid token".
-        """
         try:
             resp = await self._client.post(
                 f'/internal/push/{monitor_id}',
@@ -131,13 +93,10 @@ class CollectorClient:
 
 
 class JobRejectedRemote(Exception):
-    """Raised by CollectorClient.job_start when the collector already has a job running."""
+    pass
 
 
 class RemoteSSHController:
-    """Web-process stand-in for SSHController — same method name/signature,
-    routed over the collector's internal API instead of a local SSH call."""
-
     def __init__(self, client: CollectorClient, monitor_id: str):
         self._client = client
         self._monitor_id = monitor_id
@@ -147,15 +106,6 @@ class RemoteSSHController:
 
 
 class RemoteJobController:
-    """
-    Web-process stand-in for JobController.
-
-    Status/history reads (is_running, current_job_id, recent, output) query
-    the shared DB directly — no network hop needed, see the module
-    docstring. Only run_job/cancel, which need the collector's live SSH
-    connection and in-memory job state, go over HTTP.
-    """
-
     def __init__(self, client: CollectorClient, monitor_id: str, db: Any):
         self._client = client
         self._monitor_id = monitor_id
@@ -171,12 +121,6 @@ class RemoteJobController:
 
     async def run_job(self, kind: str, command: str, redacted: Optional[str] = None,
                       on_line=None, timeout: Optional[float] = None) -> Tuple[int, int]:
-        # `on_line` has no meaning here: it exists so a caller running
-        # in-process alongside the job can parse structured progress from
-        # the stream as it arrives. Across the process boundary, progress is
-        # read back from the DB (job_controller.output/recent) like every
-        # other consumer of a job already does, so no plugin currently
-        # passes on_line — see borg.py, the only run_job caller.
         job_id, exit_code = await self._client.job_start(
             self._monitor_id, kind, command, redacted=redacted, timeout=timeout,
         )
@@ -185,12 +129,6 @@ class RemoteJobController:
         return job_id, exit_code
 
     async def cancel(self) -> bool:
-        """
-        Unlike JobController.cancel() (synchronous — it only flips an
-        in-process threading.Event), this is a network call and must be
-        awaited. borg.py's cancel button is updated alongside this class to
-        `create_task` it, the same way its start-backup button already does.
-        """
         return await self._client.job_cancel(self._monitor_id)
 
     def recent(self, limit: int = 20, kind: Optional[str] = None) -> list:

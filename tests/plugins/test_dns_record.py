@@ -34,11 +34,6 @@ def _cfg(**extra):
 
 
 class _FakeAnswer:
-    """
-    Stand in for dns.resolver.Answer: iterable over the rdata records (like
-    Answer.__iter__, which delegates to its rrset) and exposes `.rrset` for
-    the TTL, matching the two things DnsRecordCollectorPlugin.on_collect reads.
-    """
     def __init__(self, rrset):
         self.rrset = rrset
 

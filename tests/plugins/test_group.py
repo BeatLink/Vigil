@@ -23,7 +23,6 @@ def group(db_manager):
 
 
 def _make_child(plugin_id: str, status: str, db_manager) -> MagicMock:
-    """Inserts a StatusHistory row for plugin_id and returns a mock child."""
     db_manager.insert_status(plugin_id, status)
     child = MagicMock()
     child.id = plugin_id
@@ -87,7 +86,6 @@ class TestStatusAggregation:
         child.id = "never-polled"
         child.children = []
         group.children = [child]
-        # offline(1) > online(0) → result is offline
         assert group._get_aggregated_status() == "offline"
 
     def test_mixed_online_and_offline_returns_offline(self, group, db_manager):

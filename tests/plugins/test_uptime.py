@@ -93,16 +93,14 @@ class TestUptimeCollection:
         with patch("vigil.plugins.uptime.asyncio.create_subprocess_exec",
                    AsyncMock(return_value=proc)):
             await plugin.on_collect()
-        # latency_ms should not be written on failure
         assert _latest_metric("test-uptime", "latency_ms") is None
 
     async def test_missing_latency_in_output_not_recorded(self, plugin):
-        stdout = b"1 packets transmitted, 1 received\n"  # no time= field
+        stdout = b"1 packets transmitted, 1 received\n"
         proc = _mock_process(0, stdout)
         with patch("vigil.plugins.uptime.asyncio.create_subprocess_exec",
                    AsyncMock(return_value=proc)):
             await plugin.on_collect()
-        # status is online, but no latency metric
         assert _latest_status("test-uptime") == "online"
         assert _latest_metric("test-uptime", "latency_ms") is None
 

@@ -55,7 +55,6 @@ class TestCloudCollection:
 
     async def test_not_cloud_offline(self, make_plugin):
         p = make_plugin(CloudCollectorPlugin, _cfg(provider="aws"))
-        # exit 7 is the "endpoint didn't answer" sentinel
         p.ssh_collector.fetch_output = AsyncMock(return_value=(7, "", ""))
         await p.on_collect()
         assert _latest_status() == "offline"
@@ -63,7 +62,6 @@ class TestCloudCollection:
 
     async def test_auto_falls_through_providers(self, make_plugin):
         p = make_plugin(CloudCollectorPlugin, _cfg(provider="auto"))
-        # aws fails, gcp fails, azure succeeds
         p.ssh_collector.fetch_output = AsyncMock(side_effect=[
             (7, "", ""),
             (7, "", ""),

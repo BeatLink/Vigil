@@ -91,7 +91,6 @@ class TestPatternMode:
         assert _latest_status("test-cmd") == "failed"
 
     async def test_invert_low_value_is_bad(self, make_plugin):
-        # e.g. free memory %: BELOW warning is bad
         p = make_plugin(CommandCollectorPlugin, _cfg(
             command="x", pattern=r"free=(\d+)", warning=20, threshold=10, invert=True))
         p.ssh_collector.fetch_output = AsyncMock(return_value=(0, "free=5", ""))

@@ -14,8 +14,6 @@ BASE_CFG = {
     "ssh_config": {"host": "test.host"},
 }
 
-# df --output=size,used,avail,pcent -B1 output (header already stripped by | tail -1)
-# Fields: size_bytes used_bytes avail_bytes use%
 def _df_line(size: int, used: int, avail: int, pct: int) -> str:
     return f"{size} {used} {avail} {pct}%\n"
 
@@ -52,10 +50,6 @@ def _latest_metric(name: str, metric: str) -> float | None:
     return row.value if row else None
 
 
-# ---------------------------------------------------------------------------
-# Unit tests for the formatting helper
-# ---------------------------------------------------------------------------
-
 class TestFormatGb:
     def test_less_than_1gb_shows_mb(self):
         assert _format_gb(0.5) == "512 MB"
@@ -72,10 +66,6 @@ class TestFormatGb:
     def test_above_1024gb_shows_tb(self):
         assert _format_gb(2048.0) == "2.0 TB"
 
-
-# ---------------------------------------------------------------------------
-# Collection tests
-# ---------------------------------------------------------------------------
 
 class TestDiskSpaceCollection:
     async def test_below_threshold_sets_online(self, plugin):
@@ -104,7 +94,6 @@ class TestDiskSpaceCollection:
 
     async def test_custom_threshold_respected(self, storage_plugin):
         GB = 1024 ** 3
-        # 85% used — above the 80% threshold for storage_plugin
         storage_plugin.ssh_collector.fetch_output = AsyncMock(
             return_value=(0, _df_line(100 * GB, 85 * GB, 15 * GB, 85), "")
         )
@@ -172,7 +161,6 @@ class TestDiskSpaceCollection:
         assert _latest_metric("test-disk", "used_pct") is None
 
     async def test_fractional_percent_parsed(self, plugin):
-        # df can report percentages without decimals, but we cast to float
         GB = 1024 ** 3
         plugin.ssh_collector.fetch_output = AsyncMock(
             return_value=(0, _df_line(100 * GB, 33 * GB, 67 * GB, 33), "")

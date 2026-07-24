@@ -32,7 +32,6 @@ _PS_OUTPUT_OK = "\n".join([_PS_HEADER] + _PS_ROWS) + "\n"
 _PS_OUTPUT_HEADER_ONLY = _PS_HEADER + "\n"
 _PS_OUTPUT_EMPTY = ""
 
-# High CPU for threshold tests
 _PS_OUTPUT_HIGH_CPU = "\n".join([
     _PS_HEADER,
     "  999 root      85.0  1.0 stress",
@@ -69,10 +68,6 @@ def _latest_metric(metric: str, name: str = "test-procs") -> float | None:
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 
-
-# ---------------------------------------------------------------------------
-# Unit tests for _parse_ps_output
-# ---------------------------------------------------------------------------
 
 class TestParsePsOutput:
     def test_parses_pid(self):
@@ -133,10 +128,6 @@ class TestLevelFor:
         assert _level_for(80.0, 50.0, 80.0) == 'failed'
 
 
-# ---------------------------------------------------------------------------
-# Collection integration tests
-# ---------------------------------------------------------------------------
-
 class TestProcessesCollection:
     async def test_successful_collection_sets_online(self, plugin):
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _PS_OUTPUT_OK, ""))
@@ -160,7 +151,6 @@ class TestProcessesCollection:
         assert _latest_metric("top_cpu_pct") == pytest.approx(45.2)
 
     async def test_empty_process_list_sets_online(self, plugin):
-        # Empty output (header only) — no processes running is valid
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _PS_OUTPUT_HEADER_ONLY, ""))
         await plugin.on_collect()
         assert _latest_status() == "online"
@@ -177,7 +167,6 @@ class TestProcessesCollection:
         assert _latest_status() == "failed"
 
     async def test_no_thresholds_always_online(self, plugin):
-        # BASE_CFG has no cpu thresholds — even 85% top process stays online
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _PS_OUTPUT_HIGH_CPU, ""))
         await plugin.on_collect()
         assert _latest_status() == "online"
@@ -194,10 +183,6 @@ class TestProcessesCollection:
         await thresh_plugin.on_collect()
         assert _latest_status("test-procs-thresh") == "failed"
 
-
-# ---------------------------------------------------------------------------
-# Kill action tests
-# ---------------------------------------------------------------------------
 
 class TestProcessesKillAction:
     async def test_kill_term_sends_correct_command(self, plugin):
@@ -223,7 +208,7 @@ class TestProcessesKillAction:
         cfg = {**BASE_CFG, "name": "test-sig", "id": "test-sig", "kill_signal": "KILL"}
         p = make_plugin(ProcessesCollectorPlugin, cfg)
         p.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
-        await p.on_action('kill', pid=77)  # no signal kwarg → uses config default
+        await p.on_action('kill', pid=77)
         p.ssh_controller.execute_action.assert_called_once_with("kill -KILL 77")
 
     async def test_kill_failure_returns_false(self, plugin):

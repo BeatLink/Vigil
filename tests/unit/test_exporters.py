@@ -8,9 +8,8 @@ def mgr(tmp_path):
     if not db.is_closed():
         db.close()
     manager = DatabaseManager(str(tmp_path / "test.db"))
-    # Seed some state.
     manager.insert_metric("host1", "cpu-mon", "cpu_pct", 42.5)
-    manager.insert_metric("host1", "cpu-mon", "cpu_pct", 55.0)  # newer wins
+    manager.insert_metric("host1", "cpu-mon", "cpu_pct", 55.0)
     manager.insert_metric("host2", "mem-mon", "memory_pct", 30.0)
     manager.insert_status("cpu-mon", "online")
     manager.insert_status("mem-mon", "warning")
@@ -58,7 +57,6 @@ class TestPrometheusExporter:
         assert text.endswith('\n')
 
     def test_sanitizes_and_escapes(self, mgr):
-        # Label values with quotes must be escaped, not break the format.
         mgr.insert_status('weird"id', 'failed')
         mgr.flush()
         text = prometheus.render(mgr)
@@ -71,7 +69,6 @@ class TestInfluxExporter:
         lines = payload.splitlines()
         assert any(l.startswith('vigil_metric,') and 'value=55.0' in l for l in lines)
         assert any(l.startswith('vigil_up,') for l in lines)
-        # Each line ends with a nanosecond timestamp (integer).
         for l in lines:
             assert l.rsplit(' ', 1)[1].isdigit()
 

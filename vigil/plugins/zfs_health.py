@@ -3,7 +3,6 @@ from typing import Dict, Any
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# Pool health states that indicate a problem
 _UNHEALTHY = {'DEGRADED', 'FAULTED', 'OFFLINE', 'UNAVAIL', 'REMOVED'}
 
 _DEFAULT_LAYOUT = [
@@ -13,12 +12,6 @@ _DEFAULT_LAYOUT = [
 
 
 class ZFSHealthCollectorPlugin(CollectorPlugin):
-    """
-    Monitors ZFS pool health states over SSH.
-    Checks all pools via 'zpool list -H -o name,health' and reports failed
-    if any pool is in a DEGRADED, FAULTED, OFFLINE, UNAVAIL, or REMOVED state.
-    This complements zfs_pool (capacity monitoring) with structural integrity checks.
-    """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
 
@@ -61,12 +54,6 @@ class ZFSHealthCollectorPlugin(CollectorPlugin):
 
 
 class ZFSHealthUIPlugin(UIPlugin):
-    """Dashboard rendering for the zfs_health monitor — declarative, see
-    UI_SPEC. ok_card/degraded_card follow the same fixed-online /
-    nonzero-failed shape as raid.py and smart_disk.py, registered locally
-    here for the same self-containment reason.
-    """
-
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {

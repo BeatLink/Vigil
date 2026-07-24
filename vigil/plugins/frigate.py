@@ -1,48 +1,9 @@
-"""
-Frigate NVR camera health via the internal stats API.
-
-Complements a `systemd_service` monitor on frigate rather than replacing it.
-That one answers "is the process alive"; this one answers "is each camera
-actually producing usable frames", which is a different failure. The case
-that motivates it: the Frigate process stays up while a camera's stream
-wedges — a USB webcam that enumerates but delivers only truncated frames (see
-the ExecStartPre replug workaround in frigate.nix), a dead RTSP link, ffmpeg
-stuck retrying — and every liveness check stays green throughout. The service
-is up, the API answers, and the only visible symptom is a camera producing
-no frames or none worth detecting on.
-
-Frigate itself computes the signal worth alerting on: `connection_quality`,
-a precomputed enum (`excellent` / `fair` / `poor` / `unusable`) derived from
-camera_fps, reconnects, and stalls. This plugin surfaces that directly rather
-than re-deriving thresholds from the raw counters, so it tracks whatever
-Frigate's own definition of "unusable" is as that logic evolves upstream.
-
-Read over SSH from `http://127.0.0.1:5000`, Frigate's documented internal
-port for trusted local integrations: any request arriving there is
-automatically treated as an authenticated admin, by design, specifically so
-tools like this need no credential and no change to the real auth setup used
-by actual users on the regular (8971-mapped) port. This is Frigate's own
-recommended mechanism, not a workaround — see docs.frigate.video and
-`frigate/api/auth.py`'s handling of the internal port.
-
-Config options:
-  api_url          Base URL of Frigate's internal (unauthenticated) API, as
-                   seen from the monitored host (default:
-                   http://127.0.0.1:5000)
-  cameras          Camera names to judge. Empty (default) means every camera
-                   Frigate reports. Explicit list lets a camera known to be
-                   disabled or torn down stay out of the check entirely
-                   rather than needing per-camera enabled/disabled logic here.
-  api_timeout      Seconds allowed for the remote curl call (default: 10)
-"""
 import json
 from typing import Any, Dict, List, Optional
 
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# Frigate's own precomputed verdict, ordered worst-to-best is the reverse of
-# this — used to find the single worst camera to headline the log line.
 _QUALITY_ORDER = {'unusable': 0, 'poor': 1, 'fair': 2, 'excellent': 3}
 
 
@@ -70,8 +31,6 @@ _DEFAULT_LAYOUT = [
 
 
 class FrigateCollectorPlugin(CollectorPlugin):
-    """Monitors Frigate camera health via the internal /api/stats endpoint."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.api_url = config.get('api_url', 'http://127.0.0.1:5000')
@@ -115,10 +74,6 @@ class FrigateCollectorPlugin(CollectorPlugin):
         self.db_metrics.metric('detection_fps_total', float(stats.get('detection_fps', 0) or 0))
         self.db_metrics.metric('detector_inference_ms', float(avg_inference))
 
-        # --- status ---------------------------------------------------------
-        # Judged per camera, then the worst camera's quality decides the
-        # overall status — one dead camera must not be diluted into "fine on
-        # average" by others that are healthy.
         worst_quality = 'excellent'
         worst_camera = None
         total_stalls = 0
@@ -176,10 +131,6 @@ class FrigateCollectorPlugin(CollectorPlugin):
 
 from vigil.web.ui.spec import generic_render, register_formatter, register_color_rule
 
-# Frigate-specific: 0..3 worst-to-best rank <-> Frigate's own quality enum
-# (see _QUALITY_ORDER above). Registered under plugin-specific names rather
-# than a generic shared one, since "quality rank" has no meaning outside
-# this plugin's own metric.
 _RANK_TO_LABEL = {0: 'UNUSABLE', 1: 'POOR', 2: 'FAIR', 3: 'EXCELLENT'}
 
 
@@ -201,8 +152,6 @@ def _quality_rank_color(v):
 
 
 class FrigateUIPlugin(UIPlugin):
-    """Dashboard rendering for the frigate monitor — fully declarative, see UI_SPEC."""
-
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {

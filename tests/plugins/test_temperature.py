@@ -14,14 +14,12 @@ BASE_CFG = {
     "ssh_config": {"host": "test.host"},
 }
 
-# Thermal zone values in millidegrees Celsius
-_TEMPS_ONLINE  = [42_000, 38_000, 45_000]   # max 45°C  → online
-_TEMPS_WARNING = [72_000, 68_000]            # max 72°C  → warning (between 70 and 80)
-_TEMPS_FAILED  = [85_000, 90_000]            # max 90°C  → failed
+_TEMPS_ONLINE  = [42_000, 38_000, 45_000]
+_TEMPS_WARNING = [72_000, 68_000]
+_TEMPS_FAILED  = [85_000, 90_000]
 
 
 def _make_output(temps_mc):
-    # The plugin emits one "SENSOR:<zone_type>:<millidegrees>" line per zone.
     return "".join(f"SENSOR:x86_pkg_temp_{i}:{t}\n" for i, t in enumerate(temps_mc))
 
 
@@ -95,7 +93,6 @@ class TestTemperatureCollection:
         assert _latest_metric("temp_c") == pytest.approx(75.0)
 
     async def test_no_thermal_zones_sets_online(self, plugin):
-        # Empty output (no TEMP: lines) — graceful degradation for VMs
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, "", ""))
         await plugin.on_collect()
         assert _latest_status() == "online"

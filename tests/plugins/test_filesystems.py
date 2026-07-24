@@ -28,7 +28,6 @@ def _latest_metric(metric, name="test-fs"):
     return row.value if row else None
 
 
-# df --output=target,size,used,pcent, with a header line first.
 _HEADER = "Mounted on           1B-blocks        Used Use%"
 
 
@@ -43,7 +42,6 @@ def _df(*rows):
 
 
 def _df_inodes(*rows):
-    """Build a `df -i --output=target,ipcent` section. pct may be '-'."""
     lines = [_IHEADER]
     for mount, pct in rows:
         lines.append(f"{mount} {pct}" if pct == '-' else f"{mount} {pct}%")
@@ -51,7 +49,6 @@ def _df_inodes(*rows):
 
 
 def _mounts(*rows):
-    """Build a /proc/mounts section from (mountpoint, 'ro'|'rw') pairs."""
     lines = []
     for mount, mode in rows:
         escaped = mount.replace('\\', '\\134').replace(' ', '\\040')
@@ -60,7 +57,6 @@ def _mounts(*rows):
 
 
 def _combined(space, inodes=None, mounts=None):
-    """Join the three sections the way the real command emits them."""
     parts = [space]
     if inodes is not None:
         parts.append(inodes)
@@ -136,7 +132,6 @@ class TestParseInodes:
         }
 
     def test_omits_inodeless_filesystems(self):
-        # btrfs/ZFS report '-'; omitted rather than recorded as a healthy 0%.
         assert _parse_inodes(_df_inodes(("/tank", "-"), ("/", 5))) == {"/": 5.0}
 
     def test_mount_with_space(self):
@@ -168,7 +163,6 @@ class TestInodeExhaustion:
         assert _latest_metric("fs_root_inodes_pct") == pytest.approx(12.0)
 
     async def test_inode_exhaustion_fails_despite_free_space(self, plugin):
-        # The whole point: 10% space used, but inodes are gone.
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
             _df(("/", 100, 10, 10)),
             _df_inodes(("/", 97)),
@@ -201,7 +195,6 @@ class TestInodeExhaustion:
 
 class TestReadOnlyDetection:
     async def test_readonly_mount_fails(self, plugin):
-        # Usage looks healthy; the filesystem is silently read-only.
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
             _df(("/", 100, 10, 10), ("/data", 100, 20, 20)),
             _df_inodes(("/", 5), ("/data", 5)),
@@ -223,10 +216,6 @@ class TestReadOnlyDetection:
         assert _latest_status() == "warning"
 
     async def test_ignores_ro_mounts_df_does_not_report(self, plugin):
-        # /nix/store is permanently read-only on NixOS but never appears in
-        # `df --output` (it's a bind mount deduplicated against /). Only
-        # mountpoints df actually reports are considered, so this must not
-        # pin every NixOS host to failed.
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _combined(
             _df(("/", 100, 10, 10)),
             _df_inodes(("/", 5)),
@@ -250,8 +239,6 @@ class TestReadOnlyDetection:
 
 class TestDegradedOutput:
     async def test_space_only_output_still_works(self, plugin):
-        # No sentinels at all (e.g. a target where the extra commands failed):
-        # space checks must still function rather than erroring out.
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, _df(
             ("/", 100, 95, 95),
         ), ""))

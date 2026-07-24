@@ -3,21 +3,12 @@ from typing import Dict, Any, Optional, Tuple
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# Sectors are a fixed 512 bytes in /proc/diskstats regardless of physical
-# sector size — this is a kernel ABI constant, not the device geometry.
 _SECTOR_BYTES = 512
 
-# Device-name prefixes treated as virtual/non-physical for auto-detection.
 _VIRTUAL_PREFIXES = ('loop', 'ram', 'dm-', 'sr', 'fd', 'md')
 
 
 def _parse_diskstats(stdout: str) -> Dict[str, Tuple[int, int]]:
-    """Parse /proc/diskstats into {device: (sectors_read, sectors_written)}.
-
-    Columns: major minor name reads_completed reads_merged sectors_read
-    time_reading writes_completed writes_merged sectors_written ...
-    (1-indexed by the kernel doc; sectors_read is field 6, sectors_written 10).
-    """
     result: Dict[str, Tuple[int, int]] = {}
     for line in stdout.splitlines():
         fields = line.split()
@@ -34,10 +25,8 @@ def _parse_diskstats(stdout: str) -> Dict[str, Tuple[int, int]]:
 
 
 def _is_physical(name: str) -> bool:
-    """True if the device looks like a whole physical disk (not a partition)."""
     if any(name.startswith(p) for p in _VIRTUAL_PREFIXES):
         return False
-    # Exclude partitions: sdaN, nvme0n1pN, mmcblk0pN.
     if name[-1:].isdigit() and not name.startswith('nvme') and not name.startswith('mmcblk'):
         return False
     if 'p' in name and name.split('p')[-1].isdigit() and (name.startswith('nvme') or name.startswith('mmcblk')):
@@ -46,7 +35,6 @@ def _is_physical(name: str) -> bool:
 
 
 def _auto_detect_device(s1: Dict[str, Tuple[int, int]], s2: Dict[str, Tuple[int, int]]) -> Optional[str]:
-    """Return the physical device with the most I/O activity between snapshots."""
     activity = {}
     for name in s1:
         if name not in s2 or not _is_physical(name):
@@ -54,7 +42,6 @@ def _auto_detect_device(s1: Dict[str, Tuple[int, int]], s2: Dict[str, Tuple[int,
         r = (s2[name][0] - s1[name][0]) + (s2[name][1] - s1[name][1])
         activity[name] = r
     if not activity:
-        # No activity delta — fall back to any physical device present.
         physical = [n for n in s1 if _is_physical(n)]
         return physical[0] if physical else None
     return max(activity, key=activity.__getitem__)
@@ -75,17 +62,6 @@ _DEFAULT_LAYOUT = [
 
 
 class DiskIoCollectorPlugin(CollectorPlugin):
-    """
-    Monitors per-disk read/write throughput over SSH via /proc/diskstats.
-
-    Takes two snapshots 1 second apart in a single SSH command and converts the
-    sector deltas to KB/s — no iostat or extra tools required on the target.
-
-    Config options:
-      device   (optional) explicit device name, e.g. "sda" or "nvme0n1".
-               Omit to auto-detect the busiest physical disk.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.device: Optional[str] = config.get('device')
@@ -138,8 +114,6 @@ class DiskIoCollectorPlugin(CollectorPlugin):
 
 
 class DiskIoUIPlugin(UIPlugin):
-    """Dashboard rendering for the diskio monitor."""
-
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
@@ -147,10 +121,6 @@ class DiskIoUIPlugin(UIPlugin):
         from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.spec import FORMATTERS
 
-        # Two charts (read_chart/write_chart) don't fit UI_SPEC's single
-        # 'chart' key, so this stays a manual layout+page build — reusing the
-        # shared 'kbps_rate' formatter (identical to this module's own
-        # _format_rate) rather than redefining it.
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
         page = self.page(metric_names=['read_kbps', 'write_kbps'])
 

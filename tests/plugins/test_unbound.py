@@ -169,24 +169,21 @@ class TestResolutionFailure:
 
 class TestServfailThresholds:
     async def test_high_servfail_rate_sets_failed(self, plugin):
-        _respond(plugin, _stats(total=1000, servfail=250))  # 25%
+        _respond(plugin, _stats(total=1000, servfail=250))
         await plugin.on_collect()
         assert _latest_status() == "failed"
 
     async def test_moderate_servfail_rate_sets_warning(self, plugin):
-        _respond(plugin, _stats(total=1000, servfail=80))  # 8%
+        _respond(plugin, _stats(total=1000, servfail=80))
         await plugin.on_collect()
         assert _latest_status() == "warning"
 
     async def test_low_query_volume_is_not_judged(self, plugin):
-        # A freshly restarted resolver with a handful of queries and one
-        # SERVFAIL swings the ratio wildly; that is not evidence of a fault.
         _respond(plugin, _stats(total=5, servfail=5))
         await plugin.on_collect()
         assert _latest_status() == "online"
 
     async def test_worst_condition_wins(self, plugin):
-        # High SERVFAIL rate (failed) alongside a failed probe (failed) => failed.
         _respond(plugin, _stats(total=1000, servfail=250), query_output=_query_fail())
         await plugin.on_collect()
         assert _latest_status() == "failed"

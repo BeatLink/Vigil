@@ -14,19 +14,12 @@ _DEFAULT_LAYOUT = [
 
 
 class DiskSpaceCollectorPlugin(CollectorPlugin):
-    """
-    Monitors disk space usage for a path or mountpoint over SSH via `df`.
-    Works on any mounted filesystem — no ZFS or other tools required.
-    Reports failed when usage exceeds the configured threshold.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.path = config.get('path', '/')
         self.threshold = int(config.get('threshold', 90))
 
     async def on_collect(self):
-        # Single-quoted path prevents shell expansion; --output avoids line-wrap issues
         ret, stdout, stderr = await self.ssh_collector.fetch_output(
             f"df --output=size,used,avail,pcent -B1 '{self.path}' | tail -1"
         )
@@ -69,16 +62,6 @@ class DiskSpaceCollectorPlugin(CollectorPlugin):
 
 
 class DiskSpaceUIPlugin(UIPlugin):
-    """Dashboard rendering for the disk_space monitor — declarative, see UI_SPEC.
-
-    used_pct's color rule is registered per-instance in __init__ (not at
-    module level like frigate.py's) because the threshold is config-driven
-    (`threshold: N` in config.yaml) rather than a fixed constant — each
-    monitor instance needs its own rule reflecting ITS OWN threshold, keyed
-    by this instance's id so two disk_space monitors with different
-    thresholds don't collide in the shared COLOR_RULES registry.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.path = config.get('path', '/')

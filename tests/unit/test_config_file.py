@@ -5,7 +5,6 @@ from vigil.core.data.config_file import ConfigFileManager
 
 @pytest.fixture
 def write_yaml(tmp_path):
-    """Helper: writes a dict as YAML to a temp file and returns the path."""
     def _write(content: dict) -> str:
         path = tmp_path / "config.yaml"
         path.write_text(yaml.dump(content))

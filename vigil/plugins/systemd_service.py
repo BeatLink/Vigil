@@ -30,19 +30,6 @@ _ONESHOT_LAYOUT = [
 
 
 class SystemdCollectorPlugin(CollectorPlugin):
-    """
-    Monitors systemd services over SSH.
-
-    Two modes selected by whether `max_age` is set in config:
-
-    Continuous mode (default): checks `systemctl is-active` each cycle.
-      Suitable for long-running daemons (nginx, unbound, etc.).
-
-    Oneshot mode (max_age set): checks the result and timestamp of the last
-      completed run via `systemctl show`. Reports failed if the last run did
-      not succeed or completed more than `max_age` seconds ago.
-      Suitable for timer-driven services (nixos-upgrade, backup jobs, etc.).
-    """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.service_name = config.get('service_name')
@@ -52,20 +39,7 @@ class SystemdCollectorPlugin(CollectorPlugin):
         self.allowed_write_paths = tuple(config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
 
 
-    # -------------------------------------------------------------------------
-    # Collection
-    # -------------------------------------------------------------------------
-
     async def _collect_journal(self) -> bool:
-        """
-        Fetch the last `lines` journald entries for the unit and persist them
-        with per-line deduplication.
-
-        Uses `--output=short-iso` so each line is prefixed with a stable,
-        sortable timestamp. That timestamp anchors the dedup identity, so the
-        same line re-appearing on the next cycle is stored only once. Returns
-        True on a successful fetch, False on error (caller decides status).
-        """
         ret, stdout, stderr = await self.ssh_collector.fetch_output(
             f"journalctl -u {self.service_name} -n {self.lines} "
             f"--no-pager --output=short-iso"
@@ -84,14 +58,6 @@ class SystemdCollectorPlugin(CollectorPlugin):
 
     @staticmethod
     def _split_iso_line(line: str):
-        """
-        Split a `short-iso` journald line into (timestamp, message).
-
-        Format: '2024-05-01T12:00:00+0000 host unit[pid]: message'. The first
-        three whitespace-separated tokens are the ISO timestamp, host, and unit
-        prefix; we keep the timestamp for dedup and store the full line as the
-        message so nothing is lost. Falls back gracefully on unexpected shapes.
-        """
         parts = line.split(' ', 1)
         if len(parts) == 2 and 'T' in parts[0] and parts[0][:4].isdigit():
             return parts[0], line
@@ -112,7 +78,6 @@ class SystemdCollectorPlugin(CollectorPlugin):
         return status == 0
 
     async def _collect_continuous(self):
-        """Standard check: is the service currently active?"""
         s_ret, s_out, _ = await self.ssh_collector.fetch_output(
             f"systemctl is-active {self.service_name}"
         )
@@ -125,17 +90,6 @@ class SystemdCollectorPlugin(CollectorPlugin):
             self.set_status('failed')
 
     async def _collect_oneshot(self):
-        """
-        Oneshot check: was the last run successful and recent enough?
-
-        Uses ExecMainExitTimestamp as the primary completion time — this is set
-        whenever the main process exits, including for RemainAfterExit=yes services
-        that stay 'active' after the command finishes (e.g. nixos-upgrade.service).
-        InactiveEnterTimestamp is used as a fallback for services that do go inactive.
-
-        Considers a run successful if Result=success OR ExecMainStatus=0, because
-        some oneshot scripts exit with result=exit-code even on clean completion.
-        """
         cmd = (
             f"result=$(systemctl show {self.service_name} -p Result --value); "
             f"exit_code=$(systemctl show {self.service_name} -p ExecMainStatus --value); "
@@ -147,7 +101,6 @@ class SystemdCollectorPlugin(CollectorPlugin):
             'if [ -n "$ts" ] && [ "$ts" != "n/a" ]; then '
             '  epoch=$(date -d "$ts" +%s 2>/dev/null || echo 0); '
             'else epoch=0; fi; '
-            # Use placeholder tokens so empty values never collapse the field count
             'echo "result=${result:-empty} exit=${exit_code:-empty} epoch=$epoch active=${active:-unknown} sub=${sub:-unknown}"'
         )
         ret, stdout, stderr = await self.ssh_collector.fetch_output(cmd)
@@ -157,7 +110,6 @@ class SystemdCollectorPlugin(CollectorPlugin):
             self.set_status('failed')
             return
 
-        # Parse key=value tokens — immune to empty fields collapsing word count
         tokens = dict(tok.split('=', 1) for tok in stdout.strip().split() if '=' in tok)
         result    = tokens.get('result', 'empty')
         exit_code = tokens.get('exit',   'empty')
@@ -168,13 +120,11 @@ class SystemdCollectorPlugin(CollectorPlugin):
         except ValueError:
             epoch = 0
 
-        # Log raw values so failures are diagnosable from the dashboard
         self.db_logger.write(
             f"systemd state: result={result!r} exit_code={exit_code!r} epoch={epoch} active={active!r} sub={sub!r}",
             level="INFO"
         )
 
-        # Service is "currently running" while activating or actively executing its main process
         _RUNNING_SUBSTATES = {'running', 'start', 'start-pre', 'start-post', 'start-chroot', 'reload'}
         is_running = active == 'activating' or (active == 'active' and sub in _RUNNING_SUBSTATES)
 
@@ -204,12 +154,8 @@ class SystemdCollectorPlugin(CollectorPlugin):
             self.db_logger.write(f"Last run {format_age(age)}, result: {result}", level="INFO")
             self.set_status('online')
 
-        # Fetch recent logs regardless of result (deduplicated + persisted)
         await self._collect_journal()
 
-    # -------------------------------------------------------------------------
-    # Actions
-    # -------------------------------------------------------------------------
 
     def get_actions(self) -> List[Dict[str, str]]:
         return [
@@ -236,14 +182,6 @@ class SystemdCollectorPlugin(CollectorPlugin):
 
 
 class SystemdUIPlugin(UIPlugin):
-    """
-    Dashboard rendering for the systemd_service monitor, including the unit
-    file view/edit/reload controls. Those controls talk to the target over
-    self.ssh_controller (a RemoteSSHController proxy here, a real
-    SSHController collector-side) — the same call signatures as
-    SystemdCollectorPlugin, so this logic is unchanged from before the split.
-    """
-
     @property
     def service_name(self):
         return self.config.get('service_name')
@@ -372,9 +310,6 @@ class SystemdUIPlugin(UIPlugin):
         ui.notify('Daemon reloaded' if success else 'Daemon reload failed',
                   type='positive' if success else 'negative')
 
-    # -------------------------------------------------------------------------
-    # UI
-    # -------------------------------------------------------------------------
 
     def render_ui(self, context: str = 'page'):
         if self.max_age is not None:

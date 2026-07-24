@@ -70,7 +70,6 @@ class TestDriftAndUpdate:
         with patch.object(p, '_fetch_public_ip', return_value="5.6.7.8"), \
              patch.object(p, '_resolve_public_record', return_value="1.2.3.4"), \
              patch.object(p, '_push_update', push):
-            # First cycle establishes _last_update_attempt via one allowed call...
             p._last_update_attempt = __import__('time').monotonic()
             await p.on_collect()
         push.assert_not_called()
@@ -97,8 +96,6 @@ class TestFailureModes:
         assert _latest_status("test-ddns") == "failed"
 
     async def test_dns_lookup_failure_still_triggers_update(self, make_plugin):
-        # dns_ip is None (e.g. NXDOMAIN) -- still counts as drift from the
-        # known public IP, since None != any real IP string.
         p = make_plugin(DdnsUpdaterCollectorPlugin, _cfg())
         with patch.object(p, '_fetch_public_ip', return_value="5.6.7.8"), \
              patch.object(p, '_resolve_public_record', return_value=None), \

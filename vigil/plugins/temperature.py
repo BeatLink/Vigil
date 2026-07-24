@@ -15,7 +15,6 @@ _COLLECT_CMD = (
 
 
 def _sanitize(name: str) -> str:
-    """Convert a thermal zone type name to a safe metric name suffix."""
     return ''.join(c if c.isalnum() or c == '_' else '_' for c in name.lower())
 
 
@@ -28,18 +27,6 @@ _DEFAULT_LAYOUT = [
 
 
 class TemperatureCollectorPlugin(CollectorPlugin):
-    """
-    Monitors CPU/system temperature over SSH via /sys/class/thermal/thermal_zone*.
-
-    Stores a metric per thermal zone (temp_zone_<type>) and the overall maximum
-    as temp_c (used for the history chart and status). Zone types with duplicate
-    names keep the highest reading.
-
-    Config options:
-      temp_warning   °C that triggers warning (default: 70)
-      temp_threshold °C that triggers failed  (default: 80)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.temp_warning   = int(config.get('temp_warning',   70))
@@ -91,8 +78,6 @@ class TemperatureCollectorPlugin(CollectorPlugin):
 
 
 class TemperatureUIPlugin(UIPlugin):
-    """Dashboard rendering for the temperature monitor."""
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.temp_warning   = int(self.config.get('temp_warning',   70))
@@ -106,12 +91,6 @@ class TemperatureUIPlugin(UIPlugin):
         from vigil.web.ui.spec import FORMATTERS
         from vigil.web.ui.theme import STATUS_COLORS
 
-        # The 'sensors' cell holds a dynamically-sized per-zone container
-        # (one card per thermal zone discovered at collection time — the set
-        # of zones isn't known statically), which doesn't fit UI_SPEC's fixed
-        # card model, so this stays a manual layout+page build — reusing the
-        # shared 'temp_c1' formatter for both max_card and the per-zone cards
-        # rather than redefining it twice.
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
@@ -140,7 +119,6 @@ class TemperatureUIPlugin(UIPlugin):
                 max_label.style(f'color: {STATUS_COLORS[_level_for(val, self.temp_warning, self.temp_threshold)]}')
 
         def update_sensors():
-            # Gather latest value per zone (one query, deduplicated in Python)
             zone_values: Dict[str, float] = {}
             for row in (
                 Metric.select()
@@ -154,7 +132,6 @@ class TemperatureUIPlugin(UIPlugin):
                 if row.metric_name not in zone_values:
                     zone_values[row.metric_name] = row.value
 
-            # Rebuild sensor cards
             sensor_container.clear()
             with sensor_container:
                 for metric_name in sorted(zone_values):

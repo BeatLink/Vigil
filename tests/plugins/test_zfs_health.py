@@ -80,11 +80,10 @@ class TestZFSHealthCollection:
         assert _latest_status() == "offline"
 
     async def test_malformed_lines_skipped(self, plugin):
-        # A single-word line has len(parts) == 1, so it's skipped by the parser
         output = "pool1\tONLINE\njust_one_word\npool2\tONLINE"
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, output, ""))
         await plugin.on_collect()
-        assert _latest_metric("pools_total") == 2  # noise line ignored
+        assert _latest_metric("pools_total") == 2
 
     async def test_ssh_failure_sets_failed(self, plugin):
         plugin.ssh_collector.fetch_output = AsyncMock(

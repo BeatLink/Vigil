@@ -3,22 +3,14 @@ from typing import Dict, Any, List, Optional
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# Sentinel emitted by the remote probe script when a check fails. Kept distinct
-# from any real millisecond value so parsing is unambiguous.
 _FAIL = "FAIL"
 
 
 def _safe_metric_name(label: str) -> str:
-    """Turn an arbitrary check label into a safe metric-name suffix."""
     return ''.join(c if c.isalnum() else '_' for c in label.lower()).strip('_') or 'check'
 
 
 def _build_probe_script(checks: List[Dict[str, Any]], timeout: int) -> str:
-    """Build a single remote shell script that probes every check in turn.
-
-    Emits one line per check: "<index> <latency_ms|FAIL>". TCP checks use
-    bash's /dev/tcp (no tools required); URL checks use curl.
-    """
     lines = ["set +e"]
     for i, check in enumerate(checks):
         url = check.get('url')
@@ -42,7 +34,6 @@ def _build_probe_script(checks: List[Dict[str, Any]], timeout: int) -> str:
 
 
 def _parse_results(stdout: str, count: int) -> Dict[int, Optional[float]]:
-    """Parse probe output into {check_index: latency_ms or None-on-failure}."""
     results: Dict[int, Optional[float]] = {i: None for i in range(count)}
     for line in stdout.splitlines():
         parts = line.split()
@@ -66,13 +57,6 @@ def _try_float(value: str) -> Optional[float]:
 
 
 def _named_checks(checks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Return checks with stable 'name'/'metric' fields, without mutating input.
-
-    Mirrors the precompute PortsCollectorPlugin.__init__ does in place on its
-    own config-derived list; the UI process re-derives the same values from
-    config on each render rather than sharing that mutated list, since it
-    never runs the collector's __init__.
-    """
     named = []
     for check in checks:
         c = dict(check)
@@ -91,32 +75,14 @@ _DEFAULT_LAYOUT = [
 
 
 class PortsCollectorPlugin(CollectorPlugin):
-    """
-    Monitors TCP port and HTTP(S) URL reachability, probing from the remote
-    host over SSH. TCP checks use bash's /dev/tcp; URL checks use curl. Each
-    check records a latency metric (ms) and the plugin fails if any check is
-    down.
-
-    Config options:
-      timeout   Per-check timeout in seconds (default: 5)
-      checks:   list of checks, each either a TCP or a URL probe:
-        - name: "Web"        # optional label (defaults to host:port or url)
-          host: "10.0.0.1"   # TCP: target host (default: localhost)
-          port: 443          # TCP: target port
-        - name: "API"
-          url: "https://api.example.com/health"   # URL: HTTP(S) endpoint
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.timeout = int(config.get('timeout', 5))
         self.checks: List[Dict[str, Any]] = config.get('checks', [])
-        # Precompute a stable label + metric name for each check.
         for check in self.checks:
             if 'name' not in check:
                 check['name'] = check['url'] if check.get('url') else f"{check.get('host', 'localhost')}:{check.get('port')}"
             check['metric'] = _safe_metric_name(check['name'])
-        # Latest per-check state for the UI: {name: (up: bool, latency_ms or None)}
         self._states: Dict[str, tuple] = {}
 
     async def on_collect(self):
@@ -138,7 +104,6 @@ class PortsCollectorPlugin(CollectorPlugin):
             latency = results.get(i)
             up = latency is not None
             self._states[check['name']] = (up, latency)
-            # 1 = reachable, 0 = down — always recorded so the boolean has history.
             self.db_metrics.metric(f"{check['metric']}_up", 1.0 if up else 0.0)
             if up:
                 self.db_metrics.metric(f"{check['metric']}_latency_ms", latency)
@@ -157,8 +122,6 @@ class PortsCollectorPlugin(CollectorPlugin):
 
 
 class PortsUIPlugin(UIPlugin):
-    """Dashboard rendering for the ports monitor."""
-
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 

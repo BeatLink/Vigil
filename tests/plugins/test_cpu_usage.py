@@ -14,15 +14,12 @@ BASE_CFG = {
     "ssh_config": {"host": "test.host"},
 }
 
-# delta_total=1000, delta_idle=500 → 50% (below warning 70)
 _CPU1_50 = [100, 0, 0, 900, 0, 0, 0, 0]
 _CPU2_50 = [600, 0, 0, 1400, 0, 0, 0, 0]
 
-# delta_total=1000, delta_idle=250 → 75% (between warning 70 and failed 85)
 _CPU1_75 = [100, 0, 0, 900, 0, 0, 0, 0]
 _CPU2_75 = [850, 0, 0, 1150, 0, 0, 0, 0]
 
-# delta_total=1000, delta_idle=100 → 90% (above failed 85)
 _CPU1_90 = [100, 0, 0, 900, 0, 0, 0, 0]
 _CPU2_90 = [1000, 0, 0, 1000, 0, 0, 0, 0]
 
@@ -59,7 +56,7 @@ class TestParseCpuLine:
         line = "cpu  100 0 50 800 50 0 0 0"
         total, idle = _parse_cpu_line(line)
         assert total == 1000
-        assert idle == 850  # idle(800) + iowait(50)
+        assert idle == 850
 
     def test_short_line_defaults_missing_fields(self):
         line = "cpu  100 0 50 800"

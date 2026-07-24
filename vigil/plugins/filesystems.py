@@ -3,38 +3,24 @@ from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import format_bytes as _format_gb
 
-# List every mounted filesystem in one shot: mountpoint, total, used, use%.
-# -B1 = bytes; -x excludes pseudo/virtual filesystems that just add noise.
 _EXCLUDE_TYPES = ['tmpfs', 'devtmpfs', 'squashfs', 'overlay', 'proc', 'sysfs',
                   'cgroup', 'cgroup2', 'devpts', 'mqueue', 'debugfs',
                   'tracefs', 'ramfs', 'efivarfs', 'configfs', 'fusectl',
                   'securityfs', 'pstore', 'autofs', 'binfmt_misc', 'nsfs']
 
-# Separates the three sections of the combined command's output.
 _SNAP = '---SNAP---'
 
-# Severity ordering, for taking the worst of several independent signals.
 _RANK_UI = {'online': 0, 'warning': 1, 'failed': 2}
 
 
 def _build_cmd() -> str:
     excludes = ' '.join(f"-x {t}" for t in _EXCLUDE_TYPES)
-    # Three snapshots in one round trip, separated by sentinels:
-    #   1. space usage  2. inode usage  3. mount options (for read-only detection)
-    # Header lines are skipped in parsing; --output keeps the fields we need.
-    # NOTE: -P and -i are both mutually exclusive with --output in GNU coreutils
-    # (`df: options -P and --output are mutually exclusive`). --output already
-    # implies one line per filesystem, and ipcent gives inode use% without -i.
     space  = f"df -B1 {excludes} --output=target,size,used,pcent"
     inodes = f"df {excludes} --output=target,ipcent"
-    # /proc/mounts is authoritative for the *effective* mount flags — a filesystem
-    # the kernel remounted read-only after an I/O error shows `ro` here even though
-    # df still reports healthy usage.
     return f"{space} && echo '{_SNAP}' && {inodes} && echo '{_SNAP}' && cat /proc/mounts"
 
 
 def _sanitize(mountpoint: str) -> str:
-    """Turn a mountpoint into a safe metric-name suffix (e.g. '/var/log' -> 'var_log')."""
     s = mountpoint.strip('/')
     if not s:
         return 'root'
@@ -42,31 +28,20 @@ def _sanitize(mountpoint: str) -> str:
 
 
 def _parse_inodes(block: str) -> Dict[str, float]:
-    """Map mountpoint -> inode use%, from `df -i --output=target,ipcent`.
-
-    Filesystems that don't track inodes (btrfs, ZFS) report '-' and are omitted
-    rather than reported as 0%, which would read as healthy.
-    """
     result: Dict[str, float] = {}
-    for line in block.splitlines()[1:]:  # skip header
+    for line in block.splitlines()[1:]:
         fields = line.split()
         if len(fields) < 2:
             continue
         try:
             used_pct = float(fields[-1].rstrip('%'))
         except ValueError:
-            continue  # '-' for inode-less filesystems
+            continue
         result[' '.join(fields[:-1])] = used_pct
     return result
 
 
 def _parse_readonly(block: str) -> Dict[str, bool]:
-    """Map mountpoint -> whether it is mounted read-only, from /proc/mounts.
-
-    Fields are `device mountpoint fstype options ...`; the first comma-separated
-    option is always `ro` or `rw`. Octal escapes (\\040 for space) are decoded so
-    mountpoints match those reported by df.
-    """
     result: Dict[str, bool] = {}
     for line in block.splitlines():
         fields = line.split()
@@ -86,35 +61,6 @@ _DEFAULT_LAYOUT = [
 
 
 class FilesystemsCollectorPlugin(CollectorPlugin):
-    """
-    Auto-discovers and monitors every mounted filesystem on the target over SSH
-    via a single `df` call — no per-path configuration required. This is the
-    fleet-wide counterpart to disk_space (which watches one explicit path).
-
-    Pseudo/virtual filesystems (tmpfs, proc, cgroup, overlay, …) are excluded so
-    only real storage shows up. Each filesystem gets a `fs_<mount>_used_pct`
-    metric; overall status is the worst usage across all of them.
-
-    Beyond space, two failure modes are detected that a usage percentage alone
-    cannot surface:
-
-      * Read-only remount — the kernel flips a filesystem to `ro` after an I/O
-        error, but `df` keeps reporting healthy usage indefinitely. Any real
-        filesystem mounted read-only is reported as failed.
-      * Inode exhaustion — a filesystem can be out of inodes (writes fail with
-        ENOSPC) while showing plenty of free space. Tracked per filesystem as
-        `fs_<mount>_inodes_pct`.
-
-    Config options:
-      warning          Usage % that triggers warning (default: 80)
-      threshold        Usage % that triggers failed  (default: 90)
-      inode_warning    Inode use % that triggers warning (default: 85)
-      inode_threshold  Inode use % that triggers failed  (default: 95)
-      readonly_is_failure
-                       Treat a read-only mount as failed rather than warning
-                       (default: true)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.warning   = int(config.get('warning',   80))
@@ -144,18 +90,15 @@ class FilesystemsCollectorPlugin(CollectorPlugin):
             self.set_status('failed')
             return
 
-        # Sections: space usage / inode usage / mount options. Older targets or a
-        # partial failure may yield fewer — degrade to space-only rather than fail.
         sections = stdout.split(_SNAP)
         inode_pct = _parse_inodes(sections[1]) if len(sections) > 1 else {}
         readonly  = _parse_readonly(sections[2]) if len(sections) > 2 else {}
 
-        filesystems: List[tuple] = []  # (mountpoint, used_pct, size_bytes, used_bytes)
-        for line in sections[0].splitlines()[1:]:  # skip header
+        filesystems: List[tuple] = []
+        for line in sections[0].splitlines()[1:]:
             fields = line.split()
             if len(fields) < 4:
                 continue
-            # target may contain spaces; the last three tokens are size/used/pcent.
             pcent = fields[-1]
             try:
                 used_pct = float(pcent.rstrip('%'))
@@ -171,8 +114,6 @@ class FilesystemsCollectorPlugin(CollectorPlugin):
             self.set_status('offline')
             return
 
-        # Status is the worst of three independent signals, tracked separately so
-        # a read-only mount can't be masked by healthy usage numbers.
         worst = 0.0
         worst_inode = 0.0
         overall = 'online'
@@ -240,8 +181,6 @@ class FilesystemsCollectorPlugin(CollectorPlugin):
 
 
 class FilesystemsUIPlugin(UIPlugin):
-    """Dashboard rendering for the filesystems monitor."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.warning   = int(config.get('warning',   80))
@@ -287,8 +226,6 @@ class FilesystemsUIPlugin(UIPlugin):
             self.internal_modules['ui']['events_table'](page)
 
         def update():
-            # Latest space and inode percentages per filesystem, deduplicated in
-            # Python from one query covering both metric families.
             fs_pct: Dict[str, float] = {}
             fs_inodes: Dict[str, float] = {}
             for row in (
@@ -317,8 +254,6 @@ class FilesystemsUIPlugin(UIPlugin):
                     display = '/' + display if display != 'root' else '/'
                     level = self._level_for(val)
                     text = f'{val:.0f}%'
-                    # Surface inode pressure inline — it can fail writes while the
-                    # space figure still looks healthy.
                     ipct = fs_inodes.get(key)
                     if ipct is not None:
                         ilevel = self._inode_level_for(ipct)

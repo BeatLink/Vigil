@@ -4,9 +4,6 @@ from typing import Dict, Any
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# /proc/mdstat lays out one array per md device. The line after the "mdN :"
-# header carries a status field like "[4/4] [UUUU]" — each U is an up disk,
-# each _ a missing/failed one. A resync/recovery line may follow.
 _ARRAY_RE = re.compile(r'^(md\d+)\s*:\s*(\S+)\s+(\S+)', re.MULTILINE)
 _STATE_RE = re.compile(r'\[(\d+)/(\d+)\]\s*\[([U_]+)\]')
 _RECOVERY_RE = re.compile(r'(recovery|resync|reshape|check)\s*=\s*([\d.]+)%')
@@ -19,18 +16,6 @@ _DEFAULT_LAYOUT = [
 
 
 class RaidCollectorPlugin(CollectorPlugin):
-    """
-    Monitors Linux software RAID (mdadm) array health over SSH via /proc/mdstat.
-
-    Parses each md device's [N/M] [UU__] status. An array is degraded when
-    fewer disks are up than the array expects, or when any slot shows '_'.
-    Reports failed if any array is degraded, warning while a resync/recovery is
-    in progress, online when all arrays are clean. Complements the ZFS plugins
-    for hosts using classic mdraid.
-
-    No config options beyond the shared SSH/interval fields.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
 
@@ -47,8 +32,6 @@ class RaidCollectorPlugin(CollectorPlugin):
 
         for m in _ARRAY_RE.finditer(stdout):
             dev = m.group(1)
-            # The status/state line is the remainder of this array block up to a
-            # blank line; search the slice after the header for the [N/M][U_] tag.
             block = stdout[m.end():]
             next_blank = block.find('\n\n')
             block = block if next_blank < 0 else block[:next_blank]
@@ -99,13 +82,6 @@ class RaidCollectorPlugin(CollectorPlugin):
 
 
 class RaidUIPlugin(UIPlugin):
-    """Dashboard rendering for the raid monitor — declarative, see UI_SPEC.
-    ok_card keeps its fixed 'online' color (unconditional, like vms.py's
-    running_card) via a locally registered trivial rule; degraded_card uses
-    the shared 'nonzero_warning'-shaped semantics but needs 'failed' not
-    'warning' for nonzero, so it gets its own local rule too.
-    """
-
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {

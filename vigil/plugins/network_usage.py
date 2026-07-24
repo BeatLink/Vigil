@@ -3,12 +3,10 @@ from typing import Dict, Any, Optional, Tuple
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# Interface prefixes treated as virtual/internal — excluded from auto-detection
 _VIRTUAL_PREFIXES = ('lo', 'veth', 'docker', 'virbr', 'br-', 'tun', 'tap')
 
 
 def _parse_net_dev(block: str) -> Dict[str, Tuple[int, int]]:
-    """Parse one /proc/net/dev block into {iface: (rx_bytes, tx_bytes)}."""
     result = {}
     for line in block.splitlines():
         line = line.strip()
@@ -26,7 +24,6 @@ def _parse_net_dev(block: str) -> Dict[str, Tuple[int, int]]:
 
 
 def _auto_detect_interface(stats: Dict[str, Tuple[int, int]]) -> Optional[str]:
-    """Return the non-virtual interface with the highest combined byte count."""
     candidates = {
         iface: rx + tx
         for iface, (rx, tx) in stats.items()
@@ -50,17 +47,6 @@ _DEFAULT_LAYOUT = [
 
 
 class NetworkUsageCollectorPlugin(CollectorPlugin):
-    """
-    Monitors network interface throughput over SSH via /proc/net/dev.
-
-    Takes two snapshots 1 second apart in a single SSH command to compute
-    RX/TX rates without requiring any extra tools on the remote host.
-
-    Config options:
-      interface: (optional) explicit interface name, e.g. "eth0".
-                 Omit to auto-detect the busiest non-virtual interface.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.interface: Optional[str] = config.get('interface')
@@ -75,7 +61,6 @@ class NetworkUsageCollectorPlugin(CollectorPlugin):
             self.set_status('failed')
             return
 
-        # stdout contains two copies of /proc/net/dev separated by the repeated header
         halves = stdout.split('Inter-|')
         if len(halves) < 3:
             self.db_logger.write("Unexpected /proc/net/dev output format", level="ERROR")
@@ -99,7 +84,6 @@ class NetworkUsageCollectorPlugin(CollectorPlugin):
         rx1, tx1 = sample1[iface]
         rx2, tx2 = sample2[iface]
 
-        # Clamp to 0 to guard against counter resets between the two samples
         rx_kbps = max(0.0, (rx2 - rx1) / 1024)
         tx_kbps = max(0.0, (tx2 - tx1) / 1024)
 
@@ -117,18 +101,6 @@ class NetworkUsageCollectorPlugin(CollectorPlugin):
 
 
 class NetworkUsageUIPlugin(UIPlugin):
-    """
-    Dashboard rendering for the network_usage monitor.
-
-    The interface card shows the configured `interface` when set. When
-    auto-detection is in play, the collector-side `_active_interface`
-    (populated once on_collect first runs) is not visible to this process —
-    there is no live shared state or persisted metric for "which interface
-    was chosen" — so this falls back to a generic placeholder until the
-    metrics themselves (rx_kbps/tx_kbps) are what actually confirm data is
-    flowing.
-    """
-
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
@@ -136,10 +108,6 @@ class NetworkUsageUIPlugin(UIPlugin):
         from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.spec import FORMATTERS
 
-        # Two charts (rx_chart/tx_chart) don't fit UI_SPEC's single 'chart'
-        # key, so this stays a manual layout+page build — reusing the shared
-        # 'kbps_rate' formatter (identical to this module's own _format_rate)
-        # rather than redefining it.
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
         page = self.page(metric_names=['rx_kbps', 'tx_kbps'])
 
@@ -149,9 +117,6 @@ class NetworkUsageUIPlugin(UIPlugin):
         with layout.cell('host_card'):
             self.internal_modules['ui']['host_card']()
         with layout.cell('iface_card'):
-            # Static: the configured interface name, or a placeholder when
-            # auto-detecting (see class docstring — the active interface
-            # chosen by auto-detect isn't visible to this process).
             info_card('INTERFACE', configured_interface or 'Detecting...')
         with layout.cell('rx_card'):
             info_card('DOWNLOAD', '-- KB/s').bind_text_from(

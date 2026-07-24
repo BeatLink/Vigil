@@ -1,34 +1,3 @@
-"""
-Calibre-Web library health via a live OPDS feed request.
-
-Complements a `systemd_service` monitor on calibre-web-automated rather than
-replacing it. That one answers "is the process alive"; this one answers "is
-the metadata database actually being served", which is a different failure.
-Calibre-Web has no dedicated health/status API in either upstream
-(janeczku/calibre-web) or the Automated fork — the project's own Docker
-`HEALTHCHECK` is just `curl -f http://localhost:8083/`, and a known upstream
-issue (crocodilestick/Calibre-Web-Automated#1134) documents that even that
-can return 200 while the metadata DB is actually broken. `/opds`, in
-contrast, genuinely exercises the DB layer to build its feed, so a request
-that returns valid OPDS XML is stronger evidence than root responding 200.
-
-Requests `/opds` with the credentials of a dedicated low-privilege account
-(download-only, no admin rights) created once by hand — see
-calibre-web-automated.nix for why that step cannot be made declarative — and
-checks both the HTTP status and that the body is actually an Atom/OPDS feed,
-since a login or error page can still answer 200.
-
-Config options:
-  url               Base URL of Calibre-Web, as seen from the monitored host
-                    (default: http://127.0.0.1:8083)
-  username          Basic auth username for the probe account.
-  password          Basic auth password. Prefer password_command.
-  password_command  Command run on the monitored host whose stdout is the
-                    password (e.g. "cat /run/secrets/
-                    calibre_web_vigil_password"). Takes precedence over
-                    `password`.
-  request_timeout   Seconds allowed for the request (default: 10)
-"""
 import shlex
 from typing import Any, Dict, Optional
 
@@ -72,7 +41,6 @@ def _parse_response(stdout: str) -> tuple:
 
 
 def _looks_like_opds(body: str) -> bool:
-    """True if the body is a real Atom/OPDS feed rather than an HTML page."""
     head = body[:500]
     return '<feed' in head and ('atom' in head.lower() or 'opds' in head.lower())
 
@@ -85,8 +53,6 @@ _DEFAULT_LAYOUT = [
 
 
 class CalibreWebCollectorPlugin(CollectorPlugin):
-    """Monitors Calibre-Web library health via a live OPDS feed request."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.url = config.get('url', 'http://127.0.0.1:8083')
@@ -149,8 +115,6 @@ class CalibreWebCollectorPlugin(CollectorPlugin):
 
 
 class CalibreWebUIPlugin(UIPlugin):
-    """Dashboard rendering for the calibre_web monitor — declarative, see UI_SPEC."""
-
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {

@@ -5,11 +5,6 @@ from vigil.web.plugin_base import UIPlugin
 
 
 def _extract_counter(block: str, key: str) -> Optional[int]:
-    """Return the value on the `key` line of a /proc/vmstat block.
-
-    /proc/vmstat is `name value` per line. Returns None if the line is absent,
-    which is normal on kernels that don't expose the counter at all.
-    """
     for line in block.splitlines():
         fields = line.split()
         if len(fields) >= 2 and fields[0] == key:
@@ -28,29 +23,6 @@ _DEFAULT_LAYOUT = [
 
 
 class OomCollectorPlugin(CollectorPlugin):
-    """
-    Detects kernel Out-Of-Memory kills over SSH via /proc/vmstat — no extra
-    tools required on the target.
-
-    An OOM kill is an *event*, not a level: the kernel reaps a process, memory
-    drops back to normal, and an interval-sampled memory_usage percentage sees
-    nothing wrong. `oom_kill` is a monotonic counter since boot, so comparing it
-    against the previous collection catches kills that happened between polls,
-    whichever process was the victim.
-
-    The first collection after startup establishes a baseline and reports online
-    (the counter is cumulative since boot, so a non-zero value on the first read
-    says nothing about the present). Thereafter, any increase is reported once,
-    then decays back to online after `alert_for` collections without a new kill.
-
-    A counter that goes backwards means the host rebooted; that resets the
-    baseline rather than reporting a negative delta.
-
-    Config options:
-      alert_for   Collections to keep alerting after a kill (default: 3)
-      is_warning  Report kills as warning rather than failed (default: false)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.alert_for  = int(config.get('alert_for', 3))
@@ -67,8 +39,6 @@ class OomCollectorPlugin(CollectorPlugin):
 
         total = _extract_counter(stdout, 'oom_kill')
         if total is None:
-            # Pre-4.13 kernels lack oom_kill entirely — report offline rather than
-            # healthy, so a silently unmonitored host is visible as such.
             self.db_logger.write(
                 "No 'oom_kill' counter in /proc/vmstat (kernel too old?)", level="WARNING"
             )
@@ -87,7 +57,6 @@ class OomCollectorPlugin(CollectorPlugin):
             return
 
         if total < previous:
-            # Counter went backwards: the host rebooted. Re-baseline silently.
             self.db_logger.write(
                 f"OOM counter reset ({previous} -> {total}); host likely rebooted",
                 level="INFO"
@@ -108,8 +77,6 @@ class OomCollectorPlugin(CollectorPlugin):
             self.set_status('warning' if self.is_warning else 'failed')
             return
 
-        # No new kills. Hold the alert for alert_for collections so a kill isn't
-        # missed by anyone glancing at the dashboard between polls.
         if self._since_kill is not None:
             self._since_kill += 1
             if self._since_kill < self.alert_for:
@@ -130,15 +97,6 @@ class OomCollectorPlugin(CollectorPlugin):
 
 
 class OomUIPlugin(UIPlugin):
-    """Dashboard rendering for the oom monitor — declarative, see UI_SPEC.
-
-    recent_card's color is config-dependent (is_warning selects 'warning' vs
-    'failed' for a nonzero count, not a plain threshold), so it's a
-    per-instance color rule registered in __init__ rather than the shared
-    'nonzero_warning' rule (which always maps nonzero -> warning regardless
-    of is_warning).
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.is_warning = bool(config.get('is_warning', False))

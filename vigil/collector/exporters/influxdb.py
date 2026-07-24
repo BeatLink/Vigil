@@ -1,15 +1,3 @@
-"""
-InfluxDB exporter (push).
-
-Periodically pushes Vigil's latest metrics to an InfluxDB instance using the
-line protocol over HTTP. Supports both InfluxDB 1.x (`/write?db=`) and 2.x
-(`/api/v2/write?org=&bucket=` with a token). Configured under an `exporters:`
-block in config.yaml; started as a background asyncio task by the engine.
-
-Line protocol: measurement,tag=val field=val timestamp_ns
-We emit one measurement `vigil_metric` with tags {monitor,target,metric} and a
-single `value` field, plus `vigil_up` for per-monitor status.
-"""
 import asyncio
 import logging
 import time
@@ -21,7 +9,6 @@ _STATUS_VALUE = {'online': 1.0, 'warning': 0.5, 'failed': 0.0, 'offline': -1.0}
 
 
 def _escape_tag(value: str) -> str:
-    # Tag keys/values escape commas, spaces, and equals signs.
     return value.replace('\\', '\\\\').replace(',', '\\,').replace(' ', '\\ ').replace('=', '\\=')
 
 
@@ -31,7 +18,6 @@ def _line(measurement: str, tags: Dict[str, str], value: float, ts_ns: int) -> s
 
 
 def build_payload(db: Any) -> str:
-    """Render the current state as an InfluxDB line-protocol payload."""
     ts_ns = int(time.time() * 1e9)
     lines = []
     for m in db.latest_metrics():
@@ -45,16 +31,6 @@ def build_payload(db: Any) -> str:
 
 
 class InfluxDBExporter:
-    """
-    Background pusher. Config keys (under exporters.influxdb):
-      url        Base InfluxDB URL, e.g. http://localhost:8086   (required)
-      interval   Push interval in seconds (default: 30)
-      # InfluxDB 2.x:
-      org, bucket, token
-      # InfluxDB 1.x:
-      database   (used when org/bucket not given)
-    """
-
     def __init__(self, db: Any, config: Dict[str, Any]):
         self.db = db
         self.url = config['url'].rstrip('/')
@@ -66,9 +42,9 @@ class InfluxDBExporter:
         self._session = requests.Session()
 
     def _endpoint(self) -> str:
-        if self.bucket and self.org:  # v2
+        if self.bucket and self.org:
             return f'{self.url}/api/v2/write?org={self.org}&bucket={self.bucket}&precision=ns'
-        return f'{self.url}/write?db={self.database or "vigil"}&precision=ns'  # v1
+        return f'{self.url}/write?db={self.database or "vigil"}&precision=ns'
 
     def _headers(self) -> Dict[str, str]:
         headers = {'Content-Type': 'text/plain; charset=utf-8'}
@@ -89,7 +65,6 @@ class InfluxDBExporter:
         logging.info(f"InfluxDB exporter started -> {self.url} every {self.interval}s")
         while True:
             try:
-                # requests is blocking; run it off the event loop.
                 await asyncio.to_thread(self._push_once)
             except Exception as e:
                 logging.warning(f"InfluxDB push error: {e}")

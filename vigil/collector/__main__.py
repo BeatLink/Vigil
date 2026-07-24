@@ -1,11 +1,3 @@
-"""
-Entry point for the collector process.
-
-Loads config, builds the CollectorPlugin tree (each holding a real SSH
-connection), and runs the per-monitor polling scheduler plus the internal API
-that the web process (vigil.web_main) proxies actions through. Has no web UI
-of its own — see README/nix/module.nix for running both processes together.
-"""
 import argparse
 import asyncio
 import logging

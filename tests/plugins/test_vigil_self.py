@@ -25,11 +25,8 @@ BASE_CFG = {
 @pytest.fixture
 def plugin(make_plugin):
     p = make_plugin(VigilSelfCollectorPlugin, BASE_CFG)
-    # Default to a healthy engine with no monitors; individual tests override.
     p.engine = MagicMock(plugins=[])
     yield p
-    # `engine` is a class attribute, so a test that sets it on the instance is
-    # fine, but one that sets it on the class would leak into the next test.
     VigilSelfCollectorPlugin.engine = None
 
 
@@ -50,7 +47,6 @@ def _latest_metric(metric: str, name: str = "test-self") -> float | None:
 
 
 def _fake_monitor(name: str, interval: float, last_collected: float, children=None):
-    """A stand-in monitor with just the attributes _collection_health reads."""
     m = MagicMock()
     m.name = name
     m.interval = interval
@@ -72,7 +68,6 @@ class TestFormatUptime:
 
 class TestProcReaders:
     def test_rss_is_positive(self):
-        # Reads this test process; any live process has a non-zero RSS.
         assert _read_rss_mb() > 0
 
     def test_cpu_seconds_is_non_negative(self):
@@ -111,8 +106,6 @@ class TestSelfCollection:
         assert _latest_status() == "warning"
 
     async def test_unreadable_memory_does_not_fail(self, plugin):
-        # A kernel that will not report RSS is not evidence that Vigil is
-        # unhealthy; the collection-liveness signal still stands on its own.
         with patch("vigil.plugins.vigil_self._read_rss_mb", return_value=None):
             await plugin.on_collect()
         assert _latest_status() == "online"
@@ -134,7 +127,6 @@ class TestCollectionHealth:
         group = _fake_monitor("group", 60, now, children=[leaf])
         plugin.engine = MagicMock(plugins=[group])
         await plugin.on_collect()
-        # The group aggregates and never collects, so only the leaf counts.
         assert _latest_metric("monitors_total") == 1.0
 
     async def test_fresh_monitors_are_not_late(self, plugin):
@@ -145,7 +137,6 @@ class TestCollectionHealth:
         assert _latest_status() == "online"
 
     async def test_late_monitor_sets_warning(self, plugin):
-        # 4 intervals behind: past stale_warning (3), short of threshold (10).
         stale = time.monotonic() - (60 * 4)
         plugin.engine = MagicMock(plugins=[_fake_monitor("late", 60, stale)])
         await plugin.on_collect()
@@ -153,22 +144,19 @@ class TestCollectionHealth:
         assert _latest_status() == "warning"
 
     async def test_stalled_monitor_sets_failed(self, plugin):
-        stale = time.monotonic() - (60 * 12)   # 12 intervals behind
+        stale = time.monotonic() - (60 * 12)
         plugin.engine = MagicMock(plugins=[_fake_monitor("stalled", 60, stale)])
         await plugin.on_collect()
         assert _latest_metric("monitors_stalled") == 1.0
         assert _latest_status() == "failed"
 
     async def test_never_collected_monitor_is_not_stalled(self, plugin):
-        # _last_collected == 0 means "first poll not yet due", not "stuck".
         plugin.engine = MagicMock(plugins=[_fake_monitor("new", 3600, 0.0)])
         await plugin.on_collect()
         assert _latest_metric("monitors_stalled") == 0.0
         assert _latest_status() == "online"
 
     async def test_staleness_is_relative_to_each_interval(self, plugin):
-        # 10 minutes since last collection: fine for an hourly monitor,
-        # stalled for a 30s one. One global deadline could not tell them apart.
         ten_min_ago = time.monotonic() - 600
         plugin.engine = MagicMock(plugins=[
             _fake_monitor("hourly", 3600, ten_min_ago),

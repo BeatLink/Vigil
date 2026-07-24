@@ -21,14 +21,6 @@ _DEFAULT_UNIT_FILE_WRITE_PATHS = (
 
 
 class ServiceListCollectorPlugin(CollectorPlugin):
-    """
-    Lists all systemd service units on a host and exposes management actions.
-
-    This plugin fetches `systemctl list-units --type=service --all` plus
-    `systemctl list-unit-files --type=service --all` to show active, loaded,
-    enabled/disabled, and description state for every service.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.max_logs = int(config.get('lines', 10))
@@ -74,8 +66,6 @@ class ServiceListCollectorPlugin(CollectorPlugin):
         self.db_metrics.metric('services_total', float(total))
         self.db_metrics.metric('services_active', float(active))
         self.db_metrics.metric('services_failed', float(failed))
-        # Full per-service rows for the web process's table — see
-        # PluginSnapshot's docstring in core/data/database.py.
         self.db_logger.snapshot(services)
         self.db_logger.write(
             f'Collected {total} services, {active} active, {failed} failed',
@@ -199,21 +189,6 @@ class ServiceListCollectorPlugin(CollectorPlugin):
 
 
 class ServiceListUIPlugin(UIPlugin):
-    """
-    Dashboard rendering for the service-list monitor: filterable table with
-    per-row start/stop/restart/enable/disable/status/unit-file actions. See
-    ServiceListCollectorPlugin for collection/action logic.
-
-    Like processes.py, the table reads ServiceListCollectorPlugin's latest
-    snapshot (self.latest_snapshot()) rather than an in-memory list —
-    on_collect() runs in a different process here, so ServiceListCollectorPlugin
-    persists `_services` via db_logger.snapshot(services) specifically so this
-    class can read it back. Per-row actions (start/stop/.../view unit
-    file/edit unit file) work unchanged: they call self.ssh_controller /
-    self.on_action, both of which UIPlugin proxies to the collector over its
-    internal API with identical method signatures.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
@@ -412,9 +387,6 @@ class ServiceListUIPlugin(UIPlugin):
         ui.notify('Daemon reloaded' if success else 'Daemon reload failed', type='positive' if success else 'negative')
 
     async def _read_unit_file(self, service_name: str) -> tuple[bool, str]:
-        """Same as ServiceListCollectorPlugin._read_unit_file, via the
-        ssh_controller proxy — UIPlugin's RemoteSSHController exposes the same
-        execute_action() method the collector's real SSHController does."""
         status, stdout, stderr = await self.ssh_controller.execute_action(
             f'sudo systemctl cat {shlex.quote(service_name)}'
         )
@@ -423,8 +395,6 @@ class ServiceListUIPlugin(UIPlugin):
         return True, stdout
 
     async def _write_unit_file(self, service_name: str, content: str) -> tuple[bool, str]:
-        """Same as ServiceListCollectorPlugin._write_unit_file, via the
-        ssh_controller proxy."""
         ok, path_or_error = await self._resolve_unit_path(service_name)
         if not ok:
             return False, path_or_error

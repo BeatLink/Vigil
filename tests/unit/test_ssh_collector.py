@@ -9,8 +9,6 @@ from vigil.collector.collectors.ssh_collector import SSHCollector
 def mock_conn():
     conn = MagicMock()
     conn.host = "test.host"
-    # execute() is a coroutine on the real SSHConnection (asyncssh-based —
-    # see ssh_connector.py); SSHCollector is now a thin pass-through to it.
     conn.execute = AsyncMock(return_value=(0, "output", ""))
     return conn
 
@@ -31,9 +29,6 @@ class TestFetchOutput:
         assert err == "command not found"
 
     async def test_exception_returns_minus_one(self, mock_conn):
-        # SSHConnection.execute() itself handles its own timeouts/kills (see
-        # ssh_connector.py) — SSHCollector's only remaining job is to catch
-        # whatever still escapes and turn it into the (-1, "", msg) sentinel.
         mock_conn.execute.side_effect = Exception("connection reset")
         collector = SSHCollector(mock_conn)
         rc, out, err = await collector.fetch_output("cmd")

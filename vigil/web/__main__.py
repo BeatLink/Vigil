@@ -1,13 +1,3 @@
-"""
-Entry point for the web process.
-
-Loads the same config.yaml as the collector, opens the shared SQLite database
-read-only in spirit (writes here are limited to UI preferences — see
-VigilWebEngine), builds the UIPlugin tree, and serves the dashboard. Actions
-that need a live SSH connection are proxied to the collector process's
-internal API over --collector-url; see vigil.collector.internal_api and
-vigil.web.remote_proxy.
-"""
 import argparse
 import logging
 
@@ -40,9 +30,6 @@ def main():
 
     engine = VigilWebEngine(args.config, db_path_override=args.db, collector_url=collector_url)
 
-    # Apply theme overrides before any UI module is imported so that
-    # 'from .theme import PRIMARY' bindings in main_dashboard/components
-    # and lazily-loaded plugins all see the configured values.
     import vigil.web.ui.theme as theme
     theme.configure(engine.config_loader.theme_settings)
 

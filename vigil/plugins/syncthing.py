@@ -1,60 +1,3 @@
-"""
-Syncthing folder/device health via the REST API.
-
-Complements a `systemd_service` monitor on syncthing rather than replacing
-it. That one answers "is the process alive"; this one answers "is
-everything actually syncing", which is a different failure. The case that
-motivates it: the daemon stays up and the GUI answers while a folder's sync
-has stalled — a permission error on one file, a full disk, a device gone
-unreachable — and every liveness check stays green while files quietly stop
-propagating.
-
-Two signals carry that:
-
-  folder state    Syncthing's own per-folder state (`idle` / `scanning` /
-                  `syncing` / `error` / ...), plus `needFiles`/`needBytes`.
-                  A folder reporting `idle` with nonzero `needFiles` is a
-                  known Syncthing anomaly (upstream issue #1765) meaning
-                  sync isn't converging despite believing it's done —
-                  checked explicitly because state alone would call it
-                  healthy. `pullErrors` catches files that failed mid-sync
-                  without ever moving the folder out of a nominally OK state.
-  device connection Whether devices this instance expects to sync with are
-                  actually connected, from `/rest/system/connections`. A
-                  disconnected device means its share of every folder's
-                  content is frozen, however healthy the local folder state
-                  looks.
-
-Both are read from Syncthing's own REST API rather than reasoned about from
-first principles, because Syncthing already computes exactly these signals
-for its own GUI — recomputing them from raw file lists would be redundant
-and more likely to drift from what upstream considers "healthy".
-
-The API key is not stored in Vigil's own config: it lives only in
-Syncthing's config.xml, so a small Nix-managed timer (see syncthing.nix)
-extracts just that value into a file `vigil-access` can read directly,
-avoiding a shared credential store or wider file access.
-
-Config options:
-  api_url            Base URL of the Syncthing GUI/API, as seen from the
-                     monitored host (default: http://127.0.0.1:8384)
-  api_key_command    Command run on the monitored host whose stdout is the
-                     API key (default: "cat /Storage/Services/Syncthing/
-                     Config/vigil-api-key"). Prefer this over inlining the
-                     key.
-  api_key            API key, if not using api_key_command.
-  folders            Folder IDs to judge. Empty (default) means every folder
-                     Syncthing reports.
-  devices            Device names/IDs expected to be connected. Empty
-                     (default) means every configured device is expected
-                     connected; a device you know is intentionally offline
-                     (a laptop that's usually asleep) should be left out.
-  stall_warning      Minutes a folder may sit in `syncing`/`scanning` before
-                     status is warning (default: 60) — a folder legitimately
-                     takes time on a large change, but this catches one that
-                     stopped making progress rather than finishing.
-  api_timeout        Seconds allowed for the remote curl calls (default: 10)
-"""
 import json
 import shlex
 from datetime import datetime, timezone
@@ -66,7 +9,6 @@ from vigil.web.plugin_base import UIPlugin
 
 def _folder_status_script(api_url: str, timeout: int, api_key_command: Optional[str],
                           api_key: Optional[str], folder_id: str) -> str:
-    """Syncthing has no bulk /rest/db/status — one call per folder id."""
     base = api_url.rstrip('/')
     if api_key_command:
         header = '-H "X-API-Key: $(' + api_key_command + ')"'
@@ -84,8 +26,6 @@ _DEFAULT_LAYOUT = [
 
 
 class SyncthingCollectorPlugin(CollectorPlugin):
-    """Monitors Syncthing folder sync state and device connectivity via the REST API."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8384')
@@ -130,7 +70,6 @@ class SyncthingCollectorPlugin(CollectorPlugin):
             self.set_status('warning')
             return
 
-        # One /rest/db/status call per folder — Syncthing has no bulk form.
         import time as _time
         folder_states: Dict[str, Dict[str, Any]] = {}
         for folder_id in watched_ids:
@@ -174,7 +113,6 @@ class SyncthingCollectorPlugin(CollectorPlugin):
                              if self.devices is None or device_names[d] in self.devices
                              or d in (self.devices or [])]
 
-        # --- folder judgment --------------------------------------------
         now = _time.monotonic()
         errored_folders = []
         stalled_folders = []
@@ -197,7 +135,6 @@ class SyncthingCollectorPlugin(CollectorPlugin):
                 continue
 
             if state == 'idle' and (need_files > 0 or need_bytes > 0):
-                # Known anomaly: idle but not actually converged.
                 errored_folders.append(folder_id)
                 continue
 
@@ -214,7 +151,6 @@ class SyncthingCollectorPlugin(CollectorPlugin):
         self.db_metrics.metric('need_bytes', total_need_bytes)
         self.db_metrics.metric('pull_errors', float(total_pull_errors))
 
-        # --- device judgment ---------------------------------------------
         disconnected = [
             device_names.get(dev_id, dev_id) for dev_id in expected_devices
             if not connections.get(dev_id, {}).get('connected', False)
@@ -222,7 +158,6 @@ class SyncthingCollectorPlugin(CollectorPlugin):
         self.db_metrics.metric('devices_expected', float(len(expected_devices)))
         self.db_metrics.metric('devices_disconnected', float(len(disconnected)))
 
-        # --- status ---------------------------------------------------------
         problems = []
         level = 'online'
 
@@ -263,19 +198,12 @@ class SyncthingCollectorPlugin(CollectorPlugin):
 
 
 class SyncthingUIPlugin(UIPlugin):
-    """Dashboard rendering for the syncthing monitor."""
-
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
         from vigil.web.ui.spec import FORMATTERS
         from vigil.web.ui.theme import STATUS_COLORS
 
-        # devices_card's text combines devices_expected AND
-        # devices_disconnected into one "connected/expected" string, which
-        # doesn't fit UI_SPEC's single-metric card model, so this whole page
-        # stays a manual layout+page build — reusing the shared 'int'
-        # formatter for the other cards rather than redefining it.
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT),

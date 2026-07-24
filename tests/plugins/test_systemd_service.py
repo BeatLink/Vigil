@@ -24,7 +24,7 @@ ONESHOT_CFG = {
 
 
 def _latest_status(plugin_id: str) -> str | None:
-    flush_writes()  # writes are async; wait for them before reading back
+    flush_writes()
     with db.connection_context():
         row = StatusHistory.select().where(
             StatusHistory.collector_id == plugin_id
@@ -33,7 +33,7 @@ def _latest_status(plugin_id: str) -> str | None:
 
 
 def _latest_metric(plugin_name: str, metric: str) -> float | None:
-    flush_writes()  # writes are async; wait for them before reading back
+    flush_writes()
     with db.connection_context():
         row = Metric.select().where(
             (Metric.collector == plugin_name) & (Metric.metric_name == metric)
@@ -44,13 +44,9 @@ def _latest_metric(plugin_name: str, metric: str) -> float | None:
 def _oneshot_output(result="success", exit_code="0", epoch=None,
                     active="inactive", sub="dead") -> str:
     if epoch is None:
-        epoch = int(time.time()) - 3600  # 1 hour ago
+        epoch = int(time.time()) - 3600
     return f"result={result} exit={exit_code} epoch={epoch} active={active} sub={sub}"
 
-
-# ---------------------------------------------------------------------------
-# Continuous mode
-# ---------------------------------------------------------------------------
 
 class TestContinuousMode:
     @pytest.fixture
@@ -59,8 +55,8 @@ class TestContinuousMode:
 
     async def test_active_service_is_online(self, plugin):
         plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
-            (0, "active", ""),         # systemctl is-active
-            (0, "log line", ""),       # journalctl
+            (0, "active", ""),
+            (0, "log line", ""),
         ])
         await plugin.on_collect()
         assert _latest_status("test-nginx") == "online"
@@ -100,8 +96,8 @@ class TestContinuousMode:
 
     async def test_journal_lines_persisted(self, plugin):
         plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
-            (0, "active", ""),                                        # is-active
-            (0, "2024-05-01T12:00:00+0000 host nginx[1]: started", ""),  # journalctl short-iso
+            (0, "active", ""),
+            (0, "2024-05-01T12:00:00+0000 host nginx[1]: started", ""),
         ])
         await plugin.on_collect()
         flush_writes()
@@ -112,7 +108,6 @@ class TestContinuousMode:
 
     async def test_repeated_journal_line_deduplicated(self, plugin):
         line = "2024-05-01T12:00:00+0000 host nginx[1]: same message"
-        # Two identical collection cycles: the line must be stored only once.
         for _ in range(2):
             plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
                 (0, "active", ""),
@@ -135,10 +130,6 @@ class TestContinuousMode:
             row = LogLine.select().where(LogLine.source == "test-nginx").first()
         assert row.level == "ERROR"
 
-
-# ---------------------------------------------------------------------------
-# Oneshot mode
-# ---------------------------------------------------------------------------
 
 class TestOneshotMode:
     @pytest.fixture
@@ -170,7 +161,6 @@ class TestOneshotMode:
         assert _latest_status("test-upgrade") == "failed"
 
     async def test_stale_run_exceeding_max_age_is_failed(self, plugin):
-        # 2 weeks ago, max_age is 1 week (604800s)
         old_epoch = int(time.time()) - 14 * 24 * 3600
         plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
             (0, _oneshot_output("success", "0", epoch=old_epoch), ""),
@@ -180,7 +170,6 @@ class TestOneshotMode:
         assert _latest_status("test-upgrade") == "failed"
 
     async def test_run_within_max_age_is_online(self, plugin):
-        # 3 days ago, max_age is 1 week → still fresh
         recent_epoch = int(time.time()) - 3 * 24 * 3600
         plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
             (0, _oneshot_output("success", "0", epoch=recent_epoch), ""),
@@ -199,7 +188,6 @@ class TestOneshotMode:
         assert _latest_metric("test-upgrade", "is_running") == pytest.approx(1.0)
 
     async def test_active_running_substate_is_running(self, plugin):
-        # active + running substate (for long-running oneshots)
         plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
             (0, _oneshot_output(active="active", sub="running"), ""),
             (0, "", ""),
@@ -216,7 +204,6 @@ class TestOneshotMode:
         assert _latest_metric("test-upgrade", "is_running") == pytest.approx(0.0)
 
     async def test_success_via_exit_code_zero_overrides_result(self, plugin):
-        # result='exit-code' but ExecMainStatus=0 → treat as success
         plugin.ssh_collector.fetch_output = AsyncMock(side_effect=[
             (0, _oneshot_output("exit-code", "0"), ""),
             (0, "", ""),
@@ -257,10 +244,6 @@ class TestOneshotMode:
         assert _latest_metric("test-upgrade", "last_run_success") == pytest.approx(0.0)
 
 
-# ---------------------------------------------------------------------------
-# max_age config parsing
-# ---------------------------------------------------------------------------
-
 class TestMaxAgeParsing:
     def test_max_age_parsed_from_human_string(self, make_plugin):
         plugin = make_plugin(SystemdCollectorPlugin, {**ONESHOT_CFG, "max_age": "1w"})
@@ -274,10 +257,6 @@ class TestMaxAgeParsing:
         plugin = make_plugin(SystemdCollectorPlugin, CONTINUOUS_CFG)
         assert plugin.max_age is None
 
-
-# ---------------------------------------------------------------------------
-# Actions
-# ---------------------------------------------------------------------------
 
 class TestActions:
     @pytest.fixture

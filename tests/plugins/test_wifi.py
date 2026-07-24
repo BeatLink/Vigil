@@ -19,7 +19,6 @@ WIRELESS_HEADER = (
 
 
 def _make_wireless(ifaces: dict) -> str:
-    """Build a /proc/net/wireless block from {iface: (link, level)}."""
     lines = [WIRELESS_HEADER]
     for iface, (link, level) in ifaces.items():
         lines.append(f" {iface}: 0000   {link}.  {level}.  -256        0      0      0      0      0        0\n")
@@ -64,7 +63,6 @@ class TestParseWireless:
         assert result["wlan0"] == (65.0, -45.0)
 
     def test_strips_trailing_dot(self):
-        # values in the file carry a trailing '.'; ensure it's removed
         block = _make_wireless({"wlan0": (70, -30)})
         assert _parse_wireless(block)["wlan0"] == (70.0, -30.0)
 
@@ -98,14 +96,12 @@ class TestWifiCollection:
         assert _latest_metric("test-wifi", "signal_dbm") == pytest.approx(-45.0)
 
     async def test_weak_signal_warning(self, plugin):
-        # default quality_warning=40 -> quality 30 warns
         stdout = _make_wireless({"wlan0": (30, -75)})
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
         await plugin.on_collect()
         assert _latest_status() == "warning"
 
     async def test_very_weak_signal_failed(self, plugin):
-        # default quality_threshold=20 -> quality 15 fails
         stdout = _make_wireless({"wlan0": (15, -90)})
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(0, stdout, ""))
         await plugin.on_collect()

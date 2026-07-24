@@ -1,44 +1,3 @@
-"""
-Dynamic DNS updater: keeps a DNS record pointed at this network's current
-public IP, and reports the record's health while doing it.
-
-Every cycle: discover the current public IP, resolve what `domain` currently
-answers publicly (bypassing any local resolver override — see `resolver`),
-and push an update to the provider only when the two differ. A provider
-update is a real side effect against sonmeone else's infrastructure and one
-most providers rate-limit or ban accounts for firing too often, so this
-plugin only ever calls it on detected drift — never on a fixed schedule
-regardless of whether anything changed.
-
-Currently supports FreeDNS's (afraid.org / *.mooo.com and its other free
-subdomains) per-host dynamic update URL — a plain HTTPS GET to a secret,
-account-specific URL that updates the record to the caller's apparent IP.
-That URL already encodes which record it updates, so this plugin never
-needs the provider's REST API or credentials beyond the URL itself.
-
-Config options:
-  domain          Domain name whose public record is kept current (required)
-  update_url      The provider's per-host dynamic update URL, containing its
-                  own secret token (required). Prefer `update_url_file` /
-                  `update_url_command` to keep the token out of config.yaml.
-  update_url_file       Path to a file containing the update URL.
-  update_url_command    Shell command whose stdout is the update URL.
-  resolver        Resolver IP to check the current public record against
-                  (default: "8.8.8.8" — a local resolver may have a hosts-file
-                  override for this exact domain, which would mask real DNS
-                  drift by always answering with the LAN IP instead)
-  record_type     Record type being kept current (default: "A")
-  timeout         Timeout in seconds for both IP lookup and the update request
-                  (default: 10)
-  min_interval    Minimum seconds between update attempts, regardless of how
-                  often `interval` ticks (default: 300) — a second guard
-                  against hammering the provider if drift is detected on
-                  every cycle for some reason (e.g. a provider that silently
-                  fails to apply the update).
-
-Precedence when more than one is set: `update_url` > `update_url_file` >
-`update_url_command`.
-"""
 import asyncio
 import subprocess
 import time
@@ -52,10 +11,6 @@ from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.time_utils import format_age
 
-# Plain-text IP echo services, tried in order. Each returns the caller's
-# public IP as the entire response body — no JSON parsing, no API key. Several
-# are configured so one endpoint being down or rate-limiting us doesn't stall
-# every cycle.
 _IP_ECHO_SERVICES = (
     "https://api.ipify.org",
     "https://icanhazip.com",
@@ -70,10 +25,6 @@ _DEFAULT_LAYOUT = [
 
 
 class DdnsUpdaterCollectorPlugin(CollectorPlugin):
-    """
-    Detects public-IP drift against a DNS record and pushes an update to the
-    provider (FreeDNS-style update URL) when they differ.
-    """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.domain = config.get('domain')
@@ -89,12 +40,6 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
         self._session = requests.Session()
 
     def _resolve_update_url(self) -> Optional[str]:
-        """
-        Resolve the provider update URL per the documented precedence.
-        Re-read every time rather than cached at __init__, matching how
-        borg.py treats its passphrase_command — so a rotated secret file
-        takes effect without restarting Vigil.
-        """
         if self._update_url:
             return self._update_url
         if self._update_url_file:
@@ -122,7 +67,6 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
         return None
 
     def _fetch_public_ip(self) -> Optional[str]:
-        """Try each IP-echo service in turn, returning the first usable answer."""
         for url in _IP_ECHO_SERVICES:
             try:
                 resp = self._session.get(url, timeout=self.timeout)
@@ -134,7 +78,6 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
         return None
 
     def _resolve_public_record(self) -> Optional[str]:
-        """Current public answer for `domain`, via `resolver` (blocking)."""
         resolver = dns.resolver.Resolver(configure=False)
         resolver.nameservers = [self.resolver_addr]
         resolver.timeout = self.timeout
@@ -146,7 +89,6 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
             return None
 
     def _push_update(self, update_url: str) -> bool:
-        """Call the provider's update URL. Returns True on a successful update."""
         try:
             resp = self._session.get(update_url, timeout=self.timeout)
         except requests.RequestException as e:
@@ -154,11 +96,6 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
             return False
 
         body = resp.text.strip()
-        # FreeDNS's own convention: "good <ip>" / "nochg <ip>" on success,
-        # anything else (a login page, an error string) is a failure. Other
-        # per-host-URL providers follow the same convention closely enough
-        # that this stays a reasonable default; a 2xx with a body starting
-        # "good"/"nochg" is accepted regardless of provider.
         ok = resp.status_code == 200 and body.lower().startswith(('good', 'nochg'))
         if ok:
             self.db_logger.write(f"Update accepted: {body}", level="INFO")
@@ -169,15 +106,10 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
         return ok
 
     def _collect_sync(self) -> Dict[str, Any]:
-        """
-        The blocking half of a cycle — public IP lookup, DNS check, and
-        (if needed) the update call — run together in one thread so the
-        event loop is blocked for one hop instead of three.
-        """
         result: Dict[str, Any] = {
             'public_ip': self._fetch_public_ip(),
             'dns_ip': None,
-            'updated': None,  # None = not attempted, True/False = outcome
+            'updated': None,
         }
         if not self.domain:
             return result
@@ -187,7 +119,7 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
         if result['public_ip'] and result['public_ip'] != result['dns_ip']:
             now = time.monotonic()
             if now - self._last_update_attempt < self.min_interval:
-                result['updated'] = None  # throttled, not attempted
+                result['updated'] = None
                 return result
             self._last_update_attempt = now
 
@@ -235,11 +167,6 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
             self.db_logger.write(
                 f"{self.domain} was {dns_ip}, updated to {public_ip}", level="INFO"
             )
-            # The provider's authoritative record just changed but public
-            # resolvers/caches will not reflect it until this record's TTL
-            # elapses, so re-reading it this same cycle would still show the
-            # old value. Report online: the update succeeded, which is the
-            # thing this monitor can actually verify synchronously.
             self.set_status('online')
         elif updated is False:
             self.db_logger.write(
@@ -248,9 +175,6 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
             )
             self.set_status('failed')
         else:
-            # Drift detected but throttled by min_interval, or push not
-            # attempted this cycle. Not yet a failure — give the next
-            # eligible attempt a chance before alarming.
             self.db_logger.write(
                 f"{self.domain} is {dns_ip}, should be {public_ip}, "
                 f"update throttled ({format_age(int(time.monotonic() - self._last_update_attempt))} since last attempt)",
@@ -280,8 +204,6 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
 
 
 class DdnsUpdaterUIPlugin(UIPlugin):
-    """Dashboard rendering for the ddns_updater monitor."""
-
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card

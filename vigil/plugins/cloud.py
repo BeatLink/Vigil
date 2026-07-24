@@ -3,11 +3,8 @@ from typing import Dict, Any, Optional, Tuple
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# The link-local metadata endpoint is the same address on every major provider;
-# the paths differ, and AWS IMDSv2 additionally requires a token header.
 _MD = "169.254.169.254"
 
-# AWS IMDSv2: fetch a short-lived token, then the metadata items.
 _AWS_CMD = (
     f"T=$(curl -s -m 3 -X PUT 'http://{_MD}/latest/api/token' "
     f"-H 'X-aws-ec2-metadata-token-ttl-seconds: 60'); "
@@ -20,7 +17,6 @@ _AWS_CMD = (
     "echo \"az=$(h placement/availability-zone)\""
 )
 
-# GCP: requires the Metadata-Flavor header.
 _GCP_CMD = (
     f"h(){{ curl -s -m 3 -H 'Metadata-Flavor: Google' \"http://{_MD}/computeMetadata/v1/$1\"; }}; "
     "ID=$(h instance/id); [ -z \"$ID\" ] && exit 7; "
@@ -30,7 +26,6 @@ _GCP_CMD = (
     "echo \"zone=$(h instance/zone | awk -F/ '{print $NF}')\""
 )
 
-# Azure IMDS: requires Metadata:true and an api-version.
 _AZURE_CMD = (
     f"J=$(curl -s -m 3 -H 'Metadata:true' "
     f"'http://{_MD}/metadata/instance?api-version=2021-02-01'); "
@@ -47,20 +42,6 @@ _DEFAULT_LAYOUT = [
 
 
 class CloudCollectorPlugin(CollectorPlugin):
-    """
-    Detects the cloud provider of the target and surfaces its instance metadata
-    (instance id, type, region/zone) over SSH via the link-local metadata
-    endpoint (169.254.169.254).
-
-    Auto-detects across AWS (IMDSv2), GCP, and Azure by trying each in turn, or
-    query a single provider by setting `provider`. Reports online when metadata
-    is reachable, offline when the host isn't on a recognized cloud, failed on
-    an unexpected error. This is an informational monitor — it has no thresholds.
-
-    Config options:
-      provider   One of "aws", "gcp", "azure", or "auto" (default: "auto")
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.provider = str(config.get('provider', 'auto')).lower()
@@ -74,7 +55,6 @@ class CloudCollectorPlugin(CollectorPlugin):
     async def on_collect(self):
         for name, cmd in self._cmds():
             ret, stdout, stderr = await self.ssh_collector.fetch_output(cmd)
-            # exit 7 is our sentinel for "this provider's endpoint didn't answer".
             if ret == 7 or (ret != 0 and not stdout.strip()):
                 continue
 
@@ -84,10 +64,7 @@ class CloudCollectorPlugin(CollectorPlugin):
 
             for key, value in fields.items():
                 if value:
-                    # Store string metadata as a log line so the UI can display it;
-                    # metrics are numeric-only, so we log the descriptive fields.
                     self.db_logger.write(f"{key}={value}", level="INFO")
-            # A single presence metric lets the overview/exporters see "on cloud".
             self.db_metrics.metric('on_cloud', 1.0)
             self._store_fields(fields)
             self.db_logger.write(
@@ -103,8 +80,6 @@ class CloudCollectorPlugin(CollectorPlugin):
         self.set_status('offline')
 
     def _store_fields(self, fields: Dict[str, str]):
-        """Persist the descriptive fields as a Setting keyed by this monitor id, so
-        the UI can render them without re-parsing logs."""
         import json
         try:
             self.db.set_setting(f"cloud:{self.id}", json.dumps(fields))
@@ -116,8 +91,6 @@ class CloudCollectorPlugin(CollectorPlugin):
 
 
 class CloudUIPlugin(UIPlugin):
-    """Dashboard rendering for the cloud monitor."""
-
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         import json

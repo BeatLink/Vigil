@@ -5,7 +5,6 @@ from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
-# Linux TCP connection state codes as they appear (hex) in /proc/net/tcp[6].
 _TCP_STATES = {
     '01': 'ESTABLISHED',
     '02': 'SYN_SENT',
@@ -22,17 +21,12 @@ _TCP_STATES = {
 
 
 def _parse_states(stdout: str) -> Counter:
-    """Count TCP connections per state name from concatenated /proc/net/tcp[6].
-
-    Each data row's 4th whitespace-delimited column is the connection state
-    as a two-digit hex code. Header rows (starting with 'sl') are ignored.
-    """
     counts: Counter = Counter()
     for line in stdout.splitlines():
         fields = line.split()
         if len(fields) < 4:
             continue
-        if fields[0].rstrip(':') == 'sl':  # header row
+        if fields[0].rstrip(':') == 'sl':
             continue
         state = _TCP_STATES.get(fields[3].upper())
         if state:
@@ -49,19 +43,6 @@ _DEFAULT_LAYOUT = [
 
 
 class ConnectionsCollectorPlugin(CollectorPlugin):
-    """
-    Monitors the count of TCP connections by state over SSH, reading
-    /proc/net/tcp and /proc/net/tcp6 — no netstat/ss required on the target.
-
-    A metric is recorded per state (established, time_wait, listen, ...) plus a
-    total. Status is driven by the total connection count against configurable
-    warning/critical ceilings — useful for spotting connection leaks or floods.
-
-    Config options:
-      total_warning    Total connection count that triggers warning (default: 500)
-      total_threshold  Total connection count that triggers failed  (default: 1000)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.total_warning   = int(config.get('total_warning',   500))
@@ -79,7 +60,6 @@ class ConnectionsCollectorPlugin(CollectorPlugin):
         counts = _parse_states(stdout)
         total = sum(counts.values())
 
-        # Record one metric per named state so history charts can target any of them.
         for state in _TCP_STATES.values():
             self.db_metrics.metric(state.lower(), float(counts.get(state, 0)))
         self.db_metrics.metric('total', float(total))
@@ -95,8 +75,6 @@ class ConnectionsCollectorPlugin(CollectorPlugin):
 
 
 class ConnectionsUIPlugin(UIPlugin):
-    """Dashboard rendering for the connections monitor."""
-
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
 
@@ -105,10 +83,6 @@ class ConnectionsUIPlugin(UIPlugin):
         from vigil.web.ui.spec import FORMATTERS
         from vigil.web.ui.theme import STATUS_COLORS
 
-        # Two charts (total_chart/established_chart) don't fit UI_SPEC's
-        # single 'chart' key, so this stays a manual layout+page build,
-        # reusing the shared 'int_rounded' formatter and plugin_utils'
-        # level_for directly rather than redefining a threshold rule.
         total_warning   = int(self.config.get('total_warning',   500))
         total_threshold = int(self.config.get('total_threshold', 1000))
 

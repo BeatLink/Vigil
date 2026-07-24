@@ -6,11 +6,6 @@ from vigil.core.common.plugin_utils import level_for as _level_for
 
 
 def _extract_counter(block: str, key: str) -> Optional[int]:
-    """Return the first value on the `key` line of a /proc/stat block.
-
-    For `intr` this is the total of all interrupts since boot; for `ctxt` it is
-    the total context switches. Returns None if the line is absent/malformed.
-    """
     for line in block.splitlines():
         fields = line.split()
         if fields and fields[0] == key:
@@ -30,20 +25,6 @@ _DEFAULT_LAYOUT = [
 
 
 class InterruptsCollectorPlugin(CollectorPlugin):
-    """
-    Monitors hardware interrupt and context-switch rates over SSH via
-    /proc/stat — no extra tools required on the target.
-
-    Takes two /proc/stat snapshots one second apart and reports the per-second
-    rate of interrupts (`intr`) and context switches (`ctxt`). Status is driven
-    by the interrupt rate against configurable ceilings, which can flag runaway
-    hardware or a misbehaving driver.
-
-    Config options:
-      irq_warning    Interrupts/sec that triggers warning (default: 20000)
-      irq_threshold  Interrupts/sec that triggers failed  (default: 50000)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.irq_warning   = int(config.get('irq_warning',   20000))
@@ -74,7 +55,6 @@ class InterruptsCollectorPlugin(CollectorPlugin):
             self.set_status('failed')
             return
 
-        # Clamp to guard against a counter reset between samples (e.g. reboot).
         irq_rate = max(0.0, float(intr2 - intr1))
         self.db_metrics.metric('irq_per_sec', irq_rate)
 
@@ -94,14 +74,6 @@ class InterruptsCollectorPlugin(CollectorPlugin):
 
 
 class InterruptsUIPlugin(UIPlugin):
-    """
-    Dashboard rendering for the interrupts monitor — mixed: irq_card fits
-    UI_SPEC (single metric, config-dependent threshold color) but the page
-    has TWO charts (irq_chart/ctxt_chart), which UI_SPEC's single 'chart' key
-    doesn't support, so this stays a manual layout+page build reusing the
-    shared 'count_comma_rounded' formatter and a per-instance threshold rule.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.irq_warning   = int(config.get('irq_warning',   20000))

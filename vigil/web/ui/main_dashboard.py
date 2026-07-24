@@ -5,15 +5,13 @@ from typing import Any, Dict, Optional
 from nicegui import app, ui
 from vigil.core.data.database import Setting
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
-from .components import action_chip, card, section_title, safe_timer, on_data_event, offload
+from .components import action_chip, card, section_title, safe_timer, on_data_event, offload, refresh_rows
 
 _ICON = Path(__file__).parent.parent.parent / 'static' / 'icon.svg'
 
-# Global state/helper for cross-component navigation
 _navigation_state = {'switch_func': None}
 
 def navigate_to(plugin_instance: Any):
-    """External helper to trigger dashboard navigation from within plugins."""
     if _navigation_state['switch_func']:
         if plugin_instance is None:
             _navigation_state['switch_func']('overview')
@@ -22,57 +20,24 @@ def navigate_to(plugin_instance: Any):
 
 
 def init_gui(engine: Any, port: int = 8080):
-    """
-    Serve the dashboard for a VigilWebEngine.
-
-    Unlike the pre-split single-process design, this no longer starts a
-    polling loop — `engine` here is a VigilWebEngine (core/web_engine.py),
-    which has no run() or scheduler. Monitor polling happens entirely in the
-    separate collector process (VigilEngine.run(), core/main.py); this
-    process only reads the shared database and proxies actions to the
-    collector's internal API.
-    """
-    # No writer thread runs in this process for monitor data (only for UI
-    # preferences — see VigilWebEngine.__init__), so DataBus.emit() here
-    # would never fire for status/metric/event/log_line writes; on_data_event
-    # (components.py) polls instead once this is set. Must happen before any
-    # page is built, since render_ui() calls on_data_event during construction.
     from vigil.core.data.events import bus
     bus.polling_mode = True
 
     app.add_static_file(local_file=_ICON, url_path='/icon.svg')
 
-    # Register HTTP Basic Auth before the routes below are defined — Starlette
-    # middleware wraps the whole app regardless of registration order relative
-    # to routes, but registering it early keeps intent obvious: everything
-    # that follows is meant to be gated by it.
     from vigil.web.auth import register_auth
     register_auth(app, engine.config_loader.auth_settings)
 
-    # Register the REST API + Prometheus /metrics routes on the FastAPI app.
     try:
         from vigil.web.api import register_api
         register_api(app, engine)
     except Exception as e:
         logging.error(f"Failed to register REST API: {e}")
 
-    # Navigation state is created per client inside index_page(): `init_gui`
-    # runs once at startup, but each browser connection builds its own element
-    # tree. Sharing one dict here meant a new tab overwrote the previous tab's
-    # render callback, so navigating in an older tab called .clear() on a
-    # disconnected client and raised "The client this element belongs to has
-    # been deleted." before the detail view (logs included) could render.
-
-    # Build the dashboard as an explicit page route rather than relying on
-    # NiceGUI's auto-index page. In NiceGUI 3.x the auto-index re-executes the
-    # main script via runpy.run_path(sys.argv[0]); under the Nix wrapper,
-    # sys.argv[0] is a shell script, so that parse fails with a SyntaxError and
-    # every request 500s. A @ui.page function is served directly and avoids it.
     @ui.page('/')
     def index_page():
       ui.query('body').style(f'background-color: {BACKGROUND_MUTED}')
 
-      # Per-client navigation state — see the note above init_gui's page route.
       state: Dict[str, Any] = {
           'current_view': 'overview',
           'selected_plugin': None,
@@ -85,8 +50,6 @@ def init_gui(engine: Any, port: int = 8080):
           if render:
               render()
 
-      # navigate_to() (used by plugins) drives the most recently connected
-      # client. Rebinding per client keeps it pointing at a live element tree.
       _navigation_state['switch_func'] = switch_view
 
       with ui.header().classes('items-center p-4').style(f'background-color: {PRIMARY}; color: {BACKGROUND}'):
@@ -107,9 +70,6 @@ def init_gui(engine: Any, port: int = 8080):
       drawer_width = _load_drawer_width()
 
       with ui.left_drawer(value=True).classes('p-0 shadow-lg').props(f'width={drawer_width}').style(f'background-color: {BACKGROUND}') as left_drawer:
-          # Drag handle on the drawer's right edge — Quasar's q-drawer has no
-          # built-in resize, so width is adjusted by hand and persisted like
-          # the tree's expanded state, restoring on the next page load.
           resize_handle = ui.element('div').style(
               'position: absolute; top: 0; right: 0; width: 6px; height: 100%; '
               'cursor: ew-resize; z-index: 2000;'
@@ -139,9 +99,6 @@ def init_gui(engine: Any, port: int = 8080):
               ui.item('Events', on_click=lambda: switch_view('events')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {TEXT}')
             
           def build_tree_nodes(plugins, statuses=None):
-              """Recursive helper to build data structure for ui.tree."""
-              # Fetch every monitor's latest status in one query, then reuse the
-              # map across the whole (recursive) tree instead of querying per node.
               if statuses is None:
                   statuses = engine.db.latest_statuses()
               nodes = []
@@ -160,7 +117,6 @@ def init_gui(engine: Any, port: int = 8080):
               return nodes
 
           def find_plugin_by_id(plugins, target_id):
-              """Helper to locate a plugin instance by its unique ID."""
               for p in plugins:
                   if p.id == target_id:
                       return p
@@ -175,7 +131,6 @@ def init_gui(engine: Any, port: int = 8080):
                   if target_plugin:
                       switch_view('plugin', target_plugin)
 
-          # Initialize the built-in tree component
           tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).props('').classes('w-full px-6 text-lg').style(f'color: {TEXT}')
 
           tree.add_slot('default-header', f'''
@@ -186,13 +141,13 @@ def init_gui(engine: Any, port: int = 8080):
           ''')
         
           async def refresh_tree():
-              tree._props['nodes'] = await offload(build_tree_nodes)(engine.plugins)
-              tree.update()
+              new_nodes = await offload(build_tree_nodes)(engine.plugins)
+              if new_nodes != tree._props['nodes']:
+                  tree._props['nodes'] = new_nodes
+                  tree.update()
 
-          # Refresh tree data (dots and nodes) whenever a monitor's status changes
           on_data_event('status', tree, refresh_tree, run_now=False)
 
-          # Restore previously saved expanded state
           def _load_expanded() -> list:
               with Setting._meta.database.connection_context():
                   try:
@@ -214,8 +169,6 @@ def init_gui(engine: Any, port: int = 8080):
           try:
               main_container.clear()
           except RuntimeError:
-              # Client disconnected (tab closed/reloaded) while a handler still
-              # referenced this tree. Nothing to draw into; drop the render.
               return
           with main_container:
               if state['current_view'] == 'overview':
@@ -225,12 +178,9 @@ def init_gui(engine: Any, port: int = 8080):
               else:
                   render_plugin_detail(state['selected_plugin'])
 
-      # Expose render_main to switch_view (defined above in this page scope).
       state['render_main'] = render_main
 
       def render_events():
-          """Unified, filterable feed of every event Vigil has recorded across all
-          monitors (status changes, threshold crossings, collection errors)."""
           section_title('Events', 'mb-6 font-light')
 
           _LEVEL_COLORS = {
@@ -239,7 +189,6 @@ def init_gui(engine: Any, port: int = 8080):
               'INFO': TEXT_MUTED,
           }
 
-          # Filter controls: level, target host, free-text search.
           ev_filter = {'level': None, 'target': None, 'search': None}
 
           with ui.row().classes('w-full gap-4 mb-4 items-end'):
@@ -259,7 +208,6 @@ def init_gui(engine: Any, port: int = 8080):
           with card('w-full'):
               events_table = ui.table(columns=columns, rows=[], row_key='timestamp',
                                       pagination=25).classes('w-full').style(f'color: {TEXT}')
-              # Color the level cell by severity.
               events_table.add_slot('body-cell-level', '''
                   <q-td :props="props">
                       <span :style="{ color: props.row.level === 'ERROR' ? '%s'
@@ -277,8 +225,7 @@ def init_gui(engine: Any, port: int = 8080):
                   target=(ev_filter['target'] or None),
                   search=(ev_filter['search'] or None),
               )
-              events_table.rows = rows
-              events_table.update()
+              refresh_rows(events_table, rows)
 
           async def _on_level(e):
               ev_filter['level'] = e.value
@@ -301,7 +248,6 @@ def init_gui(engine: Any, port: int = 8080):
       def render_overview():
           section_title('Monitors', 'mb-6 font-light')
 
-          # Collect all leaf monitors once — shared by charts, table, and filter logic
           all_monitors = []
           def collect_leafs(plist):
               for p in plist:
@@ -310,7 +256,6 @@ def init_gui(engine: Any, port: int = 8080):
           collect_leafs(engine.plugins)
           plugin_by_id = {p.id: p for p in all_monitors}
 
-          # Active filter: {'field': 'status'|'type'|None, 'value': str|None}
           filter_state = {'field': None, 'value': None}
 
           with ui.row().classes('w-full gap-4 mb-6'):
@@ -346,7 +291,6 @@ def init_gui(engine: Any, port: int = 8080):
                       }]
                   }).classes('w-full h-64')
 
-          # Monitors table
           with card('w-full mb-6'):
               with ui.row().classes('w-full items-center justify-between mb-3'):
                   ui.label('ALL MONITORS').classes('text-xs font-bold').style(f'color: {TEXT_MUTED}')
@@ -363,7 +307,6 @@ def init_gui(engine: Any, port: int = 8080):
               ]
               monitor_table = ui.table(columns=monitor_columns, rows=[]).classes('w-full border-none')
 
-              # Name column: clickable link that navigates to the monitor's detail page
               monitor_table.add_slot('body-cell-name', f'''
                   <q-td :props="props">
                       <span class="cursor-pointer font-medium hover:underline"
@@ -374,7 +317,6 @@ def init_gui(engine: Any, port: int = 8080):
                   </q-td>
               ''')
 
-              # Status column: color-coded text
               monitor_table.add_slot('body-cell-status', '''
                   <q-td :props="props">
                       <span :style="{ color: props.row.status_color }" class="font-semibold text-xs">
@@ -388,8 +330,6 @@ def init_gui(engine: Any, port: int = 8080):
                   if row_id and row_id in plugin_by_id:
                       navigate_to(plugin_by_id[row_id])
               monitor_table.on('navigate', _navigate_to_row)
-
-          # -- Update functions ------------------------------------------------
 
           def _update_filter_ui():
               if filter_state['field']:
@@ -454,8 +394,14 @@ def init_gui(engine: Any, port: int = 8080):
                   type_counts[mtype] = type_counts.get(mtype, 0) + 1
               return status_counts, type_counts
 
+          _last_statuses = {'value': None}
+
           async def update_charts():
               statuses = await offload(engine.db.latest_statuses)()
+              if statuses == _last_statuses['value']:
+                  return
+              _last_statuses['value'] = statuses
+
               status_counts, type_counts = _build_chart_counts(statuses)
 
               status_chart.options['series'][0]['data'] = [
@@ -487,8 +433,7 @@ def init_gui(engine: Any, port: int = 8080):
                   m_table = ui.table(columns=metric_columns, rows=[]).classes('w-full')
 
                   async def update_m():
-                      m_table.rows = await offload(engine.db.recent_metrics_raw_cached)(limit=20)
-                      m_table.update()
+                      refresh_rows(m_table, await offload(engine.db.recent_metrics_raw_cached)(limit=20))
                   on_data_event('metric', m_table, update_m)
 
               with card('flex-1'):
@@ -502,14 +447,10 @@ def init_gui(engine: Any, port: int = 8080):
                   e_table = ui.table(columns=event_columns, rows=[]).classes('w-full')
 
                   async def update_e():
-                      e_table.rows = await offload(engine.db.recent_events_raw_cached)(limit=20)
-                      e_table.update()
+                      refresh_rows(e_table, await offload(engine.db.recent_events_raw_cached)(limit=20))
                   on_data_event('event', e_table, update_e)
 
       def render_plugin_detail(plugin: Any):
-          # Header (name + action buttons) renders once the collector answers
-          # which actions are available; render_ui() below doesn't wait on
-          # that, so the monitor's own data appears immediately.
           header = ui.row().classes('w-full items-center justify-between mb-6')
           with header:
               with ui.column():
@@ -536,21 +477,12 @@ def init_gui(engine: Any, port: int = 8080):
           import asyncio
           asyncio.create_task(render_actions())
 
-          # Delegate specific UI rendering to the plugin instance
           plugin.render_ui()
 
-      # Initial render
       render_main()
 
-    # Run the NiceGUI app
     svg = _ICON.read_text()
     ui.run(
         title='Vigil', favicon=svg[svg.index('<svg'):], port=port, reload=False, show=False,
-        # Vigil never uses NiceGUI's reactive .bind_*() — every widget update
-        # goes through on_data_event/safe_timer setting .text/.rows/.options
-        # directly, then calling .update() explicitly. The binding-refresh
-        # loop (default: check every 0.1s) has nothing to do here, so it's
-        # slowed way down rather than disabled outright (None), in case a
-        # future widget does start using bindings.
         binding_refresh_interval=2.0,
     )

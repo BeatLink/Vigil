@@ -15,17 +15,6 @@ _DEFAULT_LAYOUT = [
 
 
 class MemoryUsageCollectorPlugin(CollectorPlugin):
-    """
-    Monitors memory usage over SSH via /proc/meminfo.
-
-    Uses MemAvailable (not MemFree) so filesystem cache is not counted as used.
-    Single SSH read — no sleep required.
-
-    Config options:
-      memory_warning   Memory % that triggers warning (default: 75)
-      memory_threshold Memory % that triggers failed  (default: 90)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.memory_warning   = int(config.get('memory_warning',   75))
@@ -77,14 +66,6 @@ class MemoryUsageCollectorPlugin(CollectorPlugin):
 
 
 class MemoryUsageUIPlugin(UIPlugin):
-    """
-    Dashboard rendering for the memory_usage monitor — mixed: mem_pct_card is
-    UI_SPEC-driven (single metric, config-dependent threshold color), but
-    mem_used_card combines memory_used_gb AND memory_total_gb into one
-    "X / Y" string, which doesn't fit UI_SPEC's single-metric card model, so
-    it stays a manual bind alongside generic_render()'s output.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.memory_warning   = int(config.get('memory_warning',   75))

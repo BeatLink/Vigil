@@ -96,7 +96,6 @@ class TestContainersCollection:
         p.ssh_collector.fetch_output = AsyncMock(
             return_value=(0, _ps(("web", "running")), ""))
         await p.on_collect()
-        # Command should invoke podman
         called = p.ssh_collector.fetch_output.call_args[0][0]
         assert called.startswith("podman ")
         assert _latest_status() == "online"

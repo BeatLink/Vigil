@@ -1,46 +1,3 @@
-"""
-Mosquitto MQTT broker health via a live publish/subscribe round trip.
-
-Complements a `systemd_service` monitor on mosquitto rather than replacing it.
-That one answers "is the process alive"; this one answers "is it still doing
-its job", which is a different failure. The case that motivates it: the broker
-process stays up and the port stays open while message routing itself is
-wedged (a persistence-file write jam, a listener socket accepted but wired to
-a dead internal queue) — every liveness and port check passes throughout,
-while every client silently stops seeing new messages.
-
-The only signal that catches that is an actual message delivered end to end:
-this plugin subscribes to a private probe topic, publishes a unique payload to
-it, and confirms that exact payload comes back within a timeout. Reading
-`$SYS` broker stats was considered and rejected as the primary signal — `$SYS`
-proves the broker is *reporting*, not that it is *routing*, and update
-intervals for those topics are commonly 10s or slower, too coarse to catch a
-routing stall promptly.
-
-The round trip runs over SSH on the broker's own host with `mosquitto_sub`
-backgrounded and `mosquitto_pub` following it, both authenticating as a
-dedicated low-privilege MQTT user scoped (via that user's ACL) to the probe
-topic only — this monitor can prove the broker delivers messages, and nothing
-more, which matters because MQTT credentials are broker-wide unless an ACL
-narrows them.
-
-Config options:
-  host              Broker address as seen from the monitored host (default:
-                    127.0.0.1)
-  port              Broker port (default: 1883)
-  username          MQTT username for the probe round trip.
-  password          MQTT password. Prefer password_command over inlining a
-                    secret here — this value is readable in the config file.
-  password_command  Command run on the monitored host whose stdout is the
-                    password (e.g. "cat /run/secrets/mosquitto_vigil"). Takes
-                    precedence over `password`.
-  probe_topic       Topic the round trip publishes/subscribes on (default:
-                    "vigil/probe/<id>" — namespaced by this monitor's id so
-                    multiple Mosquitto monitors, or a real client, never
-                    collide on the same topic).
-  probe_timeout     Seconds to wait for the published message to come back
-                    (default: 5)
-"""
 import shlex
 import uuid
 from typing import Any, Dict, Optional
@@ -48,16 +5,12 @@ from typing import Any, Dict, Optional
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# Emitted by the remote script on stderr when the round trip's own
-# expectations are violated, distinguished from a bare SSH/command failure so
-# the log can name which side of the exchange broke.
 _TIMED_OUT = "VIGIL_MQTT_TIMEOUT"
 _MISMATCH = "VIGIL_MQTT_MISMATCH"
 
 
 def _auth_flags(username: Optional[str], password_command: Optional[str],
                 password: Optional[str]) -> str:
-    """Shell fragment adding -u/-P flags when credentials are configured."""
     if not username:
         return ''
     if password_command:
@@ -70,15 +23,6 @@ def _auth_flags(username: Optional[str], password_command: Optional[str],
 def _build_probe_script(host: str, port: int, topic: str, timeout: int,
                         username: Optional[str], password_command: Optional[str],
                         password: Optional[str]) -> str:
-    """
-    Build a shell script that publishes a nonce to `topic` and confirms it
-    comes back on a subscription to the same topic, within `timeout` seconds.
-
-    `mosquitto_sub -C 1` exits after receiving exactly one message, so the
-    subscriber's own exit code (rather than a fixed sleep) is what bounds the
-    round trip; `timeout` wraps it as a backstop against a broker that accepts
-    the subscription but never delivers.
-    """
     lines = ["set -e"]
 
     if password_command:
@@ -116,8 +60,6 @@ _DEFAULT_LAYOUT = [
 
 
 class MosquittoCollectorPlugin(CollectorPlugin):
-    """Monitors Mosquitto message delivery via a live publish/subscribe round trip."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.host = config.get('host', '127.0.0.1')
@@ -166,8 +108,6 @@ class MosquittoCollectorPlugin(CollectorPlugin):
 
 
 class MosquittoUIPlugin(UIPlugin):
-    """Dashboard rendering for the mosquitto monitor — declarative, see UI_SPEC."""
-
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {

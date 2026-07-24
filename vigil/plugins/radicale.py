@@ -1,41 +1,3 @@
-"""
-Radicale CalDAV/CardDAV health via a live WebDAV PROPFIND.
-
-Complements a `systemd_service` monitor on radicale rather than replacing it.
-That one answers "is the process alive"; this one answers "is it still
-speaking CalDAV/CardDAV correctly", which is a different failure. Radicale has
-no JSON status API at all — it is pure WebDAV — so the only real signal
-available is issuing the same kind of request a calendar client would and
-checking the response is what WebDAV actually expects, not just any HTTP
-response. The case this catches: the process is up and the port answers, but
-the htpasswd file is corrupt, storage permissions are wrong, or the
-collections directory is missing — every liveness check stays green while
-every client gets rejected or served empty/broken data.
-
-A PROPFIND with Depth: 0 against the collection root is the standard
-lightweight WebDAV health probe: a healthy server answers `207 Multi-Status`
-with an XML body; a server that is up but broken in some other way typically
-answers `401` (bad credentials/htpasswd), `500` (an internal fault), or
-closes the connection outright.
-
-Runs over SSH on Radicale's own host, authenticating as a dedicated `vigil`
-account added to the same htpasswd file (see radicale.nix) — kept separate
-from the real login so a credential leak here cannot expose anyone's actual
-calendar or contacts, only prove the collection root answers PROPFIND
-correctly.
-
-Config options:
-  url             Base URL of the Radicale server, as seen from the
-                  monitored host (default: http://127.0.0.1:5232)
-  username        Basic auth username for the probe (default: "vigil")
-  password        Basic auth password. Prefer password_command over inlining
-                  a secret here.
-  password_command
-                  Command run on the monitored host whose stdout is the
-                  password (e.g. "cat /run/secrets/radicale_vigil_password").
-                  Takes precedence over `password`.
-  request_timeout Seconds allowed for the PROPFIND request (default: 10)
-"""
 import shlex
 from typing import Any, Dict, Optional
 
@@ -47,17 +9,11 @@ _PROPFIND_BODY = (
     '<propfind xmlns="DAV:"><prop><current-user-principal/></prop></propfind>'
 )
 
-# Marks the end of the HTTP status code so the response body can be
-# inspected alongside it in one round trip.
 _SEP = "@@VIGIL_SPLIT@@"
 
 
 def _build_probe_script(url: str, timeout: int, username: Optional[str],
                         password_command: Optional[str], password: Optional[str]) -> str:
-    """
-    Build a shell script that issues one Depth: 0 PROPFIND against the
-    collection root and reports the HTTP status code alongside the body.
-    """
     base = url.rstrip('/')
     lines = ["set -e"]
 
@@ -82,7 +38,6 @@ def _build_probe_script(url: str, timeout: int, username: Optional[str],
 
 
 def _parse_response(stdout: str) -> tuple:
-    """Split the body from the trailing HTTP status code."""
     if _SEP not in stdout:
         raise ValueError(f"unexpected response: {stdout[:200]!r}")
     body, _, code = stdout.rpartition(_SEP)
@@ -101,8 +56,6 @@ _DEFAULT_LAYOUT = [
 
 
 class RadicaleCollectorPlugin(CollectorPlugin):
-    """Monitors Radicale CalDAV/CardDAV health via a live PROPFIND request."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.url = config.get('url', 'http://127.0.0.1:5232')
@@ -164,8 +117,6 @@ class RadicaleCollectorPlugin(CollectorPlugin):
 
 
 class RadicaleUIPlugin(UIPlugin):
-    """Dashboard rendering for the radicale monitor — declarative, see UI_SPEC."""
-
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {

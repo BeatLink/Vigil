@@ -18,33 +18,6 @@ _DEFAULT_LAYOUT_PLAIN = [
 
 
 class CommandCollectorPlugin(CollectorPlugin):
-    """
-    Runs an arbitrary command over SSH and derives status from it — the generic
-    escape hatch for checks that don't have a dedicated plugin.
-
-    Status is determined in this order:
-      1. If a `pattern` (regex with one capture group) is set, the first match
-         in stdout is parsed as a float and compared against warning/threshold
-         (same semantics as the numeric plugins). The captured value is stored
-         as the `value` metric and charted.
-      2. Otherwise status is driven by the command's exit code: 0 => online,
-         non-zero => failed (or warning, if `nonzero_is_warning: true`).
-
-    A per-cycle timeout wraps the command so a hung target can't stall the loop.
-    Every run's stdout/stderr and exit code are logged for diagnosis.
-
-    Config options:
-      command            Shell command to run on the target        (required)
-      timeout            Per-run timeout in seconds                 (default: 30)
-      pattern            Regex with one capture group extracting a number (optional)
-      warning            Value that triggers warning (needs pattern)      (optional)
-      threshold          Value that triggers failed  (needs pattern)      (optional)
-      invert             If true, values BELOW warning/threshold are bad  (default: false)
-      nonzero_is_warning Treat non-zero exit as warning not failed  (default: false)
-      value_label        Card label for the extracted value         (default: "VALUE")
-      value_unit         Suffix appended to the value in the UI      (default: "")
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.command = config.get('command')
@@ -59,11 +32,9 @@ class CommandCollectorPlugin(CollectorPlugin):
         self.value_unit = config.get('value_unit', '')
 
     def _level_for_value(self, value: float) -> str:
-        """Map a value to a status level, honoring the `invert` flag."""
         if self.warning is None or self.threshold is None:
             return 'online'
         if self.invert:
-            # Lower is worse: flip comparisons by negating both value and bounds
             return _level_for(-value, -float(self.warning), -float(self.threshold))
         return _level_for(value, float(self.warning), float(self.threshold))
 
@@ -73,11 +44,9 @@ class CommandCollectorPlugin(CollectorPlugin):
             self.set_status('failed')
             return
 
-        # Wrap in `timeout` so a hung command can't block the polling loop.
         wrapped = f"timeout {self.timeout} sh -c {_shquote(self.command)}"
         ret, stdout, stderr = await self.ssh_collector.fetch_output(wrapped)
 
-        # `timeout` exits 124 when it kills the command.
         if ret == 124:
             self.db_logger.write(f"Command timed out after {self.timeout}s", level="ERROR")
             self.set_status('failed')
@@ -90,7 +59,6 @@ class CommandCollectorPlugin(CollectorPlugin):
             level="INFO" if ret == 0 else "ERROR"
         )
 
-        # Pattern mode: extract and threshold a numeric value.
         if self.pattern is not None:
             value = self._extract_value(stdout)
             if value is None:
@@ -106,7 +74,6 @@ class CommandCollectorPlugin(CollectorPlugin):
             self.set_status(overall)
             return
 
-        # Exit-code mode.
         if ret == 0:
             self.set_status('online')
         else:
@@ -116,7 +83,6 @@ class CommandCollectorPlugin(CollectorPlugin):
         m = self.pattern.search(stdout or '')
         if not m:
             return None
-        # Prefer the first capture group; fall back to the whole match.
         raw = m.group(1) if m.groups() else m.group(0)
         try:
             return float(raw)
@@ -128,8 +94,6 @@ class CommandCollectorPlugin(CollectorPlugin):
 
 
 class CommandUIPlugin(UIPlugin):
-    """Dashboard rendering for the command monitor."""
-
     def render_ui(self, context: str = 'page'):
         from vigil.web.ui.layout import PluginLayout, make_inline_layout
         from vigil.web.ui.components import info_card, history_chart
@@ -149,11 +113,6 @@ class CommandUIPlugin(UIPlugin):
                 return _level_for(-value, -float(warning), -float(threshold))
             return _level_for(value, float(warning), float(threshold))
 
-        # Layout structure itself is conditional on whether `pattern` is set
-        # (an extra value_card + chart appear only then), which UI_SPEC's
-        # fixed layout key doesn't express, so this stays a manual build —
-        # reusing the shared 'int' formatter for exit_code rather than
-        # redefining it.
         from vigil.web.ui.spec import FORMATTERS
         has_value = pattern is not None
         base = _DEFAULT_LAYOUT_METRIC if has_value else _DEFAULT_LAYOUT_PLAIN
@@ -194,5 +153,4 @@ class CommandUIPlugin(UIPlugin):
 
 
 def _shquote(s: str) -> str:
-    """Single-quote a string for safe embedding inside a shell command."""
     return "'" + s.replace("'", "'\\''") + "'"

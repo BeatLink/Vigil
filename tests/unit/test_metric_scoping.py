@@ -1,14 +1,3 @@
-"""
-Metrics and events must be scoped by a monitor's unique id, not its name.
-
-Display names are only unique within a group. Nesting monitors by host and tool
-produced three called "On Disk" and three called "Ragnarok"; keyed by name,
-each one's page showed whichever of them wrote most recently — a monitor
-reporting another host's backup as its own.
-
-The standard fixture sets id == name, which cannot expose this. These build
-colliding monitors explicitly.
-"""
 import pytest
 from unittest.mock import AsyncMock
 
@@ -26,7 +15,6 @@ class _Probe(CollectorPlugin):
 
 @pytest.fixture
 def colliding(make_plugin):
-    """Two monitors sharing a display name, as the nested groups produce."""
     a = make_plugin(_Probe, {"name": "On Disk", "id": "odin-borgmatic-on-disk"})
     b = make_plugin(_Probe, {"name": "On Disk", "id": "heimdall-borgmatic-on-disk"})
     return a, b
@@ -47,7 +35,6 @@ class TestMetricScoping:
         b.db_metrics.metric("last_backup_epoch", 222.0)
         db_manager.flush()
 
-        # Keyed by name, both would return whichever wrote last.
         assert a.latest_metric("last_backup_epoch").value == 111.0
         assert b.latest_metric("last_backup_epoch").value == 222.0
 
@@ -55,7 +42,6 @@ class TestMetricScoping:
         a, b = colliding
         b.db_metrics.metric("archive_count", 9.0)
         db_manager.flush()
-        # `a` never wrote this metric, so it must see nothing at all.
         assert a.latest_metric("archive_count") is None
 
 
@@ -70,9 +56,6 @@ class TestLogLineScoping:
         assert row.source == "odin-borgmatic-on-disk"
 
     def test_identical_lines_from_siblings_both_survive(self, colliding, db_manager):
-        # `source` is part of the dedup hash. Keyed by name, two same-named
-        # monitors emitting the same line at the same timestamp collapse into
-        # one row and one of them loses the line entirely.
         from vigil.core.data.database import LogLine
         a, b = colliding
         for p in (a, b):
@@ -96,24 +79,21 @@ class TestDuplicateIdDetection:
         return engine
 
     def test_reports_monitors_sharing_an_id(self, tmp_path, colliding, caplog):
-        # `id` falls back to the display name when config omits it, so two
-        # groups named "Borgmatic" silently write to the same status rows.
         a, b = colliding
-        b.id = a.id                      # simulate the fallback collision
+        b.id = a.id
         engine = self._engine(tmp_path, [a, b])
         with caplog.at_level('ERROR'):
             engine._warn_on_duplicate_ids()
         assert any("Duplicate monitor id" in r.message for r in caplog.records)
 
     def test_silent_when_ids_are_unique(self, tmp_path, colliding, caplog):
-        a, b = colliding                 # same name, different ids
+        a, b = colliding
         engine = self._engine(tmp_path, [a, b])
         with caplog.at_level('ERROR'):
             engine._warn_on_duplicate_ids()
         assert not any("Duplicate monitor id" in r.message for r in caplog.records)
 
     def test_checks_nested_children(self, tmp_path, colliding, caplog):
-        # Collisions are most likely between groups at different depths.
         a, b = colliding
         b.id = a.id
         parent = a
@@ -126,9 +106,6 @@ class TestDuplicateIdDetection:
 
 class TestMigration:
     def test_adds_source_id_to_a_pre_existing_event_table(self, tmp_path):
-        # create_tables never alters an existing table, so a column added to
-        # the model is missing on an upgraded database and every event insert
-        # fails — silently, because writes are queued to a background thread.
         import sqlite3
         from vigil.core.data.database import DatabaseManager, db as peewee_db
 
@@ -150,7 +127,6 @@ class TestMigration:
             peewee_db.close()
 
     def test_migration_is_idempotent(self, tmp_path):
-        # It runs on every start, so a second pass must not error.
         from vigil.core.data.database import DatabaseManager, db as peewee_db
         path = tmp_path / "twice.db"
         if not peewee_db.is_closed():
@@ -158,7 +134,7 @@ class TestMigration:
         DatabaseManager(str(path))
         if not peewee_db.is_closed():
             peewee_db.close()
-        DatabaseManager(str(path))   # must not raise
+        DatabaseManager(str(path))
         if not peewee_db.is_closed():
             peewee_db.close()
 
@@ -173,8 +149,6 @@ class TestEventScoping:
         assert row.source_id == "odin-borgmatic-on-disk"
 
     def test_event_prefix_keeps_the_display_name(self, colliding, db_manager):
-        # The id identifies the writer; the prefix stays human-readable for the
-        # global events feed.
         a, _ = colliding
         a.db_logger.write("hello")
         db_manager.flush()

@@ -15,21 +15,14 @@ _DEFAULT_LAYOUT = [
 
 
 class UptimeCollectorPlugin(CollectorPlugin):
-    """
-    A simple uptime plugin that checks host availability via ICMP ping.
-    Reports availability status and latency (ms) to the database.
-    """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
 
 
     async def on_collect(self):
-        """Executes a ping command and records the result."""
         host = self.target
 
-        # Determine the correct ping flag based on the operating system
         is_windows = platform.system().lower() == 'windows'
-        # -c/-n 1: single packet, -W 2: 2 second timeout
         cmd = ['ping', '-n' if is_windows else '-c', '1', '-W', '2', host]
 
         try:
@@ -46,7 +39,6 @@ class UptimeCollectorPlugin(CollectorPlugin):
                 self.db_metrics.metric("up", 1.0)
                 self.set_status('online')
 
-                # Attempt to extract latency from output (e.g., "time=12.3 ms")
                 latency_match = re.search(r'time=([\d.]+)\s*ms', output)
                 if latency_match:
                     latency = float(latency_match.group(1))
@@ -64,13 +56,10 @@ class UptimeCollectorPlugin(CollectorPlugin):
             self.set_status('failed')
 
     async def on_action(self, action_id: str, **kwargs) -> bool:
-        """Basic uptime monitoring does not currently support remediation actions."""
         return False
 
 
 class UptimeUIPlugin(UIPlugin):
-    """Dashboard rendering for the uptime monitor — fully declarative, see UI_SPEC."""
-
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {

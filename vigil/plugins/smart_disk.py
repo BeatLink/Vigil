@@ -3,8 +3,6 @@ from typing import Dict, Any
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# Discovers all physical disks, checks transport type (USB needs -d sat),
-# and runs smartctl -H on each. Outputs one "PASS /dev/sdX" or "FAIL /dev/sdX" per disk.
 _SMART_SCRIPT = (
     "command -v smartctl >/dev/null 2>&1 || { echo 'ERROR smartctl not found'; exit 1; }; "
     "disks=$(lsblk -dn -o NAME,TYPE 2>/dev/null | awk '$2==\"disk\"{print \"/dev/\"$1}'); "
@@ -29,11 +27,6 @@ _DEFAULT_LAYOUT = [
 
 
 class SmartDiskCollectorPlugin(CollectorPlugin):
-    """
-    Monitors SMART health of all physical disks over SSH.
-    Discovers disks via lsblk and runs smartctl -H on each one per cycle.
-    Requires the SSH user to have permission to run smartctl (e.g. via sudo or disk group).
-    """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
 
@@ -74,15 +67,6 @@ class SmartDiskCollectorPlugin(CollectorPlugin):
 
 
 class SmartDiskUIPlugin(UIPlugin):
-    """Dashboard rendering for the smart_disk monitor — declarative, see
-    UI_SPEC. ok_card keeps its fixed 'online' color (unconditional) via a
-    locally registered trivial rule; failed_card colors 'failed' once
-    nonzero, 'online' otherwise, via another local rule with the same
-    nonzero -> failed shape raid.py's degraded_card uses (registered
-    independently here rather than imported, to keep each plugin file
-    self-contained).
-    """
-
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {

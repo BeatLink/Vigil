@@ -103,7 +103,7 @@ class TestLatestStatuses:
     def test_returns_latest_per_monitor(self, mgr):
         mgr.insert_status("a", "online")
         mgr.insert_status("b", "failed")
-        mgr.insert_status("a", "warning")  # newer for 'a'
+        mgr.insert_status("a", "warning")
         mgr.flush()
         result = mgr.latest_statuses()
         assert result == {"a": "warning", "b": "failed"}
@@ -115,10 +115,9 @@ class TestLatestStatuses:
         assert "nonexistent" not in result
 
     def test_single_query_shape(self, mgr):
-        # Many monitors, one call — result covers each exactly once.
         for i in range(20):
             mgr.insert_status(f"m{i}", "online")
-            mgr.insert_status(f"m{i}", "failed")  # latest
+            mgr.insert_status(f"m{i}", "failed")
         mgr.flush()
         result = mgr.latest_statuses()
         assert len(result) == 20
@@ -165,7 +164,6 @@ class TestLogLineStorage:
         assert count == 2
 
     def test_dedup_without_log_time_collapses_repeats(self, mgr):
-        # No log_time provided — identical (target, source, message) still dedups.
         mgr.insert_log_line("h", "svc", "INFO", "repeated")
         mgr.insert_log_line("h", "svc", "INFO", "repeated")
         mgr.flush()
@@ -176,7 +174,6 @@ class TestLogLineStorage:
 
 class TestLogRetention:
     def _insert_aged(self, days_old: int, message: str):
-        # Insert directly with a backdated timestamp to simulate old rows.
         with db.connection_context():
             LogLine.create(
                 timestamp=datetime.now() - timedelta(days=days_old),
@@ -284,12 +281,6 @@ class TestInternalDatabaseLogger:
         assert m.target == "host1"
 
     def test_snapshot_round_trips_through_get_snapshot(self, mgr):
-        # This is the collector-write / web-read path processes.py and
-        # service_list.py depend on for their per-row tables (see
-        # PluginSnapshot's docstring): the collector writes via
-        # InternalDatabaseLogger.snapshot(), the web process reads the same
-        # data back via DatabaseManager.get_snapshot() (wrapped by
-        # UIPlugin.latest_snapshot() — tested at the plugin_base level).
         logger = mgr.get_logger("host1", "test-plugin", "svc-list")
         rows = [{"pid": 1, "command": "init"}, {"pid": 2, "command": "sshd"}]
         logger.snapshot(rows)
@@ -303,8 +294,6 @@ class TestSnapshot:
         assert mgr.get_snapshot("never-written") is None
 
     def test_set_snapshot_upserts_not_appends(self, mgr):
-        # Latest state, not history — a second write must replace the first,
-        # not accumulate rows the way Metric/Event do.
         mgr.set_snapshot("p", '["first"]')
         mgr.flush()
         mgr.set_snapshot("p", '["second"]')

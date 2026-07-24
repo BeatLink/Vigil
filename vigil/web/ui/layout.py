@@ -6,11 +6,6 @@ def make_inline_layout(
     default_layout: list,
     hidden: Tuple[str, ...] = ('host_card', 'logs'),
 ) -> list:
-    """Return a copy of *default_layout* with *hidden* widgets set to visible=False.
-
-    Used to produce the compact variant rendered inside group expansion panels,
-    where the host header and log table are redundant context.
-    """
     result = []
     for row in default_layout:
         new_row = []
@@ -29,41 +24,6 @@ def make_inline_layout(
 
 
 class PluginLayout:
-    """
-    Flex-row layout manager for plugin UIs.
-
-    Each plugin defines a ``_DEFAULT_LAYOUT`` as a list of rows. Each row is a
-    list of widget names. Widgets in the same row are placed side by side with
-    equal width; a widget alone in a row fills the full width::
-
-        _DEFAULT_LAYOUT = [
-            ['host_card', 'cpu_card'],  # two stat cards side by side
-            ['chart'],                  # full width
-            ['logs'],                   # full width
-        ]
-
-    Users can override from ``config.yaml`` under a ``layout:`` key in two ways:
-
-    Full row-structure override (replaces defaults entirely):
-        layout:
-          - [host_card, cpu_card, chart]
-          - [logs]
-
-    Per-widget property overrides (keeps default row structure, tweaks specific widgets):
-        layout:
-          logs:
-            visible: false
-          chart:
-            height: "400px"
-            flex: 2
-
-    Per-widget options:
-      flex     Relative width within the row (CSS flex value, default: 1).
-      height   Explicit CSS height string, e.g. ``"400px"`` (default: auto).
-      visible  Whether to show this widget (default: true). When false the
-               cell is hidden so reactive timers referencing it remain safe.
-    """
-
     def __init__(self, plugin_config: dict, default_layout: list) -> None:
         from nicegui import ui
 
@@ -113,7 +73,6 @@ class PluginLayout:
 
     @contextmanager
     def cell(self, widget_name: str):
-        """Context manager that places its contents in the named widget's row slot."""
         from nicegui import ui
 
         cfg     = self._widget_cfg.get(widget_name, {})
@@ -129,7 +88,6 @@ class PluginLayout:
 
         row_div = self._widget_row_div.get(widget_name)
         if row_div is None:
-            # Widget not in layout — still create the element so timers stay safe
             parent = ui.element('div').style('display: none')
         else:
             parent = row_div

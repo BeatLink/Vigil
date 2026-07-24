@@ -38,8 +38,6 @@ def plugin(make_plugin):
 
 
 def _mock_calls(plugin, config=None, folder_statuses=None, connections=None, watched_folders=None):
-    """Queue responses in the order on_collect makes SSH calls:
-    config, then one call per watched folder, then connections."""
     cfg = config if config is not None else _CONFIG
     watched = watched_folders if watched_folders is not None else [f["id"] for f in cfg["folders"]]
     responses = [json.dumps(cfg)]
@@ -87,7 +85,6 @@ class TestSyncthingCollection:
         assert _latest_status() == "failed"
 
     async def test_idle_with_needed_files_sets_failed(self, plugin):
-        # Known anomaly: idle but not converged.
         _mock_calls(plugin, folder_statuses={
             "docs": _folder_status(state="idle", need_files=5, need_bytes=1000),
             "photos": _folder_status(),

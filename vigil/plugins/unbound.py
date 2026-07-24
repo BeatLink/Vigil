@@ -1,58 +1,3 @@
-"""
-Unbound recursive resolver health via `unbound-control` and a live query.
-
-Complements a `systemd_service` monitor on unbound rather than replacing it.
-That one answers "is the process alive"; this one answers "is it still doing
-its job", which is a different failure. The case that motivates it: the daemon
-keeps running, the socket accepts connections, but recursion is broken (root
-hints expired, the network path outbound is gone, DNSSEC validation is wedged)
-and every query started failing SERVFAIL. A liveness check sees a healthy
-process throughout.
-
-Two signals carry that:
-
-  live resolution   An actual query issued against the resolver for a domain
-                    that should always answer. Proves the whole path — socket,
-                    recursion, upstream reachability — works right now, which
-                    stats alone cannot: a resolver can report a perfect cache
-                    hit rate while every *new* lookup fails.
-  SERVFAIL rate     Share of answered queries that came back SERVFAIL, read
-                    from `unbound-control stats_noreset`. Catches partial
-                    failure (a flaky upstream, a validation problem affecting
-                    some but not all zones) that a single-domain probe can
-                    miss because that one domain happens to still resolve.
-
-Both run over SSH on the resolver's own host: `stats_noreset` reads Unbound's
-control socket, which — per `localControlSocketPath` — is only reachable by
-members of Unbound's own group, and the probe query targets the resolver's
-loopback/LAN listener, which is not exposed beyond that host's `access-control`
-either. Neither is reachable from Vigil's own process.
-
-`stats_noreset` (rather than `stats`, which also resets) is deliberate: it
-leaves Unbound's own counters alone, so Vigil's poll interval never fights
-with any other consumer of the same stats (a shell alias, a separate exporter)
-over who gets to zero them.
-
-Config options:
-  control_cmd       Command run on the monitored host to read stats (default:
-                    "unbound-control stats_noreset"). Override if
-                    unbound-control needs an explicit -c config path.
-  query_host        Resolver address the probe query is sent to (default:
-                    127.0.0.1)
-  query_port        Resolver port (default: 53)
-  query_domain      Domain looked up to prove live resolution (default:
-                    "cloudflare.com" — stable, always-delegated, and outside
-                    this network so a false pass requires real upstream
-                    reachability)
-  query_timeout     Seconds allowed for the probe query (default: 5)
-  servfail_warning  SERVFAIL % at or above which status is warning (default: 5)
-  servfail_threshold
-                    SERVFAIL % at or above which status is failed (default: 20)
-  min_queries       Total answered queries needed before the SERVFAIL rate is
-                    judged at all (default: 20). Below this the ratio is noise
-                    — a couple of queries since a restart legitimately swing
-                    from 0% to 100% on a single failure.
-"""
 import re
 import shlex
 from typing import Any, Dict, Optional, Tuple
@@ -60,21 +5,13 @@ from typing import Any, Dict, Optional, Tuple
 from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 
-# Marks the end of the stats payload so the probe query's own output can
-# follow in the same SSH round trip and be split apart again.
 _SEP = "@@VIGIL_SPLIT@@"
 
-# Text `drill`/`dig` emit on the status line of an answer that actually
-# resolved, as opposed to timing out or being refused outright.
 _RESOLVE_OK_MARKERS = ("NOERROR",)
 
 
 def _build_probe_script(control_cmd: str, query_host: str, query_port: int,
                         query_domain: str, query_timeout: int) -> str:
-    """
-    Build a shell script that reads stats and issues one live query with
-    `dig`, printing the response's header line in a form the parser can find.
-    """
     lines = [
         "set -e",
         control_cmd,
@@ -89,13 +26,6 @@ def _build_probe_script(control_cmd: str, query_host: str, query_port: int,
 
 
 def _parse_stats(raw: str) -> Dict[str, float]:
-    """
-    Parse `unbound-control stats_noreset` output into a flat dict.
-
-    Each line is `name=value`; non-numeric values (there are none in stock
-    output, but a custom build might add some) are skipped rather than
-    raising, so one odd line cannot take the whole monitor down.
-    """
     stats: Dict[str, float] = {}
     for line in raw.splitlines():
         if '=' not in line:
@@ -109,17 +39,10 @@ def _parse_stats(raw: str) -> Dict[str, float]:
 
 
 def _resolved_ok(query_output: str) -> bool:
-    """
-    True if the probe query's output shows a successful (NOERROR) answer.
-
-    Anything else — SERVFAIL, REFUSED, a timeout with no header line at all —
-    is treated as a failed resolution.
-    """
     return any(marker in query_output for marker in _RESOLVE_OK_MARKERS)
 
 
 def _split_response(stdout: str) -> Tuple[str, str]:
-    """Split the combined stdout into (stats_raw, query_output)."""
     if _SEP not in stdout:
         raise ValueError(f"unexpected control output: {stdout[:200]!r}")
     stats_raw, query_raw = stdout.split(_SEP, 1)
@@ -135,8 +58,6 @@ _DEFAULT_LAYOUT = [
 
 
 class UnboundCollectorPlugin(CollectorPlugin):
-    """Monitors Unbound recursive resolution health via unbound-control and a live query."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.control_cmd = config.get('control_cmd', 'unbound-control stats_noreset')
@@ -186,10 +107,6 @@ class UnboundCollectorPlugin(CollectorPlugin):
         self.db_metrics.metric('cache_hit_rate_pct', cache_rate)
         self.db_metrics.metric('uptime_seconds', uptime)
 
-        # --- status ---------------------------------------------------------
-        # Each condition is judged independently and the worst one wins, so a
-        # healthy SERVFAIL rate cannot mask a probe that just failed to
-        # resolve at all (or vice versa).
         problems = []
         level = 'online'
 
@@ -203,8 +120,6 @@ class UnboundCollectorPlugin(CollectorPlugin):
             problems.append(f"probe lookup of {self.query_domain} did not resolve")
             _escalate('failed')
 
-        # Below min_queries the ratio is dominated by whatever handful of
-        # lookups happened to arrive, so it is not evidence of anything.
         if total_answered >= self.min_queries:
             if servfail_rate >= self.servfail_threshold:
                 problems.append(
@@ -233,16 +148,6 @@ class UnboundCollectorPlugin(CollectorPlugin):
 
 
 class UnboundUIPlugin(UIPlugin):
-    """Dashboard rendering for the unbound monitor — declarative, see
-    UI_SPEC. servfail_card's color is config-driven (servfail_warning/
-    servfail_threshold, standard 3-tier), so it uses the shared
-    threshold_color factory registered per-instance (like disk_space.py).
-    resolution_card and uptime_card need locally registered
-    formatters/color-rule not covered by FORMATTERS (a custom 'd h' uptime
-    format, and OK/FAILED text distinct from the other *_ok_text variants
-    only in label semantics — kept separate per plugin as instructed).
-    """
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.servfail_warning = float(self.config.get('servfail_warning', 5))

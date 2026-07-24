@@ -1,10 +1,3 @@
-"""
-Tests for the long-running job runner (Phase 1 infrastructure).
-
-The JobController is exercised against a real temp database — job state is
-meant to be durable across restarts and browser sessions, so persistence is
-the behaviour under test, not an implementation detail to mock away.
-"""
 import asyncio
 import pytest
 from unittest.mock import MagicMock, AsyncMock
@@ -15,15 +8,11 @@ from vigil.collector.controllers.job_controller import JobController, JobRejecte
 @pytest.fixture
 def controller(db_manager):
     ssh = MagicMock()
-    # execute_streaming() is a coroutine on the real SSHConnection (asyncssh
-    # — see ssh_connector.py); JobController now awaits it directly on the
-    # event loop rather than running it in a worker thread.
     ssh.execute_streaming = AsyncMock(return_value=(0, ""))
     return JobController(ssh, db_manager, "test-plugin", "test.host")
 
 
 def _streaming(lines, status=0, error=""):
-    """Fake execute_streaming that emits `lines` then exits with `status`."""
     async def run(command, on_line=None, timeout=None, should_cancel=None):
         for line in lines:
             if on_line:
@@ -33,10 +22,6 @@ def _streaming(lines, status=0, error=""):
         return status, error
     return run
 
-
-# ---------------------------------------------------------------------------
-# Lifecycle
-# ---------------------------------------------------------------------------
 
 class TestLifecycle:
     async def test_successful_job_is_recorded(self, controller, db_manager):
@@ -69,7 +54,6 @@ class TestLifecycle:
         assert [o['seq'] for o in output] == [0, 1, 2]
 
     async def test_output_can_be_polled_incrementally(self, controller, db_manager):
-        # The UI polls with the last seq it rendered; only newer lines return.
         controller.ssh.execute_streaming = _streaming(["a", "b", "c"])
         job_id, _ = await controller.run_job("backup", "cmd")
 
@@ -94,10 +78,6 @@ class TestLifecycle:
         assert "ssh binary missing" in job['error']
 
 
-# ---------------------------------------------------------------------------
-# Concurrency
-# ---------------------------------------------------------------------------
-
 class TestConcurrency:
     async def test_second_job_is_rejected_while_one_runs(self, controller):
         started = asyncio.Event()
@@ -105,9 +85,6 @@ class TestConcurrency:
 
         async def slow(command, on_line=None, timeout=None, should_cancel=None):
             started.set()
-            # JobController now awaits execute_streaming directly on the
-            # event loop (no worker thread) — a plain await is enough to
-            # hold the job "in flight" until the test releases it.
             await release.wait()
             return 0, ""
 
@@ -116,8 +93,6 @@ class TestConcurrency:
         task = asyncio.create_task(controller.run_job("backup", "cmd"))
         await asyncio.wait_for(started.wait(), timeout=5)
 
-        # borg holds an exclusive repo lock; a second run must be refused here
-        # rather than failing confusingly inside borg.
         with pytest.raises(JobRejected):
             await controller.run_job("backup", "cmd2")
 
@@ -127,15 +102,10 @@ class TestConcurrency:
     async def test_job_runs_after_previous_finishes(self, controller):
         controller.ssh.execute_streaming = _streaming(["x"])
         await controller.run_job("backup", "cmd")
-        # The slot must be released, not held for the process lifetime.
         job_id, exit_code = await controller.run_job("backup", "cmd")
         assert exit_code == 0
         assert job_id is not None
 
-
-# ---------------------------------------------------------------------------
-# Cancellation
-# ---------------------------------------------------------------------------
 
 class TestCancellation:
     async def test_cancel_returns_false_when_idle(self, controller):
@@ -144,7 +114,7 @@ class TestCancellation:
     async def test_cancelled_job_is_marked_cancelled(self, controller, db_manager):
         async def cancellable(command, on_line=None, timeout=None, should_cancel=None):
             on_line("stdout", "working")
-            controller.cancel()          # user hits cancel mid-stream
+            controller.cancel()
             if should_cancel():
                 return 130, "Cancelled"
             return 0, ""
@@ -156,10 +126,6 @@ class TestCancellation:
         assert job['state'] == 'cancelled'
         assert job['error'] == 'Cancelled by user'
 
-
-# ---------------------------------------------------------------------------
-# History and reconciliation
-# ---------------------------------------------------------------------------
 
 class TestHistory:
     async def test_recent_returns_newest_first(self, controller, db_manager):
@@ -185,13 +151,10 @@ class TestHistory:
             redacted="BORG_PASSPHRASE=***** borg create",
         )
         job = db_manager.get_job(job_id)
-        # The job row is shown in the UI and retained; the secret must not be in it.
         assert "s3cret" not in job['command']
         assert "*****" in job['command']
 
     def test_orphaned_jobs_are_failed_on_restart(self, db_manager):
-        # A job whose Vigil process died is still 'running' in the DB; startup
-        # reconciliation must not leave it presented as live.
         job_id = db_manager.create_job("p", "h", "backup", "cmd")
         assert db_manager.get_job(job_id)['running'] is True
 

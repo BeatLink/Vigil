@@ -18,11 +18,6 @@ _FORMAT_UNITS = [
 
 
 def parse_duration(value) -> int:
-    """
-    Converts a duration value to seconds.
-    Accepts plain integers/floats or strings like '1w', '7d', '2h30m', '30s'.
-    Compound forms ('1d12h') are supported.
-    """
     if isinstance(value, (int, float)):
         return int(value)
     value = str(value).strip()
@@ -35,10 +30,6 @@ def parse_duration(value) -> int:
 
 
 def format_duration(seconds: int) -> str:
-    """
-    Formats a number of seconds as a human-readable duration string.
-    Shows the two most significant units: '1 Week', '2 Days 3 Hours', '45 Minutes', etc.
-    """
     if seconds <= 0:
         return '0 Seconds'
     parts = []
@@ -52,7 +43,6 @@ def format_duration(seconds: int) -> str:
 
 
 def format_age(seconds: int) -> str:
-    """Formats how long ago something happened: '2 Days 3 Hours ago', or 'Never'."""
     if seconds < 0:
         return 'Never'
     return f'{format_duration(seconds)} ago'

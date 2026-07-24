@@ -4,9 +4,6 @@ from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
-# Query utilization, memory, and temperature for every GPU in one call.
-# --format=csv,noheader,nounits yields bare numbers, one line per GPU:
-#   <index>, <util%>, <mem_used_MiB>, <mem_total_MiB>, <temp_C>
 _COLLECT_CMD = (
     "nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total,temperature.gpu "
     "--format=csv,noheader,nounits"
@@ -21,26 +18,6 @@ _DEFAULT_LAYOUT = [
 
 
 class GpuCollectorPlugin(CollectorPlugin):
-    """
-    Monitors NVIDIA GPU utilization, memory, and temperature over SSH via nvidia-smi.
-
-    Stores per-GPU metrics (gpu<idx>_util, gpu<idx>_mem_pct, gpu<idx>_temp) plus
-    the busiest-GPU maxima (gpu_util, gpu_mem_pct, gpu_temp) which drive the
-    history chart and overall status. Status is the worst of the utilization,
-    memory, and temperature levels across all GPUs.
-
-    Requires nvidia-smi on the target (NVIDIA proprietary/open driver). If it is
-    absent the plugin reports offline rather than failed.
-
-    Config options:
-      util_warning     GPU % that triggers warning     (default: 85)
-      util_threshold   GPU % that triggers failed       (default: 95)
-      mem_warning      VRAM % that triggers warning     (default: 85)
-      mem_threshold    VRAM % that triggers failed       (default: 95)
-      temp_warning     °C that triggers warning          (default: 80)
-      temp_threshold   °C that triggers failed            (default: 90)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.util_warning   = int(config.get('util_warning',   85))
@@ -53,7 +30,6 @@ class GpuCollectorPlugin(CollectorPlugin):
     async def on_collect(self):
         ret, stdout, stderr = await self.ssh_collector.fetch_output(_COLLECT_CMD)
 
-        # nvidia-smi missing or driver not loaded — treat as "no GPU here"
         combined = f"{stdout}\n{stderr}".lower()
         if ret != 0 and ('command not found' in combined or 'not found' in combined
                          or "couldn't communicate" in combined or 'no devices' in combined):
@@ -119,8 +95,6 @@ class GpuCollectorPlugin(CollectorPlugin):
 
 
 class GpuUIPlugin(UIPlugin):
-    """Dashboard rendering for the gpu monitor."""
-
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         from vigil.core.data.database import Metric
@@ -129,11 +103,6 @@ class GpuUIPlugin(UIPlugin):
         from vigil.web.ui.spec import FORMATTERS
         from vigil.web.ui.theme import STATUS_COLORS
 
-        # The 'gpus' cell holds a dynamically-sized per-GPU container (one
-        # card per GPU discovered at collection time), which doesn't fit
-        # UI_SPEC's fixed card model, so this stays a manual layout+page
-        # build — reusing the shared 'percent0'/'temp_c0' formatters for the
-        # three summary cards rather than redefining them.
         layout = PluginLayout(
             self.config,
             _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT)
@@ -181,7 +150,6 @@ class GpuUIPlugin(UIPlugin):
             if temp is not None:
                 temp_label.style(f"color: {STATUS_COLORS[_level_for(temp, temp_warning, temp_threshold)]}")
 
-            # Per-GPU cards: latest util for each gpu<idx>_util metric
             gpu_util: Dict[str, float] = {}
             for row in (
                 Metric.select()

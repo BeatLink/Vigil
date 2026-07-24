@@ -8,12 +8,11 @@ _SEVERITY = {'online': 0, 'warning': 1, 'failed': 2}
 
 
 def _parse_ps_output(stdout: str) -> List[Dict]:
-    """Parse `ps -eo pid,user,pcpu,pmem,comm` output (first line is header)."""
     processes = []
     lines = stdout.strip().splitlines()
     if len(lines) < 2:
         return processes
-    for line in lines[1:]:  # skip header
+    for line in lines[1:]:
         parts = line.split(None, 4)
         if len(parts) < 5:
             continue
@@ -38,23 +37,6 @@ _DEFAULT_LAYOUT = [
 
 
 class ProcessesCollectorPlugin(CollectorPlugin):
-    """
-    Monitors running processes over SSH via `ps`.
-
-    Collects the top N processes sorted by CPU usage.  Process data is stored
-    in memory and refreshed each cycle; the table in the UI sorts and refreshes
-    automatically.  Per-row SIGTERM and SIGKILL actions are available directly
-    from the UI.
-
-    Config options:
-      max_processes  Maximum number of processes to display (default: 20)
-      require_sudo   Prefix kill commands with sudo (default: false)
-      kill_signal    Default signal for the top-level kill action — TERM or KILL
-                     (default: TERM; per-row buttons always offer both)
-      cpu_warning    Top-process CPU % that triggers warning (optional)
-      cpu_threshold  Top-process CPU % that triggers failed  (optional)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.max_processes = int(config.get('max_processes', 20))
@@ -65,7 +47,6 @@ class ProcessesCollectorPlugin(CollectorPlugin):
         self._processes: List[Dict] = []
 
     async def on_collect(self):
-        # +1 so head includes the header line plus max_processes data rows
         cmd = (
             f"ps -eo pid,user,pcpu,pmem,comm --sort=-%cpu "
             f"| head -n {self.max_processes + 1}"
@@ -78,7 +59,6 @@ class ProcessesCollectorPlugin(CollectorPlugin):
 
         processes = _parse_ps_output(stdout)
 
-        # Fail only when there were data rows (beyond the header) that we couldn't parse
         has_data_rows = len(stdout.strip().splitlines()) > 1
         if not processes and has_data_rows:
             self.db_logger.write(f"Could not parse ps output: {stdout!r}", level="ERROR")
@@ -91,9 +71,6 @@ class ProcessesCollectorPlugin(CollectorPlugin):
 
         self.db_metrics.metric('process_count', float(process_count))
         self.db_metrics.metric('top_cpu_pct',   top_cpu)
-        # Full per-process rows for the web process's table — see
-        # PluginSnapshot's docstring in core/data/database.py for why this
-        # can't just be more metrics.
         self.db_logger.snapshot(processes)
 
         if self.cpu_warning is not None and self.cpu_threshold is not None:
@@ -134,18 +111,6 @@ class ProcessesCollectorPlugin(CollectorPlugin):
 
 
 class ProcessesUIPlugin(UIPlugin):
-    """
-    Dashboard rendering for the processes monitor. See ProcessesCollectorPlugin
-    for collection/action logic.
-
-    The process table reads ProcessesCollectorPlugin's latest snapshot
-    (self.latest_snapshot()) rather than an in-memory list — on_collect()
-    runs in a different process here, so its `_processes` list never crosses
-    the boundary on its own; ProcessesCollectorPlugin.on_collect() persists
-    it via db_logger.snapshot(processes) specifically so this class can read
-    it back.
-    """
-
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
         import asyncio

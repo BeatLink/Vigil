@@ -23,22 +23,6 @@ _DEFAULT_LAYOUT = [
 
 
 class FoldersCollectorPlugin(CollectorPlugin):
-    """
-    Monitors the size of arbitrary directories over SSH via `du`. Useful for
-    watching things a filesystem check can't see — a growing log directory, a
-    download spool, a media library approaching a soft cap.
-
-    Each configured folder may set its own `warning`/`threshold` size (in GB);
-    overall status is the worst level across all folders. A folder that can't be
-    read (missing/permission) is reported failed.
-
-    Config options:
-      folders   List of { path, warning?, threshold? } entries. warning/threshold
-                are sizes in GB; a folder over threshold => failed, over warning
-                => warning. Both optional (a folder with neither is size-only).
-      timeout   Per-du timeout in seconds (default: 60) — du can be slow on huge trees.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.folders = config.get('folders', []) or []
@@ -68,7 +52,6 @@ class FoldersCollectorPlugin(CollectorPlugin):
             path = folder.get('path')
             if not path:
                 continue
-            # `du -sb` gives total bytes for the tree; wrap in timeout for huge dirs.
             cmd = f"timeout {self.timeout} du -sb {_shquote(path)}"
             ret, stdout, stderr = await self.ssh_collector.fetch_output(cmd)
 
@@ -111,8 +94,6 @@ class FoldersCollectorPlugin(CollectorPlugin):
 
 
 class FoldersUIPlugin(UIPlugin):
-    """Dashboard rendering for the folders monitor."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.folders = config.get('folders', []) or []
@@ -134,15 +115,9 @@ class FoldersUIPlugin(UIPlugin):
         from vigil.web.ui.spec import FORMATTERS
         from vigil.web.ui.theme import STATUS_COLORS
 
-        # The 'folders' cell holds a dynamically-sized per-folder container
-        # (one card per configured folder, queried live from Metric), which
-        # doesn't fit UI_SPEC's fixed card model, so this stays a manual
-        # layout+page build — reusing the shared 'bytes_gb' formatter rather
-        # than redefining it.
         layout = PluginLayout(self.config, _DEFAULT_LAYOUT if context == 'page' else make_inline_layout(_DEFAULT_LAYOUT))
         page = self.page(metric_names=['worst_folder_gb'])
 
-        # Map sanitized metric suffix -> folder config for threshold coloring.
         by_key = {_sanitize(f.get('path', '')): f for f in self.folders if f.get('path')}
 
         _gb_or_dash = FORMATTERS['bytes_gb']

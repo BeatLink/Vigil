@@ -14,10 +14,10 @@ BASE_CFG = {
     "ssh_config": {"host": "test.host"},
 }
 
-_MEM_TOTAL_KB = 16_000_000   # ~16 GB
-_MEM_AVAIL_50 = 8_000_000    # 50% used → online  (below 75% warning)
-_MEM_AVAIL_20 = 3_200_000    # 80% used → warning (between 75 and 90)
-_MEM_AVAIL_5  = 800_000      # 95% used → failed  (above 90%)
+_MEM_TOTAL_KB = 16_000_000
+_MEM_AVAIL_50 = 8_000_000
+_MEM_AVAIL_20 = 3_200_000
+_MEM_AVAIL_5  = 800_000
 
 
 def _make_output(total_kb, avail_kb):

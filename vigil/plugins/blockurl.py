@@ -1,38 +1,3 @@
-"""
-BlockURL blocklist health via its own REST API.
-
-Complements a `systemd_service` monitor on blockurl rather than replacing
-it. That one answers "is the process alive"; this one answers "is the
-blocklist database actually intact and non-empty", which is a different
-failure — the process can bind its port and answer HTTP while the SQLite
-file underneath has gone missing, corrupted, or been reset to empty, and a
-liveness check alone would not notice.
-
-BlockURL has no dedicated health/stats endpoint (it is a small personal
-project, not designed with a monitor in mind) — `/urls/domains` is read
-instead because a non-trivial domain count is itself evidence the database
-is intact and populated, which is the only thing worth checking about it.
-
-Authenticates with the same `X-API-Key` header the app itself supports for
-non-interactive callers (see `before_request` in blockurl's __main__.py) —
-the existing `blockurl_api_key` secret (blockurl.nix), no separate Vigil
-credential needed. That secret file is in `KEY=value` form (it doubles as
-the service's own EnvironmentFile), so the value after `=` is what gets sent.
-
-Config options:
-  api_url            Base URL of BlockURL, as seen from the monitored host
-                     (default: http://127.0.0.1:9001)
-  api_key            The API key value. Prefer api_key_command.
-  api_key_command    Command run on the monitored host whose stdout is the
-                     key, extracted from its KEY=value file (default:
-                     "cut -d= -f2- /run/secrets/blockurl_api_key").
-  min_domains        Domain count below which status is warning (default: 1
-                     — an empty list means either a fresh install or a wiped
-                     database; either way there's nothing to alert on until
-                     the operator has actually populated it, so this is
-                     deliberately lax rather than assuming a "normal" size).
-  api_timeout        Seconds allowed for the remote curl call (default: 10)
-"""
 import json
 import shlex
 from typing import Any, Dict, Optional
@@ -57,7 +22,6 @@ def _build_fetch_script(api_url: str, timeout: int, api_key_command: Optional[st
 
 
 def _parse_response(stdout: str) -> list:
-    """Parse the `[[domain, count], ...]` response, raising on anything else."""
     try:
         data = json.loads(stdout)
     except json.JSONDecodeError as e:
@@ -75,8 +39,6 @@ _DEFAULT_LAYOUT = [
 
 
 class BlockurlCollectorPlugin(CollectorPlugin):
-    """Monitors BlockURL's blocklist database health via its REST API."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.api_url = config.get('api_url', 'http://127.0.0.1:9001')
@@ -126,11 +88,6 @@ class BlockurlCollectorPlugin(CollectorPlugin):
 
 
 class BlockurlUIPlugin(UIPlugin):
-    """Dashboard rendering for the blockurl monitor — declarative, see
-    UI_SPEC. domains_card's color is config-driven (min_domains), so it's a
-    per-instance rule (same pattern as disk_space.py).
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.min_domains = int(config.get('min_domains', 1))

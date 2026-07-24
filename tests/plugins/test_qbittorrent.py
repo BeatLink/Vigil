@@ -30,7 +30,6 @@ BASE_CFG = {
 
 
 def _transfer(connection="connected", dl_speed=1_500_000, up_speed=250_000):
-    """A payload shaped like qBittorrent's /api/v2/transfer/info."""
     return {
         "connection_status": connection,
         "dl_info_speed": dl_speed,
@@ -42,7 +41,6 @@ def _transfer(connection="connected", dl_speed=1_500_000, up_speed=250_000):
 
 
 def _torrents(downloading=2, stalled=0, errored=0, seeding=5):
-    """A torrent list shaped like /api/v2/torrents/info."""
     out = []
     for i in range(downloading):
         out.append({"name": f"dl-{i}", "state": "downloading", "progress": 0.4})
@@ -56,7 +54,6 @@ def _torrents(downloading=2, stalled=0, errored=0, seeding=5):
 
 
 def _response(transfer=None, torrents=None):
-    """Assemble the two-payload stdout the remote script produces."""
     t = json.dumps(transfer if transfer is not None else _transfer())
     l = json.dumps(torrents if torrents is not None else _torrents())
     return f"{t}\n{_SEP}\n{l}"
@@ -114,15 +111,10 @@ class TestBuildFetchScript:
         script = _build_fetch_script(
             "http://127.0.0.1:9050", 10,
             "cat /run/secrets/qbittorrent_api", "admin", None)
-        # The secret is resolved remotely, so it must appear as a command and
-        # never as a literal value in the script.
         assert "cat /run/secrets/qbittorrent_api" in script
         assert "auth/login" in script
 
     def test_inline_password_is_quoted(self):
-        # Shell metacharacters in the password must not become executable. The
-        # authoritative check is that a real shell assigns the literal string,
-        # rather than substituting the command inside it.
         import subprocess
         script = _build_fetch_script(
             "http://127.0.0.1:9050", 10, None, "admin", "p'wd$(x)")
@@ -148,13 +140,11 @@ class TestBuildFetchScript:
         assert "//api/v2" not in script
 
     def test_login_failure_is_detected(self):
-        # curl exits 0 on an HTTP 403, so the script must inspect the body.
         script = _build_fetch_script("http://127.0.0.1:9050", 10, None, "admin", "pw")
         assert _AUTH_FAILED in script
         assert "Ok." in script
 
     def test_cookie_jar_is_cleaned_up(self):
-        # The jar holds a live session credential; it must not outlive the run.
         script = _build_fetch_script("http://127.0.0.1:9050", 10, None, "admin", "pw")
         assert "mktemp" in script
         assert 'rm -f "$__jar"' in script
@@ -167,10 +157,7 @@ class TestBuildFetchScript:
 
 
 class TestAuthScriptBehaviour:
-    """Exercise the generated auth preamble against a real shell."""
-
     def _run(self, script: str, curl_body: str):
-        """Run the script with `curl` stubbed to emit a fixed body."""
         stub = f"curl() {{ printf '%s' {shlex.quote(curl_body)}; }}\n{script}"
         return subprocess.run(["bash", "-c", stub], capture_output=True, text=True)
 
@@ -181,8 +168,6 @@ class TestAuthScriptBehaviour:
         assert _AUTH_FAILED in out.stderr
 
     def test_accepted_login_proceeds(self):
-        # "Ok." is what qBittorrent returns on success; the script should then
-        # continue on to the data calls rather than aborting.
         script = _build_fetch_script("http://127.0.0.1:9050", 10, None, "admin", "right")
         out = self._run(script, "Ok.")
         assert out.returncode == 0
@@ -196,17 +181,12 @@ class TestAuthScriptBehaviour:
 
 class TestBuildActionScript:
     def test_includes_referer_header(self):
-        # qBittorrent rejects state-changing calls without a Referer (CSRF).
         script = _build_action_script(
             "http://127.0.0.1:9050", 10, None, None, None,
             "/api/v2/torrents/start", {"hashes": "all"})
         assert "Referer: http://127.0.0.1:9050" in script
 
     def test_uses_fail_flag(self):
-        # Without --fail, curl exits 0 on a 403 and a rejected action would be
-        # reported to the operator as a success. Asserted on the line that
-        # performs the action, so the flag cannot be satisfied by an unrelated
-        # occurrence elsewhere in the script.
         script = _build_action_script(
             "http://127.0.0.1:9050", 10, None, None, None,
             "/api/v2/torrents/start", {"hashes": "all"})
@@ -293,7 +273,6 @@ class TestCollect:
 
     @pytest.mark.asyncio
     async def test_disconnected_is_failed(self, plugin):
-        # The tunnel-dropped case: process alive, transfers dead.
         _respond(plugin, transfer=_transfer(connection="disconnected",
                                             dl_speed=0, up_speed=0))
         await plugin.on_collect()
@@ -339,8 +318,6 @@ class TestCollect:
 
     @pytest.mark.asyncio
     async def test_idle_client_with_no_downloads_is_online(self, plugin):
-        # An empty download queue is not a stall — nothing is in flight to
-        # stall. Only seeding torrents present.
         _respond(plugin, torrents=_torrents(downloading=0, stalled=0, seeding=8))
         await plugin.on_collect()
         assert _latest_status() == "online"
@@ -360,8 +337,6 @@ class TestCollect:
 
     @pytest.mark.asyncio
     async def test_worst_condition_wins(self, plugin):
-        # Firewalled (warning) alongside an errored torrent (failed) must
-        # report failed, not warning.
         _respond(plugin,
                  transfer=_transfer(connection="firewalled"),
                  torrents=_torrents(downloading=1, errored=1))
@@ -370,8 +345,6 @@ class TestCollect:
 
     @pytest.mark.asyncio
     async def test_metadata_stall_counts_as_stalled(self, plugin):
-        # A magnet that cannot fetch its info dictionary is what a dead tunnel
-        # looks like for newly added torrents.
         torrents = [{"name": f"meta-{i}", "state": "metaDL"} for i in range(10)]
         _respond(plugin, torrents=torrents)
         await plugin.on_collect()
@@ -391,8 +364,6 @@ class TestActions:
         assert ids == {"resume_all", "recheck_errored", "pause_all"}
 
     def test_no_destructive_action_is_offered(self, plugin):
-        # The dashboard fires actions with no confirmation step, so anything
-        # that could destroy data must not be reachable from it.
         blob = json.dumps(plugin.get_actions()).lower()
         assert "delete" not in blob
         assert "remove" not in blob
@@ -415,7 +386,6 @@ class TestActions:
 
     @pytest.mark.asyncio
     async def test_resume_all_falls_back_to_legacy_endpoint(self, plugin):
-        # qBittorrent < 5.0 only has /resume; the modern /start 404s there.
         plugin.ssh_controller.execute_action = AsyncMock(
             side_effect=[(22, "", "404"), (0, "", "")])
         assert await plugin.on_action("resume_all") is True
@@ -437,8 +407,6 @@ class TestActions:
 
     @pytest.mark.asyncio
     async def test_recheck_targets_only_errored_torrents(self, plugin):
-        # A recheck re-reads every piece from disk, so it must never be aimed at
-        # the whole library.
         torrents = [
             {"name": "ok", "state": "uploading", "hash": "aaa"},
             {"name": "bad", "state": "error", "hash": "bbb"},
@@ -464,7 +432,6 @@ class TestActions:
 
     @pytest.mark.asyncio
     async def test_recheck_fails_when_queue_unreadable(self, plugin):
-        # Acting on a queue we could not read would mean guessing at hashes.
         plugin.ssh_collector.fetch_output = AsyncMock(return_value=(1, "", "boom"))
         plugin.ssh_controller.execute_action = AsyncMock(return_value=(0, "", ""))
 

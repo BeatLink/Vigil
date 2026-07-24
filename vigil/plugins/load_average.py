@@ -4,7 +4,6 @@ from vigil.collector.plugin_base import CollectorPlugin
 from vigil.web.plugin_base import UIPlugin
 from vigil.core.common.plugin_utils import level_for as _level_for
 
-# Single SSH read — no sleep needed for load averages.
 _COLLECT_CMD = 'echo "LOAD:$(cat /proc/loadavg)"; echo "CPUS:$(nproc)"'
 
 
@@ -16,21 +15,6 @@ _DEFAULT_LAYOUT = [
 
 
 class LoadAverageCollectorPlugin(CollectorPlugin):
-    """
-    Monitors system load averages over SSH via /proc/loadavg.
-
-    Load values are normalized by CPU core count (via nproc) and stored as a
-    percentage — 100% means the system is exactly at capacity.  Falls back to
-    treating core count as 1 if nproc is unavailable.
-
-    Thresholds are optional.  When unset, metrics are collected and displayed
-    but do not affect plugin status.
-
-    Config options:
-      load_warning   1m load as % of cores that triggers warning (optional)
-      load_threshold 1m load as % of cores that triggers failed  (optional)
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.load_warning   = float(config['load_warning'])   if 'load_warning'   in config else None
@@ -85,12 +69,6 @@ class LoadAverageCollectorPlugin(CollectorPlugin):
 
 
 class LoadAverageUIPlugin(UIPlugin):
-    """Dashboard rendering for the load_average monitor — declarative, see
-    UI_SPEC. Thresholds are optional (see collector docstring); when unset,
-    no color rule is attached, matching the pre-UI_SPEC behavior of never
-    calling update_load_1m_color.
-    """
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.load_warning   = float(config['load_warning'])   if 'load_warning'   in config else None

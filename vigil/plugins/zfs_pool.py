@@ -12,10 +12,6 @@ _DEFAULT_LAYOUT = [
 
 
 class ZFSPoolCollectorPlugin(CollectorPlugin):
-    """
-    Monitors ZFS zpool capacity over SSH.
-    Reports usage percentage and marks the pool failed when it exceeds the threshold.
-    """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.pool = config.get('pool')
@@ -32,7 +28,6 @@ class ZFSPoolCollectorPlugin(CollectorPlugin):
             return
 
         try:
-            # Output format: "<pool>\t<capacity>%"
             usage_pct = float(stdout.strip().split()[1].rstrip('%'))
         except (IndexError, ValueError) as e:
             self.db_logger.write(f"Failed to parse zpool output '{stdout.strip()}': {e}", level="ERROR")
@@ -52,15 +47,6 @@ class ZFSPoolCollectorPlugin(CollectorPlugin):
 
 
 class ZFSPoolUIPlugin(UIPlugin):
-    """Dashboard rendering for the zfs_pool monitor — declarative, see
-    UI_SPEC. usage_card's color rule is config-driven (threshold) and simple
-    binary (failed at/above threshold, online below — no separate warning
-    tier, unlike disk_space.py's threshold_color which has 3 tiers), so it
-    gets its own per-instance rule rather than reusing threshold_color.
-    pool_card/threshold_card are static config-derived cards (value_attr),
-    same pattern as disk_space.py's path_card/threshold_card.
-    """
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pool = self.config.get('pool')

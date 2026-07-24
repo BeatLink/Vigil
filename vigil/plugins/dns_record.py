@@ -1,29 +1,3 @@
-"""
-DNS record monitoring.
-
-Checks that a DNS record resolves, and optionally that its answer matches an
-expected value — catching a stale record, a botched DNS migration, or a
-provider outage, independent of whatever host actually serves the domain.
-
-Unlike the SSH-based plugins, there is no target host to reach: the query is
-issued from wherever Vigil itself runs (or from an explicit `resolver`), so
-this runs in-process like vigil_self rather than via SSHCollector. That also
-means the resolver's own health is in view — pointing `resolver` at an
-internal DNS server doubles as a liveness probe for it, distinct from
-unbound.py's SERVFAIL-rate monitoring of one specific resolver's stats.
-
-Config options:
-  domain      Domain name to query                                (required)
-  record_type One of A, AAAA, CNAME, MX, TXT, NS, SOA (default: "A")
-  resolver    Resolver IP to query directly (default: system resolver)
-  port        Resolver port (default: 53)
-  timeout     Query timeout in seconds (default: 5)
-  expected    Optional list of acceptable answer values. Any answer not in
-              this list fails the monitor — for pinning an A record to known
-              IPs, or an MX record to a known mail provider. Order-independent;
-              only presence in the answer set is checked, since authoritative
-              order is not meaningful for most record types.
-"""
 import asyncio
 from typing import Any, Dict, List, Optional
 
@@ -41,7 +15,6 @@ _DEFAULT_LAYOUT = [
 
 
 def _answer_to_str(record_type: str, rdata) -> str:
-    """Render one answer record as the plain string `expected` is compared against."""
     if record_type == 'MX':
         return f"{rdata.preference} {str(rdata.exchange).rstrip('.')}".strip()
     if record_type == 'TXT':
@@ -51,11 +24,6 @@ def _answer_to_str(record_type: str, rdata) -> str:
 
 
 class DnsRecordCollectorPlugin(CollectorPlugin):
-    """
-    Monitors a DNS record: resolves it on each cycle and reports failed if the
-    query errors, times out, or (when `expected` is set) returns none of the
-    accepted values.
-    """
     def __init__(self, name: str, config: Dict[str, Any], db: Any):
         super().__init__(name, config, db)
         self.domain = config.get('domain')
@@ -67,8 +35,6 @@ class DnsRecordCollectorPlugin(CollectorPlugin):
         self.expected: Optional[List[str]] = (
             [str(v).rstrip('.') for v in expected] if expected else None
         )
-        # DNS queries have nothing to do with SSH; this monitor is about the
-        # domain, not a host in the fleet.
         self.target = self.domain or self.name
 
     def _make_resolver(self) -> "dns.resolver.Resolver":
@@ -141,12 +107,10 @@ class DnsRecordCollectorPlugin(CollectorPlugin):
         self.set_status('online')
 
     def _query(self):
-        """Blocking resolution, run off the event loop via asyncio.to_thread."""
         resolver = self._make_resolver()
         return resolver.resolve(self.domain, self.record_type)
 
     def _store_values(self, values: List[str]):
-        """Persist the current answer set as a Setting for the UI to display."""
         import json
         try:
             self.db.set_setting(f"dns_record:{self.id}", json.dumps(values))
@@ -158,8 +122,6 @@ class DnsRecordCollectorPlugin(CollectorPlugin):
 
 
 class DnsRecordUIPlugin(UIPlugin):
-    """Dashboard rendering for the dns_record monitor."""
-
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self.record_type = str(config.get('record_type', 'A')).upper()
