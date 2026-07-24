@@ -322,7 +322,6 @@ class SystemdUIPlugin(UIPlugin):
                 time_label.text = last.timestamp.strftime('%H:%M:%S')
 
         page.on_refresh(update_time)
-        update_time()
         page.start()
 
     def _render_oneshot_ui(self, context: str = 'page'):

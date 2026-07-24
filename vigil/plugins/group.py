@@ -73,22 +73,9 @@ class GroupUIPlugin(UIPlugin):
         ui.add_css(f'''
             .{grid_cls} {{
                 display: grid;
-                grid-template-columns: repeat({self.grid_columns}, 1fr);
+                grid-template-columns: repeat(2, 1fr);
                 gap: 0.75rem;
                 width: 100%;
-            }}
-            @media (max-width: 900px) {{
-                .{grid_cls} {{
-                    grid-template-columns: repeat({min(self.grid_columns, 2)}, 1fr);
-                }}
-            }}
-            @media (max-width: 600px) {{
-                .{grid_cls} {{
-                    grid-template-columns: 1fr;
-                }}
-                .{grid_cls} > div {{
-                    grid-column: span 1 !important;
-                }}
             }}
         ''')
         statuses = self.db.latest_statuses()

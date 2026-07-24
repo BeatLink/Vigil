@@ -24,6 +24,7 @@ class _PageScheduler:
             self._interval = page._interval
             self._timer.cancel()
             self._timer = safe_timer(self._interval, self._tick, defer_first=True)
+        asyncio.create_task(page._tick())
 
     async def _tick(self) -> None:
         live = [p for p in self._pages if not p._detached()]
@@ -74,7 +75,6 @@ class PluginPage:
             self._metric_names.append(name)
 
     def start(self) -> None:
-        self._refresh_model()
         self._client = context.client
         _scheduler_for_current_client(self._interval).add(self)
 

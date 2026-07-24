@@ -131,8 +131,6 @@ def metric_table(page, collector: str, title: str = 'Monitor Metrics', limit: in
             refresh_rows(table, await offload(_read)())
 
         page.on_refresh(update)
-        table.rows = _read()
-        table.update()
         return table
 
 def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent Logs',
@@ -167,8 +165,6 @@ def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent L
             refresh_rows(table, await offload(_read)())
 
         page.on_refresh(update_logs)
-        table.rows = _read()
-        table.update()
         return table
 
 def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
@@ -202,8 +198,6 @@ def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
             refresh_rows(table, await offload(_read)())
 
         page.on_refresh(update)
-        table.rows = _read()
-        table.update()
         return table
 
 
@@ -243,7 +237,6 @@ def history_chart(page, title: str, collector: str, metric_name: str, limit: int
             _apply(await offload(_read)())
 
         page.on_refresh(update)
-        _apply(_read())
         return chart
 
 def chip_label(label: str, value: str, color: Optional[str] = None):
@@ -405,7 +398,6 @@ def render_repeat_card(plugin, page, repeat_spec: dict):
                     info_card(label or '--', value)
 
     page.on_refresh(render)
-    render()
 
 
 def render_buttons(plugin, button_specs: list):
@@ -668,7 +660,6 @@ def render_job_panel(plugin, spec: dict):
             ]
             jobs_table.update()
 
-        update()
         safe_timer(spec.get('refresh_interval', 2.0), update)
 
 
