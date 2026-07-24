@@ -1,7 +1,7 @@
 import importlib
 import inspect
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from vigil.web.web_plugin_base import UIPlugin
 from vigil.core.data.config_file import ConfigFileManager as VigilConfig

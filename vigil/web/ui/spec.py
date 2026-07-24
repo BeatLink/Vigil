@@ -95,12 +95,6 @@ def _dedup_ratio(v):
 def _ttl_seconds(v):
     return '--' if v is None else f'{int(v)}s'
 
-@register_formatter('on_off')
-def _on_off(v):
-    if v is None:
-        return 'Checking...'
-    return 'ON' if v > 0.5 else 'OFF'
-
 
 COLOR_RULES: Dict[str, Callable[[Optional[float]], Optional[str]]] = {}
 

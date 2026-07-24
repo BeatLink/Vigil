@@ -5,7 +5,7 @@ from typing import Any, Dict, Optional
 from nicegui import app, ui
 from vigil.core.data.database import Setting
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
-from .components import action_chip, card, section_title, safe_timer, on_data_event, offload, refresh_rows
+from .components import action_chip, card, section_title, on_data_event, offload, refresh_rows
 
 _ICON = Path(__file__).parent.parent.parent / 'static' / 'icon.svg'
 

@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, List, Tuple
 
 
 def make_inline_layout(

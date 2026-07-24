@@ -2,7 +2,7 @@ import asyncio
 from typing import Optional
 from nicegui import ui
 from vigil.core.data.events import bus
-from .theme import TEXT, TEXT_MUTED, PRIMARY, ACCENT, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
+from .theme import TEXT, TEXT_MUTED, PRIMARY, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
 
 
 def offload(read_fn):

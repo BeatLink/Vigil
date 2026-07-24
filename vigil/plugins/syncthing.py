@@ -1,7 +1,6 @@
 import json
 import shlex
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from vigil.collector.collector_plugin_base import CollectorPlugin
