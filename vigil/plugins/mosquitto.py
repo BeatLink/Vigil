@@ -3,9 +3,8 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _TIMED_OUT = "VIGIL_MQTT_TIMEOUT"
 _MISMATCH = "VIGIL_MQTT_MISMATCH"
@@ -61,7 +60,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class MosquittoCollectorPlugin(CollectorPlugin):
+class Mosquitto(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.host = config.get('host', '127.0.0.1')
@@ -107,8 +106,6 @@ class MosquittoCollectorPlugin(CollectorPlugin):
             status='online',
         )
 
-
-class MosquittoUIPlugin(UIPlugin):
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -123,11 +120,11 @@ class MosquittoUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_formatter, register_color_rule
+from vigil.core.ui.spec import register_formatter, register_color_rule
 
 
 @register_formatter('mosquitto_ok_text')

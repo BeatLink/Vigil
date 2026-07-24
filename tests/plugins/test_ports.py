@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.ports import PortsCollectorPlugin, _parse_results, _safe_metric_name, _build_probe_script
+from vigil.plugins.ports import Ports, _parse_results, _safe_metric_name, _build_probe_script
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -20,7 +20,7 @@ BASE_CFG = {
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(PortsCollectorPlugin, BASE_CFG)
+    return make_plugin(Ports, BASE_CFG)
 
 
 def _latest_status(plugin_id: str = "test-ports"):
@@ -74,7 +74,7 @@ class TestPortsCollection:
         assert _latest_metric("test-ports", "api_up") == pytest.approx(0.0)
 
     async def test_no_checks_offline(self, make_plugin, run_cycle):
-        p = make_plugin(PortsCollectorPlugin, {**BASE_CFG, "checks": []})
+        p = make_plugin(Ports, {**BASE_CFG, "checks": []})
         run_cycle(p)
         assert _latest_status() == "offline"
 
@@ -83,7 +83,7 @@ class TestPortsCollection:
         assert _latest_status() == "failed"
 
     async def test_auto_labels_unnamed_check(self, make_plugin):
-        p = make_plugin(PortsCollectorPlugin, {
+        p = make_plugin(Ports, {
             **BASE_CFG,
             "checks": [{"host": "1.2.3.4", "port": 80}],
         })

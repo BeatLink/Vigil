@@ -7,7 +7,7 @@ import dns.rrset
 import pytest
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.dns_record import DnsRecordCollectorPlugin
+from vigil.plugins.dns_record import DnsRecord
 from vigil.core.database.database import db, StatusHistory, Metric
 
 
@@ -48,7 +48,7 @@ def _fake_answer(record_type: str, *values: str, ttl: int = 300):
 
 class TestDnsRecordCollection:
     async def test_successful_a_resolution_sets_online(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg())
+        p = make_plugin(DnsRecord, _cfg())
         answer = _fake_answer('A', '93.184.216.34')
         with patch.object(p, '_query', return_value=('ok', answer)):
             run_local_cycle(p)
@@ -56,46 +56,46 @@ class TestDnsRecordCollection:
         assert _latest_metric("test-dns", "resolved") == pytest.approx(1.0)
 
     async def test_records_ttl(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg())
+        p = make_plugin(DnsRecord, _cfg())
         answer = _fake_answer('A', '93.184.216.34', ttl=600)
         with patch.object(p, '_query', return_value=('ok', answer)):
             run_local_cycle(p)
         assert _latest_metric("test-dns", "ttl") == pytest.approx(600.0)
 
     async def test_nxdomain_sets_failed(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg())
+        p = make_plugin(DnsRecord, _cfg())
         with patch.object(p, '_query', return_value=('nxdomain', None)):
             run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
         assert _latest_metric("test-dns", "resolved") == pytest.approx(0.0)
 
     async def test_no_answer_sets_failed(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg(record_type="MX"))
+        p = make_plugin(DnsRecord, _cfg(record_type="MX"))
         with patch.object(p, '_query', return_value=('no_answer', None)):
             run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
 
     async def test_timeout_sets_failed(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg())
+        p = make_plugin(DnsRecord, _cfg())
         with patch.object(p, '_query', return_value=('timeout', None)):
             run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
 
     async def test_generic_dns_exception_sets_failed(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg())
+        p = make_plugin(DnsRecord, _cfg())
         with patch.object(p, '_query', return_value=('dns_error', 'bad')):
             run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
 
     async def test_missing_domain_sets_failed(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg(domain=None))
+        p = make_plugin(DnsRecord, _cfg(domain=None))
         run_local_cycle(p)
         assert _latest_status("test-dns") == "failed"
 
 
 class TestExpectedValues:
     async def test_matching_expected_value_sets_online(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg(expected=["93.184.216.34"]))
+        p = make_plugin(DnsRecord, _cfg(expected=["93.184.216.34"]))
         answer = _fake_answer('A', '93.184.216.34')
         with patch.object(p, '_query', return_value=('ok', answer)):
             run_local_cycle(p)
@@ -103,7 +103,7 @@ class TestExpectedValues:
         assert _latest_metric("test-dns", "matches_expected") == pytest.approx(1.0)
 
     async def test_unexpected_value_sets_failed(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg(expected=["1.2.3.4"]))
+        p = make_plugin(DnsRecord, _cfg(expected=["1.2.3.4"]))
         answer = _fake_answer('A', '93.184.216.34')
         with patch.object(p, '_query', return_value=('ok', answer)):
             run_local_cycle(p)
@@ -111,7 +111,7 @@ class TestExpectedValues:
         assert _latest_metric("test-dns", "matches_expected") == pytest.approx(0.0)
 
     async def test_no_expected_skips_matching(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg())
+        p = make_plugin(DnsRecord, _cfg())
         answer = _fake_answer('A', '93.184.216.34')
         with patch.object(p, '_query', return_value=('ok', answer)):
             run_local_cycle(p)
@@ -120,21 +120,21 @@ class TestExpectedValues:
 
 class TestRecordTypeFormatting:
     async def test_mx_record_formatting(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg(record_type="MX", expected=["10 mail.example.com"]))
+        p = make_plugin(DnsRecord, _cfg(record_type="MX", expected=["10 mail.example.com"]))
         answer = _fake_answer('MX', '10 mail.example.com.')
         with patch.object(p, '_query', return_value=('ok', answer)):
             run_local_cycle(p)
         assert _latest_status("test-dns") == "online"
 
     async def test_txt_record_formatting(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg(record_type="TXT", expected=["v=spf1 -all"]))
+        p = make_plugin(DnsRecord, _cfg(record_type="TXT", expected=["v=spf1 -all"]))
         answer = _fake_answer('TXT', '"v=spf1 -all"')
         with patch.object(p, '_query', return_value=('ok', answer)):
             run_local_cycle(p)
         assert _latest_status("test-dns") == "online"
 
     async def test_cname_record_strips_trailing_dot(self, make_plugin, run_local_cycle):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg(record_type="CNAME", expected=["target.example.net"]))
+        p = make_plugin(DnsRecord, _cfg(record_type="CNAME", expected=["target.example.net"]))
         answer = _fake_answer('CNAME', 'target.example.net.')
         with patch.object(p, '_query', return_value=('ok', answer)):
             run_local_cycle(p)
@@ -143,13 +143,13 @@ class TestRecordTypeFormatting:
 
 class TestDnsRecordActions:
     async def test_on_action_always_returns_false(self, make_plugin):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg())
+        p = make_plugin(DnsRecord, _cfg())
         assert p.plan_action("anything") is None
 
 
 class TestResolverConfig:
     async def test_custom_resolver_is_used(self, make_plugin):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg(resolver="1.1.1.1", port=5353, timeout=2))
+        p = make_plugin(DnsRecord, _cfg(resolver="1.1.1.1", port=5353, timeout=2))
         resolver = p._make_resolver()
         assert resolver.nameservers == ["1.1.1.1"]
         assert resolver.port == 5353
@@ -157,6 +157,6 @@ class TestResolverConfig:
         assert resolver.lifetime == 2
 
     async def test_default_resolver_uses_system_config(self, make_plugin):
-        p = make_plugin(DnsRecordCollectorPlugin, _cfg())
+        p = make_plugin(DnsRecord, _cfg())
         resolver = p._make_resolver()
         assert resolver.port == 53

@@ -2,17 +2,20 @@ import pytest
 from unittest.mock import AsyncMock
 from typing import List
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
 from vigil.core.database.database import db, Event, Metric
 
 
-class _Probe(CollectorPlugin):
+class _Probe(Plugin):
     def commands(self) -> List[Command]:
         return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         return CollectResult()
+
+    def render_ui(self, context: str = 'page'):
+        pass
 
 
 @pytest.fixture
@@ -73,10 +76,10 @@ class TestLogLineScoping:
 class TestDuplicateIdDetection:
     def _engine(self, tmp_path, plugins):
         from unittest.mock import patch
-        from vigil.core.connectors.engine import VigilEngine
+        from vigil.core.app.main import VigilEngine
         cfg = tmp_path / "c.yaml"
         cfg.write_text("plugins: []\n")
-        with patch("vigil.core.connectors.engine.VigilEngine._connect", create=True):
+        with patch("vigil.core.app.main.VigilEngine._connect", create=True):
             engine = VigilEngine(str(cfg), db_path_override=str(tmp_path / "e.db"))
         engine.plugins = plugins
         return engine

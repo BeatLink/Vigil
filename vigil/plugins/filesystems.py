@@ -1,7 +1,6 @@
 from typing import Dict, Any, List
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 from vigil.plugins.base.plugin_helpers import format_bytes as _format_gb
 
 _EXCLUDE_TYPES = ['tmpfs', 'devtmpfs', 'squashfs', 'overlay', 'proc', 'sysfs',
@@ -61,7 +60,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class FilesystemsCollectorPlugin(CollectorPlugin):
+class Filesystems(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.warning   = int(config.get('warning',   80))
@@ -69,6 +68,12 @@ class FilesystemsCollectorPlugin(CollectorPlugin):
         self.inode_warning   = int(config.get('inode_warning',   85))
         self.inode_threshold = int(config.get('inode_threshold', 95))
         self.readonly_is_failure = bool(config.get('readonly_is_failure', True))
+
+        from vigil.core.ui.spec import register_item_color_rule, register_item_formatter
+        self._color_rule_name = f'filesystems_level_{self.id}'
+        register_item_color_rule(self._color_rule_name)(self._item_color)
+        self._format_fn_name = f'filesystems_text_{self.id}'
+        register_item_formatter(self._format_fn_name)(self._item_text)
 
     def _inode_level_for(self, pct: float) -> str:
         if pct >= self.inode_threshold:
@@ -179,35 +184,6 @@ class FilesystemsCollectorPlugin(CollectorPlugin):
 
         return CollectResult(metrics=metrics, logs=logs, status=overall)
 
-
-class FilesystemsUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.warning   = int(config.get('warning',   80))
-        self.threshold = int(config.get('threshold', 90))
-        self.inode_warning   = int(config.get('inode_warning',   85))
-        self.inode_threshold = int(config.get('inode_threshold', 95))
-
-        from vigil.core.ui.ui.spec import register_item_color_rule, register_item_formatter
-        self._color_rule_name = f'filesystems_level_{self.id}'
-        register_item_color_rule(self._color_rule_name)(self._item_color)
-        self._format_fn_name = f'filesystems_text_{self.id}'
-        register_item_formatter(self._format_fn_name)(self._item_text)
-
-    def _inode_level_for(self, pct: float) -> str:
-        if pct >= self.inode_threshold:
-            return 'failed'
-        if pct >= self.inode_warning:
-            return 'warning'
-        return 'online'
-
-    def _level_for(self, pct: float) -> str:
-        if pct >= self.threshold:
-            return 'failed'
-        if pct >= self.warning:
-            return 'warning'
-        return 'online'
-
     def _item_level(self, item: Dict[str, Any]) -> str:
         level = self._level_for(item.get('used_pct') or 0.0)
         ipct = item.get('inodes_pct')
@@ -257,9 +233,9 @@ class FilesystemsUIPlugin(UIPlugin):
 
     @property
     def _filesystem_count(self) -> str:
-        from vigil.core.ui.ui.components import _scan_metric_family
+        from vigil.core.ui.components import _scan_metric_family
         return str(len(_scan_metric_family(self, 'fs_', '_used_pct', set(), 200)))
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

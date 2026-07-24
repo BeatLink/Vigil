@@ -1,7 +1,7 @@
 import time
 import pytest
 from unittest.mock import AsyncMock
-from vigil.plugins.systemd_service import SystemdCollectorPlugin
+from vigil.plugins.systemd_service import SystemdService
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric, LogLine, flush_writes
 
@@ -62,7 +62,7 @@ def _run(plugin, outputs):
 class TestContinuousMode:
     @pytest.fixture
     def plugin(self, make_plugin):
-        return make_plugin(SystemdCollectorPlugin, CONTINUOUS_CFG)
+        return make_plugin(SystemdService, CONTINUOUS_CFG)
 
     async def test_active_service_is_online(self, plugin):
         _run(plugin, [(0, "active", ""), (0, "log line", "")])
@@ -112,7 +112,7 @@ class TestContinuousMode:
 class TestOneshotMode:
     @pytest.fixture
     def plugin(self, make_plugin):
-        return make_plugin(SystemdCollectorPlugin, ONESHOT_CFG)
+        return make_plugin(SystemdService, ONESHOT_CFG)
 
     async def test_successful_recent_run_is_online(self, plugin):
         _run(plugin, [(0, _oneshot_output("success", "0"), ""), (0, "logs", "")])
@@ -173,22 +173,22 @@ class TestOneshotMode:
 
 class TestMaxAgeParsing:
     def test_max_age_parsed_from_human_string(self, make_plugin):
-        plugin = make_plugin(SystemdCollectorPlugin, {**ONESHOT_CFG, "max_age": "1w"})
+        plugin = make_plugin(SystemdService, {**ONESHOT_CFG, "max_age": "1w"})
         assert plugin.max_age == 604800
 
     def test_max_age_parsed_from_int(self, make_plugin):
-        plugin = make_plugin(SystemdCollectorPlugin, {**ONESHOT_CFG, "max_age": 3600})
+        plugin = make_plugin(SystemdService, {**ONESHOT_CFG, "max_age": 3600})
         assert plugin.max_age == 3600
 
     def test_no_max_age_means_continuous_mode(self, make_plugin):
-        plugin = make_plugin(SystemdCollectorPlugin, CONTINUOUS_CFG)
+        plugin = make_plugin(SystemdService, CONTINUOUS_CFG)
         assert plugin.max_age is None
 
 
 class TestActions:
     @pytest.fixture
     def plugin(self, make_plugin):
-        return make_plugin(SystemdCollectorPlugin, CONTINUOUS_CFG)
+        return make_plugin(SystemdService, CONTINUOUS_CFG)
 
     async def test_restart_success(self, plugin):
         plan = plugin.plan_action("restart_service")

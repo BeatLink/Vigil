@@ -2,9 +2,8 @@ import os
 import shlex
 from typing import Any, Dict, List, Optional, Union
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'count_card', 'reload_card'],
@@ -30,11 +29,15 @@ _LIST_UNIT_FILES_CMD = (
 )
 
 
-class ServiceListCollectorPlugin(CollectorPlugin):
+class ServiceList(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.max_logs = int(config.get('lines', 10))
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
+
+        from vigil.core.ui.spec import register_enabled_predicate
+        self._edit_predicate_name = f'service_list_edit_{self.id}'
+        register_enabled_predicate(self._edit_predicate_name)(lambda p: p.allow_unit_file_edit)
 
     def commands(self) -> List[Command]:
         return [Command(_LIST_UNITS_CMD), Command(_LIST_UNIT_FILES_CMD)]
@@ -175,16 +178,6 @@ class ServiceListCollectorPlugin(CollectorPlugin):
             return CollectResult.failed(f'systemctl {command} failed for {service_name}: {result.stderr}')
         return True
 
-
-class ServiceListUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
-
-        from vigil.core.ui.ui.spec import register_enabled_predicate
-        self._edit_predicate_name = f'service_list_edit_{self.id}'
-        register_enabled_predicate(self._edit_predicate_name)(lambda p: p.allow_unit_file_edit)
-
     @property
     def _service_count_text(self) -> str:
         count_metric = self.storage.latest_metric('services_total')
@@ -265,5 +258,5 @@ class ServiceListUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

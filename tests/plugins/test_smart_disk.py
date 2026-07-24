@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.smart_disk import SmartDiskCollectorPlugin
+from vigil.plugins.smart_disk import SmartDisk
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -16,7 +16,7 @@ SMART_CFG = {
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(SmartDiskCollectorPlugin, SMART_CFG)
+    return make_plugin(SmartDisk, SMART_CFG)
 
 
 def _latest_status(plugin_id: str) -> str | None:

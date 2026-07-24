@@ -3,9 +3,8 @@ import shlex
 import time
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _MARK = "@@VIGIL_FOLDER@@"
 
@@ -45,7 +44,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class SyncthingCollectorPlugin(CollectorPlugin):
+class Syncthing(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8384')
@@ -58,6 +57,23 @@ class SyncthingCollectorPlugin(CollectorPlugin):
         self.api_timeout = int(config.get('api_timeout', 10))
         self._stall_since: Dict[str, float] = {}
         self._cached_folder_ids: List[str] = []
+
+        from vigil.core.ui.spec import register_color_rule, register_item_formatter
+        self._devices_format_name = f'syncthing_devices_{self.id}'
+        register_item_formatter(self._devices_format_name)(self._devices_text)
+        self._need_format_name = f'syncthing_need_{self.id}'
+        register_item_formatter(self._need_format_name)(self._need_text)
+
+        self._devices_color_name = f'syncthing_devices_color_{self.id}'
+        register_item_formatter(self._devices_color_name)(
+            lambda values: None if values.get('devices_disconnected') is None
+            else ('online' if values['devices_disconnected'] == 0 else 'warning'))
+        self._errored_color_name = f'syncthing_errored_color_{self.id}'
+        register_color_rule(self._errored_color_name)(
+            lambda errored: None if errored is None else ('failed' if errored else 'online'))
+        self._stalled_color_name = f'syncthing_stalled_color_{self.id}'
+        register_color_rule(self._stalled_color_name)(
+            lambda stalled: None if stalled is None else ('warning' if stalled else 'online'))
 
     def commands(self) -> List[Command]:
         cmds = [
@@ -202,28 +218,6 @@ class SyncthingCollectorPlugin(CollectorPlugin):
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
         return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
 
-
-class SyncthingUIPlugin(UIPlugin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        from vigil.core.ui.ui.spec import register_color_rule, register_item_formatter
-        self._devices_format_name = f'syncthing_devices_{self.id}'
-        register_item_formatter(self._devices_format_name)(self._devices_text)
-        self._need_format_name = f'syncthing_need_{self.id}'
-        register_item_formatter(self._need_format_name)(self._need_text)
-
-        self._devices_color_name = f'syncthing_devices_color_{self.id}'
-        register_item_formatter(self._devices_color_name)(
-            lambda values: None if values.get('devices_disconnected') is None
-            else ('online' if values['devices_disconnected'] == 0 else 'warning'))
-        self._errored_color_name = f'syncthing_errored_color_{self.id}'
-        register_color_rule(self._errored_color_name)(
-            lambda errored: None if errored is None else ('failed' if errored else 'online'))
-        self._stalled_color_name = f'syncthing_stalled_color_{self.id}'
-        register_color_rule(self._stalled_color_name)(
-            lambda stalled: None if stalled is None else ('warning' if stalled else 'online'))
-
     @staticmethod
     def _need_text(values: Dict[str, Any]) -> str:
         v = values.get('need_bytes')
@@ -257,5 +251,5 @@ class SyncthingUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

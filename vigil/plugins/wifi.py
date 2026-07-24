@@ -1,8 +1,7 @@
 from typing import Dict, Any, List, Optional, Tuple
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 
 def _parse_wireless(stdout: str) -> Dict[str, Tuple[float, float]]:
@@ -38,12 +37,16 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class WifiCollectorPlugin(CollectorPlugin):
+class Wifi(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.interface: Optional[str] = config.get('interface')
         self.quality_warning   = float(config.get('quality_warning',   40))
         self.quality_threshold = float(config.get('quality_threshold', 20))
+
+        from vigil.core.ui.spec import register_color_rule
+        self._quality_color_name = f'wifi_quality_{self.id}'
+        register_color_rule(self._quality_color_name)(self._quality_color)
 
     def _level_for_quality(self, quality: float) -> str:
         if quality <= self.quality_threshold:
@@ -78,18 +81,6 @@ class WifiCollectorPlugin(CollectorPlugin):
             settings={f"wifi:{self.id}:active_interface": iface},
         )
 
-
-class WifiUIPlugin(UIPlugin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.interface: Optional[str] = self.config.get('interface')
-        self.quality_warning   = float(self.config.get('quality_warning',   40))
-        self.quality_threshold = float(self.config.get('quality_threshold', 20))
-
-        from vigil.core.ui.ui.spec import register_color_rule
-        self._quality_color_name = f'wifi_quality_{self.id}'
-        register_color_rule(self._quality_color_name)(self._quality_color)
-
     def _quality_color(self, quality: Optional[float]) -> Optional[str]:
         if quality is None:
             return None
@@ -121,5 +112,5 @@ class WifiUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

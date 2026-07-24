@@ -1,8 +1,7 @@
 from typing import Any, Dict, List
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _COLLECT_CMD = 'echo "LOAD:$(cat /proc/loadavg)"; echo "CPUS:$(nproc)"'
@@ -15,11 +14,18 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class LoadAverageCollectorPlugin(CollectorPlugin):
+class LoadAverage(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.load_warning   = float(config['load_warning'])   if 'load_warning'   in config else None
         self.load_threshold = float(config['load_threshold'])  if 'load_threshold'  in config else None
+
+        self._color_rule_name = None
+        if self.load_warning is not None and self.load_threshold is not None:
+            from vigil.core.ui.spec import register_color_rule, threshold_color
+            self._color_rule_name = f'load_average_threshold_{self.id}'
+            register_color_rule(self._color_rule_name)(
+                threshold_color(warning=self.load_warning, threshold=self.load_threshold))
 
     def commands(self) -> List[Command]:
         return [Command(_COLLECT_CMD)]
@@ -67,20 +73,6 @@ class LoadAverageCollectorPlugin(CollectorPlugin):
             status=overall,
         )
 
-
-class LoadAverageUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.load_warning   = float(config['load_warning'])   if 'load_warning'   in config else None
-        self.load_threshold = float(config['load_threshold']) if 'load_threshold' in config else None
-
-        self._color_rule_name = None
-        if self.load_warning is not None and self.load_threshold is not None:
-            from vigil.core.ui.ui.spec import register_color_rule, threshold_color
-            self._color_rule_name = f'load_average_threshold_{self.id}'
-            register_color_rule(self._color_rule_name)(
-                threshold_color(warning=self.load_warning, threshold=self.load_threshold))
-
     @property
     def UI_SPEC(self):
         load_1m_card = {'metric': 'load_pct_1m', 'title': 'LOAD 1M', 'format': 'percent0_plain_dash'}
@@ -98,5 +90,5 @@ class LoadAverageUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

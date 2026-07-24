@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.diskio import DiskIoCollectorPlugin, _parse_diskstats, _is_physical, _auto_detect_device, _format_rate
+from vigil.plugins.diskio import DiskIo, _parse_diskstats, _is_physical, _auto_detect_device, _format_rate
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -27,12 +27,12 @@ def _two_snaps(d1: dict, d2: dict) -> str:
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(DiskIoCollectorPlugin, BASE_CFG)
+    return make_plugin(DiskIo, BASE_CFG)
 
 
 @pytest.fixture
 def explicit_plugin(make_plugin):
-    return make_plugin(DiskIoCollectorPlugin, {**BASE_CFG, "name": "test-diskio-x", "id": "test-diskio-x", "device": "sda"})
+    return make_plugin(DiskIo, {**BASE_CFG, "name": "test-diskio-x", "id": "test-diskio-x", "device": "sda"})
 
 
 def _latest_status(plugin_id: str = "test-diskio"):

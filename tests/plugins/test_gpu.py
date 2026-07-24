@@ -1,7 +1,7 @@
 import pytest
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.gpu import GpuCollectorPlugin
+from vigil.plugins.gpu import Gpu
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -26,7 +26,7 @@ def _make_output(rows):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(GpuCollectorPlugin, BASE_CFG)
+    return make_plugin(Gpu, BASE_CFG)
 
 
 def _latest_status(pid="test-gpu"):

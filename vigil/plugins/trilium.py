@@ -3,9 +3,8 @@ import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 
 def _build_fetch_script(api_url: str, timeout: int, token_command: Optional[str],
@@ -63,7 +62,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class TriliumCollectorPlugin(CollectorPlugin):
+class Trilium(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8080')
@@ -71,6 +70,15 @@ class TriliumCollectorPlugin(CollectorPlugin):
         self.token_command = config.get('token_command')
         self.stale_warning = float(config.get('stale_warning', 72))
         self.api_timeout = int(config.get('api_timeout', 10))
+
+        from vigil.core.ui.spec import register_color_rule
+        self._color_rule_name = f'trilium_stale_{self.id}'
+
+        @register_color_rule(self._color_rule_name)
+        def _lastmod_color(v, _stale_warning=self.stale_warning):
+            if v is None:
+                return None
+            return 'warning' if v >= _stale_warning else 'online'
 
     def commands(self) -> List[Command]:
         script = _build_fetch_script(
@@ -122,21 +130,6 @@ class TriliumCollectorPlugin(CollectorPlugin):
         log_level = "WARNING" if level == 'warning' else "INFO"
         return CollectResult(metrics=metrics, logs=[(message, log_level)], status=level)
 
-
-class TriliumUIPlugin(UIPlugin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.stale_warning = float(self.config.get('stale_warning', 72))
-
-        from vigil.core.ui.ui.spec import register_color_rule
-        self._color_rule_name = f'trilium_stale_{self.id}'
-
-        @register_color_rule(self._color_rule_name)
-        def _lastmod_color(v, _stale_warning=self.stale_warning):
-            if v is None:
-                return None
-            return 'warning' if v >= _stale_warning else 'online'
-
     @property
     def UI_SPEC(self):
         return {
@@ -153,11 +146,11 @@ class TriliumUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_formatter
+from vigil.core.ui.spec import register_formatter
 
 
 @register_formatter('trilium_age_ago')

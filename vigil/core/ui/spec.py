@@ -170,12 +170,12 @@ def _dialog_spec_for(plugin: Any, dialog_name: str) -> Optional[Dict[str, Any]]:
 def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, Any]] = None,
                    page=None, start: bool = True):
     from nicegui import ui
-    from vigil.core.ui.ui.layout import PluginLayout, make_inline_layout
-    from vigil.core.ui.ui.components import (
+    from vigil.core.ui.layout import PluginLayout, make_inline_layout
+    from vigil.core.ui.components import (
         info_card, history_chart, render_repeat_card, render_table_with_actions,
         render_buttons, render_job_panel,
     )
-    from vigil.core.ui.ui.theme import STATUS_COLORS
+    from vigil.core.ui.theme import STATUS_COLORS
 
     spec = spec if spec is not None else getattr(plugin, 'UI_SPEC', None)
     if spec is None:

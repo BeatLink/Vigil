@@ -2,9 +2,8 @@ import json
 import shlex
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 
 def _build_fetch_script(api_url: str, timeout: int, api_key_command: Optional[str],
@@ -39,7 +38,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class BlockurlCollectorPlugin(CollectorPlugin):
+class Blockurl(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:9001')
@@ -48,6 +47,15 @@ class BlockurlCollectorPlugin(CollectorPlugin):
             'api_key_command', 'cut -d= -f2- /run/secrets/blockurl_api_key')
         self.min_domains = int(config.get('min_domains', 1))
         self.api_timeout = int(config.get('api_timeout', 10))
+
+        from vigil.core.ui.spec import register_color_rule
+        self._color_rule_name = f'blockurl_min_domains_{self.id}'
+
+        @register_color_rule(self._color_rule_name)
+        def _domains_color(v, _min_domains=self.min_domains):
+            if v is None:
+                return None
+            return 'warning' if v < _min_domains else 'online'
 
     def commands(self) -> List[Command]:
         script = _build_fetch_script(
@@ -87,21 +95,6 @@ class BlockurlCollectorPlugin(CollectorPlugin):
             status='online',
         )
 
-
-class BlockurlUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.min_domains = int(config.get('min_domains', 1))
-
-        from vigil.core.ui.ui.spec import register_color_rule
-        self._color_rule_name = f'blockurl_min_domains_{self.id}'
-
-        @register_color_rule(self._color_rule_name)
-        def _domains_color(v, _min_domains=self.min_domains):
-            if v is None:
-                return None
-            return 'warning' if v < _min_domains else 'online'
-
     @property
     def UI_SPEC(self):
         return {
@@ -118,5 +111,5 @@ class BlockurlUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

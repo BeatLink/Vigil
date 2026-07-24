@@ -1,18 +1,25 @@
 import pytest
-from unittest.mock import MagicMock
+from typing import List
 
-from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.plugins.base.plugin_base import Plugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
 
 
-class _ProbeUIPlugin(UIPlugin):
+class _Probe(Plugin):
+    def commands(self) -> List[Command]:
+        return []
+
+    def parse(self, results: List[CmdResult]) -> CollectResult:
+        return CollectResult()
+
     def render_ui(self, context: str = 'page'):
         pass
 
 
 @pytest.fixture
-def plugin(db_manager):
-    cfg = {"name": "probe", "id": "probe", "target_host": "host1"}
-    return _ProbeUIPlugin("probe", cfg, db_manager, collector_client=MagicMock())
+def plugin(make_plugin):
+    return make_plugin(_Probe, {"name": "probe", "id": "probe",
+                                         "ssh_config": {"host": "host1"}})
 
 
 class TestLatestSnapshot:

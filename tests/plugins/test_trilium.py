@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from vigil.plugins.trilium import TriliumCollectorPlugin, _age_hours, _parse_response
+from vigil.plugins.trilium import Trilium, _age_hours, _parse_response
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -35,7 +35,7 @@ def _response(hours_ago=1.0, total_notes=5000):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(TriliumCollectorPlugin, BASE_CFG)
+    return make_plugin(Trilium, BASE_CFG)
 
 
 def _run(plugin, run_cycle, hours_ago=1.0, total_notes=5000):

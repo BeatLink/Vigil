@@ -1,7 +1,7 @@
 import pytest
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.memory_usage import MemoryUsageCollectorPlugin, _level_for, _fmt_gb
+from vigil.plugins.memory_usage import MemoryUsage, _level_for, _fmt_gb
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -26,7 +26,7 @@ def _make_output(total_kb, avail_kb):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(MemoryUsageCollectorPlugin, BASE_CFG)
+    return make_plugin(MemoryUsage, BASE_CFG)
 
 
 def _latest_status(plugin_id: str = "test-memory") -> str | None:
@@ -109,7 +109,7 @@ class TestMemoryUsageCollection:
     async def test_custom_thresholds_respected(self, make_plugin, run_cycle):
         cfg = {**BASE_CFG, "name": "test-mem-custom", "id": "test-mem-custom",
                "memory_warning": 40, "memory_threshold": 50}
-        p = make_plugin(MemoryUsageCollectorPlugin, cfg)
+        p = make_plugin(MemoryUsage, cfg)
         run_cycle(p, lambda c: CmdResult(0, _make_output(_MEM_TOTAL_KB, _MEM_AVAIL_50), ""))
         assert _latest_status("test-mem-custom") == "failed"
 

@@ -1,8 +1,13 @@
+import hmac
 from typing import Any, Optional
 
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from vigil.core.connectors.exporters import prometheus
+
+
+def _tokens_match(given: str, expected: str) -> bool:
+    return hmac.compare_digest(given, expected)
 
 
 def _flatten(plugins):
@@ -66,15 +71,17 @@ def register_api(app: Any, engine: Any) -> None:
         return PlainTextResponse(prometheus.render(db),
                                  media_type='text/plain; version=0.0.4; charset=utf-8')
 
-    async def _handle_push(monitor_id: str, token: str, status: str, msg: Optional[str],
-                           value: Optional[float]):
-        http_status, body = await engine.collector_client.push(
-            monitor_id, token, status=status, msg=msg, value=value,
-        )
-        return JSONResponse(body, status_code=http_status)
-
     @app.get('/api/push/{monitor_id}/{token}')
     @app.post('/api/push/{monitor_id}/{token}')
-    async def push(monitor_id: str, token: str, status: str = 'up',
-                   msg: Optional[str] = None, value: Optional[float] = None):
-        return await _handle_push(monitor_id, token, status, msg, value)
+    def push(monitor_id: str, token: str, status: str = 'up',
+             msg: Optional[str] = None, value: Optional[float] = None):
+        from vigil.plugins.push import Push
+        plugin = next((p for p in _flatten(engine.plugins) if p.id == monitor_id), None)
+        if plugin is None or not isinstance(plugin, Push):
+            return JSONResponse({'error': 'not found'}, status_code=404)
+        if not plugin.token or not _tokens_match(token, plugin.token):
+            return JSONResponse({'error': 'invalid token'}, status_code=401)
+        if status not in ('up', 'down'):
+            return JSONResponse({'error': "status must be 'up' or 'down'"}, status_code=400)
+        ok = plugin.record_push(status=status, msg=msg, value=value)
+        return JSONResponse({'success': ok})

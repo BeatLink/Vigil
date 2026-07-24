@@ -5,7 +5,7 @@ from datetime import datetime
 import pytest
 from unittest.mock import AsyncMock
 
-from vigil.plugins.borg import BorgCollectorPlugin
+from vigil.plugins.borg import Borg
 from vigil.core.connectors.orchestration.types import CmdResult, JobPlan
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -47,7 +47,7 @@ def _list_json(epoch=None) -> str:
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(BorgCollectorPlugin, BASE_CFG)
+    return make_plugin(Borg, BASE_CFG)
 
 
 def _collect(plugin, run_cycle, list_result, info_result=None):
@@ -112,7 +112,7 @@ class TestLogging:
         assert names == ["archive-1", "archive-2", "archive-0"]
 
     async def test_logs_command_with_passphrase_redacted(self, make_plugin, run_cycle):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "passphrase": "s3cret"})
+        p = make_plugin(Borg, {**BASE_CFG, "passphrase": "s3cret"})
         now = int(time.time())
         result = _collect(p, run_cycle, CmdResult(0, _multi_json(now - 3600), ""))
         messages = " | ".join(m for m, _ in result.logs)
@@ -153,7 +153,7 @@ class TestFailures:
 
     async def test_missing_repo_config_is_failed(self, make_plugin, run_cycle):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "repo"}
-        p = make_plugin(BorgCollectorPlugin, cfg)
+        p = make_plugin(Borg, cfg)
         assert p.commands() == []
         run_cycle(p)
         assert _latest_status("test-borg") == "failed"
@@ -173,11 +173,11 @@ class TestMetrics:
 class TestCommand:
     def test_default_max_age_is_one_day(self, make_plugin):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "max_age"}
-        p = make_plugin(BorgCollectorPlugin, cfg)
+        p = make_plugin(Borg, cfg)
         assert p.max_age == 86400
 
     def test_command_queries_newest_archive_as_json(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, BASE_CFG)
+        p = make_plugin(Borg, BASE_CFG)
         cmd = p._list_command()
         assert "borg list" in cmd
         assert "--last 10" in cmd
@@ -185,22 +185,22 @@ class TestCommand:
         assert "ssh://borg@host/srv/repo" in cmd
 
     def test_command_bypasses_lock(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, BASE_CFG)
+        p = make_plugin(Borg, BASE_CFG)
         assert "--bypass-lock" in p._list_command()
 
     def test_command_sets_writable_borg_base_dir(self, make_plugin):
-        cmd = make_plugin(BorgCollectorPlugin, BASE_CFG)._list_command()
+        cmd = make_plugin(Borg, BASE_CFG)._list_command()
         assert "BORG_BASE_DIR=" in cmd
         assert "$(mktemp -d)" in cmd
 
     def test_passphrase_passed_as_env_not_argv(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "passphrase": "s3cret"})
+        p = make_plugin(Borg, {**BASE_CFG, "passphrase": "s3cret"})
         cmd = p._list_command()
         assert cmd.startswith("BORG_PASSPHRASE=")
         assert cmd.index("BORG_PASSPHRASE=") < cmd.index("borg list")
 
     def test_passphrase_command_uses_passcommand(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "passphrase_command": "cat /run/secret"})
+        p = make_plugin(Borg, {**BASE_CFG, "passphrase_command": "cat /run/secret"})
         cmd = p._list_command()
         assert "BORG_PASSCOMMAND=" in cmd
         assert "BORG_PASSPHRASE=" not in cmd
@@ -208,7 +208,7 @@ class TestCommand:
     def test_passphrase_file_inlined_as_passphrase(self, make_plugin, tmp_path):
         pf = tmp_path / "borg.pass"
         pf.write_text("s3cret-from-file\n")
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "passphrase_file": str(pf)})
+        p = make_plugin(Borg, {**BASE_CFG, "passphrase_file": str(pf)})
         cmd = p._list_command()
         assert "BORG_PASSPHRASE=s3cret-from-file" in cmd
         assert "BORG_PASSCOMMAND=" not in cmd
@@ -217,7 +217,7 @@ class TestCommand:
     def test_passphrase_beats_passphrase_file(self, make_plugin, tmp_path):
         pf = tmp_path / "borg.pass"
         pf.write_text("from-file")
-        p = make_plugin(BorgCollectorPlugin, {
+        p = make_plugin(Borg, {
             **BASE_CFG, "passphrase": "inline-wins", "passphrase_file": str(pf),
         })
         cmd = p._list_command()
@@ -225,27 +225,27 @@ class TestCommand:
         assert "from-file" not in cmd
 
     def test_missing_passphrase_file_omits_env(self, make_plugin, tmp_path):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "passphrase_file": str(tmp_path / "nope")})
+        p = make_plugin(Borg, {**BASE_CFG, "passphrase_file": str(tmp_path / "nope")})
         cmd = p._list_command()
         assert "BORG_PASSPHRASE=" not in cmd
         assert "BORG_PASSCOMMAND=" not in cmd
 
     def test_no_passphrase_omits_env(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, BASE_CFG)
+        p = make_plugin(Borg, BASE_CFG)
         cmd = p._list_command()
         assert "BORG_PASSPHRASE=" not in cmd
         assert "BORG_PASSCOMMAND=" not in cmd
 
     def test_list_archives_configurable(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "list_archives": 3})
+        p = make_plugin(Borg, {**BASE_CFG, "list_archives": 3})
         assert "--last 3" in p._list_command()
 
     def test_list_archives_clamped_to_at_least_one(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "list_archives": 0})
+        p = make_plugin(Borg, {**BASE_CFG, "list_archives": 0})
         assert "--last 1" in p._list_command()
 
     def test_ssh_key_sets_borg_rsh(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "ssh_key": "/run/secrets/vigil_ssh_key"})
+        p = make_plugin(Borg, {**BASE_CFG, "ssh_key": "/run/secrets/vigil_ssh_key"})
         cmd = p._list_command()
         assert "BORG_RSH=" in cmd
         assert "/run/secrets/vigil_ssh_key" in cmd
@@ -253,13 +253,13 @@ class TestCommand:
         assert "BatchMode=yes" in cmd
 
     def test_ssh_key_applies_to_backup_too(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {
+        p = make_plugin(Borg, {
             **BASE_CFG, "source_paths": ["/home"], "ssh_key": "/run/secrets/k",
         })
         assert "BORG_RSH=" in p._backup_command()
 
     def test_rsh_overrides_ssh_key(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {
+        p = make_plugin(Borg, {
             **BASE_CFG, "ssh_key": "/run/secrets/k", "rsh": "ssh -J jump.host",
         })
         cmd = p._list_command()
@@ -267,37 +267,37 @@ class TestCommand:
         assert "/run/secrets/k" not in cmd
 
     def test_no_borg_rsh_without_key(self, make_plugin):
-        assert "BORG_RSH=" not in make_plugin(BorgCollectorPlugin, BASE_CFG)._list_command()
+        assert "BORG_RSH=" not in make_plugin(Borg, BASE_CFG)._list_command()
 
     def test_borg_defaults_to_a_longer_timeout(self, make_plugin):
         from vigil.core.connectors.ssh_runner import TIMEOUT
-        p = make_plugin(BorgCollectorPlugin, BASE_CFG)
-        assert p.timeout == BorgCollectorPlugin.DEFAULT_TIMEOUT
+        p = make_plugin(Borg, BASE_CFG)
+        assert p.timeout == Borg.DEFAULT_TIMEOUT
         assert p.timeout > TIMEOUT
 
     def test_borg_timeout_is_overridable(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "timeout": "10m"})
+        p = make_plugin(Borg, {**BASE_CFG, "timeout": "10m"})
         assert p.timeout == 600
 
     def test_no_sudo_by_default(self, make_plugin):
-        assert "sudo" not in make_plugin(BorgCollectorPlugin, BASE_CFG)._list_command()
+        assert "sudo" not in make_plugin(Borg, BASE_CFG)._list_command()
 
     def test_require_sudo_prefixes_command(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "require_sudo": True})
+        p = make_plugin(Borg, {**BASE_CFG, "require_sudo": True})
         cmd = p._list_command()
         assert cmd.startswith("sudo -n ")
 
     def test_require_sudo_keeps_env_after_sudo(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "require_sudo": True, "passphrase": "s3cret"})
+        p = make_plugin(Borg, {**BASE_CFG, "require_sudo": True, "passphrase": "s3cret"})
         cmd = p._list_command()
         assert cmd.index("sudo") < cmd.index("BORG_PASSPHRASE=") < cmd.index("borg list")
 
     def test_local_path_repo_supported(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "repo": "/mnt/backups/repo"})
+        p = make_plugin(Borg, {**BASE_CFG, "repo": "/mnt/backups/repo"})
         assert "/mnt/backups/repo" in p._list_command()
 
     def test_custom_borg_bin_and_lock_wait(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "borg_bin": "/opt/borg", "lock_wait": 30})
+        p = make_plugin(Borg, {**BASE_CFG, "borg_bin": "/opt/borg", "lock_wait": 30})
         cmd = p._list_command()
         assert "/opt/borg list" in cmd
         assert "--lock-wait 30" in cmd
@@ -308,7 +308,7 @@ class TestActions:
         assert plugin.get_actions() == []
 
     async def test_backup_actions_exposed_with_source_paths(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "source_paths": ["/home"]})
+        p = make_plugin(Borg, {**BASE_CFG, "source_paths": ["/home"]})
         ids = {a['action_id'] for a in p.get_actions()}
         assert ids == {"run_backup", "dry_run_backup"}
 
@@ -326,102 +326,102 @@ BACKUP_CFG = {**BASE_CFG, "source_paths": ["/home", "/etc"]}
 
 class TestBackupCommand:
     def test_includes_sources_and_repo_archive(self, make_plugin):
-        cmd = make_plugin(BorgCollectorPlugin, BACKUP_CFG)._backup_command()
+        cmd = make_plugin(Borg, BACKUP_CFG)._backup_command()
         assert "borg create" in cmd
         assert "/home" in cmd and "/etc" in cmd
         assert "ssh://borg@host/srv/repo::" in cmd
 
     def test_archive_name_uses_prefix_and_is_sortable(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "archive_prefix": "nightly"})
+        p = make_plugin(Borg, {**BACKUP_CFG, "archive_prefix": "nightly"})
         name = p.default_archive_name()
         assert name.startswith("nightly-")
         assert re.match(r"nightly-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$", name)
 
     def test_archive_prefix_defaults_to_monitor_name(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, BACKUP_CFG)
+        p = make_plugin(Borg, BACKUP_CFG)
         assert p.default_archive_name().startswith("test-borg-")
 
     def test_excludes_are_passed(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "exclude": ["/home/*/.cache", "*.tmp"]})
+        p = make_plugin(Borg, {**BACKUP_CFG, "exclude": ["/home/*/.cache", "*.tmp"]})
         cmd = p._backup_command()
         assert cmd.count("--exclude ") >= 2
         assert "/home/*/.cache" in cmd
         assert "*.tmp" in cmd
 
     def test_exclude_accepts_bare_string(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "exclude": "/tmp"})
+        p = make_plugin(Borg, {**BACKUP_CFG, "exclude": "/tmp"})
         assert p.exclude == ["/tmp"]
         assert "/tmp" in p._backup_command()
 
     def test_source_paths_accepts_bare_string(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "source_paths": "/home"})
+        p = make_plugin(Borg, {**BASE_CFG, "source_paths": "/home"})
         assert p.source_paths == ["/home"]
 
     def test_exclude_from_file_passed(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "exclude_from": "/etc/borg.excludes"})
+        p = make_plugin(Borg, {**BACKUP_CFG, "exclude_from": "/etc/borg.excludes"})
         assert "--exclude-from /etc/borg.excludes" in p._backup_command()
 
     def test_exclude_if_present_markers(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "exclude_if_present": [".nobackup"]})
+        p = make_plugin(Borg, {**BACKUP_CFG, "exclude_if_present": [".nobackup"]})
         assert "--exclude-if-present .nobackup" in p._backup_command()
 
     def test_one_file_system_on_by_default(self, make_plugin):
-        assert "--one-file-system" in make_plugin(BorgCollectorPlugin, BACKUP_CFG)._backup_command()
+        assert "--one-file-system" in make_plugin(Borg, BACKUP_CFG)._backup_command()
 
     def test_one_file_system_can_be_disabled(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "one_file_system": False})
+        p = make_plugin(Borg, {**BACKUP_CFG, "one_file_system": False})
         assert "--one-file-system" not in p._backup_command()
 
     def test_exclude_caches_on_by_default(self, make_plugin):
-        assert "--exclude-caches" in make_plugin(BorgCollectorPlugin, BACKUP_CFG)._backup_command()
+        assert "--exclude-caches" in make_plugin(Borg, BACKUP_CFG)._backup_command()
 
     def test_compression_configurable(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "compression": "zstd,10"})
+        p = make_plugin(Borg, {**BACKUP_CFG, "compression": "zstd,10"})
         assert "--compression zstd,10" in p._backup_command()
 
     def test_default_compression_is_zstd(self, make_plugin):
-        assert "--compression zstd" in make_plugin(BorgCollectorPlugin, BACKUP_CFG)._backup_command()
+        assert "--compression zstd" in make_plugin(Borg, BACKUP_CFG)._backup_command()
 
     def test_backup_uses_persistent_cache_dir(self, make_plugin):
-        cmd = make_plugin(BorgCollectorPlugin, BACKUP_CFG)._backup_command()
+        cmd = make_plugin(Borg, BACKUP_CFG)._backup_command()
         assert "BORG_BASE_DIR=/var/cache/vigil-borg" in cmd
         assert "mktemp" not in cmd
 
     def test_cache_dir_configurable(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "cache_dir": "/srv/borgcache"})
+        p = make_plugin(Borg, {**BACKUP_CFG, "cache_dir": "/srv/borgcache"})
         assert "BORG_BASE_DIR=/srv/borgcache" in p._backup_command()
 
     def test_poll_still_uses_throwaway_base_dir(self, make_plugin):
-        assert "$(mktemp -d)" in make_plugin(BorgCollectorPlugin, BACKUP_CFG)._list_command()
+        assert "$(mktemp -d)" in make_plugin(Borg, BACKUP_CFG)._list_command()
 
     def test_backup_uses_long_lock_wait(self, make_plugin):
-        assert "--lock-wait 600" in make_plugin(BorgCollectorPlugin, BACKUP_CFG)._backup_command()
+        assert "--lock-wait 600" in make_plugin(Borg, BACKUP_CFG)._backup_command()
 
     def test_backup_lock_wait_configurable(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "backup_lock_wait": 30})
+        p = make_plugin(Borg, {**BACKUP_CFG, "backup_lock_wait": 30})
         assert "--lock-wait 30" in p._backup_command()
 
     def test_backup_emits_structured_progress(self, make_plugin):
-        cmd = make_plugin(BorgCollectorPlugin, BACKUP_CFG)._backup_command()
+        cmd = make_plugin(Borg, BACKUP_CFG)._backup_command()
         assert "--log-json" in cmd
         assert "--progress" in cmd
 
     def test_dry_run_omits_stats_and_adds_flag(self, make_plugin):
-        cmd = make_plugin(BorgCollectorPlugin, BACKUP_CFG)._backup_command(dry_run=True)
+        cmd = make_plugin(Borg, BACKUP_CFG)._backup_command(dry_run=True)
         assert "--dry-run" in cmd
         assert "--stats" not in cmd
 
     def test_real_backup_includes_stats(self, make_plugin):
-        cmd = make_plugin(BorgCollectorPlugin, BACKUP_CFG)._backup_command(dry_run=False)
+        cmd = make_plugin(Borg, BACKUP_CFG)._backup_command(dry_run=False)
         assert "--stats" in cmd
         assert "--dry-run" not in cmd
 
     def test_passphrase_inlined_for_backup(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "passphrase": "s3cret"})
+        p = make_plugin(Borg, {**BACKUP_CFG, "passphrase": "s3cret"})
         assert "BORG_PASSPHRASE=s3cret" in p._backup_command()
 
     def test_backup_honours_require_sudo(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BACKUP_CFG, "require_sudo": True})
+        p = make_plugin(Borg, {**BACKUP_CFG, "require_sudo": True})
         assert p._backup_command().startswith("sudo -n ")
 
 
@@ -436,7 +436,7 @@ def _streaming(lines, status=0, error=""):
 
 @pytest.fixture
 def backup_plugin(make_plugin):
-    return make_plugin(BorgCollectorPlugin, BACKUP_CFG)
+    return make_plugin(Borg, BACKUP_CFG)
 
 
 async def _run_backup(plugin, engine_dispatch_action, action_id="run_backup"):
@@ -576,7 +576,7 @@ def _info_json(total=1000, csize=500, unique=250) -> str:
 
 class TestRepoStats:
     async def test_info_command_requests_json(self, make_plugin):
-        cmd = make_plugin(BorgCollectorPlugin, BASE_CFG)._info_command()
+        cmd = make_plugin(Borg, BASE_CFG)._info_command()
         assert "borg info" in cmd
         assert "--json" in cmd
 
@@ -594,7 +594,7 @@ class TestRepoStats:
         assert _latest_metric("test-borg", "dedup_ratio") == pytest.approx(4.0)
 
     async def test_stats_disabled_skips_info_call(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "collect_stats": False})
+        p = make_plugin(Borg, {**BASE_CFG, "collect_stats": False})
         assert len(p.commands()) == 1
 
     async def test_info_failure_does_not_fail_the_monitor(self, plugin, run_cycle):
@@ -634,7 +634,7 @@ class TestEventLogging:
 
 class TestArchiveCache:
     async def test_archives_cached_for_ui(self, make_plugin, run_cycle):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "collect_stats": False})
+        p = make_plugin(Borg, {**BASE_CFG, "collect_stats": False})
         now = int(time.time())
         run_cycle(p, lambda c: CmdResult(0, _multi_json(now - 3600, now - 7200), ""))
 
@@ -665,7 +665,7 @@ class TestArchiveCache:
         assert first["nfiles"] == pytest.approx(42)
 
     async def test_info_command_requests_per_archive_stats(self, make_plugin):
-        p = make_plugin(BorgCollectorPlugin, {**BASE_CFG, "list_archives": 5})
+        p = make_plugin(Borg, {**BASE_CFG, "list_archives": 5})
         assert "--last 5" in p._info_command()
 
     async def test_archives_without_stats_keep_names(self, plugin, run_cycle):

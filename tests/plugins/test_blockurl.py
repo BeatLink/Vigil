@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from vigil.plugins.blockurl import BlockurlCollectorPlugin, _parse_response
+from vigil.plugins.blockurl import Blockurl, _parse_response
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -20,7 +20,7 @@ _DOMAINS = [["example.com", 5], ["other.com", 3]]
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(BlockurlCollectorPlugin, BASE_CFG)
+    return make_plugin(Blockurl, BASE_CFG)
 
 
 def _result(domains=None):

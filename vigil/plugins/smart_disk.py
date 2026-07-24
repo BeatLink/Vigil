@@ -1,8 +1,7 @@
 from typing import Any, Dict, List
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _SMART_SCRIPT = (
     "command -v smartctl >/dev/null 2>&1 || { echo 'ERROR smartctl not found'; exit 1; }; "
@@ -27,10 +26,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class SmartDiskCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
-
+class SmartDisk(Plugin):
     def commands(self) -> List[Command]:
         return [Command(_SMART_SCRIPT)]
 
@@ -65,8 +61,6 @@ class SmartDiskCollectorPlugin(CollectorPlugin):
             status='failed' if failed > 0 else 'online',
         )
 
-
-class SmartDiskUIPlugin(UIPlugin):
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -84,11 +78,11 @@ class SmartDiskUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_color_rule
+from vigil.core.ui.spec import register_color_rule
 
 
 @register_color_rule('smart_disk_always_online')

@@ -1,3 +1,4 @@
+import json
 from typing import Any, Optional
 
 from vigil.core.connectors.orchestration.types import CollectResult
@@ -24,13 +25,19 @@ class StorageOrchestrator:
             self._db.set_setting(key, value)
 
     def latest_metric(self, metric_name: str):
-        from vigil.core.database.database import Metric
-        return (
-            Metric.select()
-            .where((Metric.collector == self._plugin_id) & (Metric.metric_name == metric_name))
-            .order_by(Metric.timestamp.desc())
-            .first()
-        )
+        """1s-TTL cached read — shared by polling logic (freshness within a
+        single interval is irrelevant) and dashboard re-render ticks (where
+        the cache avoids re-querying SQLite on every timer firing)."""
+        return self._db.latest_metric_cached(self._plugin_id, metric_name)
+
+    def latest_snapshot(self, default: Any = None) -> Any:
+        raw = self._db.get_snapshot(self._plugin_id)
+        if raw is None:
+            return default
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return default
 
     def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
         return self._db.get_setting(key, default)

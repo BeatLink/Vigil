@@ -1,9 +1,8 @@
 import json
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _QUALITY_ORDER = {'unusable': 0, 'poor': 1, 'fair': 2, 'excellent': 3}
 
@@ -31,7 +30,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class FrigateCollectorPlugin(CollectorPlugin):
+class Frigate(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:5000')
@@ -126,30 +125,6 @@ class FrigateCollectorPlugin(CollectorPlugin):
             status=level,
         )
 
-
-from vigil.core.ui.ui.spec import generic_render, register_formatter, register_color_rule
-
-_RANK_TO_LABEL = {0: 'UNUSABLE', 1: 'POOR', 2: 'FAIR', 3: 'EXCELLENT'}
-
-
-@register_formatter('frigate_quality_rank')
-def _quality_text(v):
-    return '--' if v is None else _RANK_TO_LABEL.get(int(v), 'UNKNOWN')
-
-
-@register_color_rule('frigate_quality_rank_color')
-def _quality_rank_color(v):
-    if v is None:
-        return None
-    rank = int(v)
-    if rank == 0:
-        return 'failed'
-    if rank == 1:
-        return 'warning'
-    return 'online'
-
-
-class FrigateUIPlugin(UIPlugin):
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -178,3 +153,25 @@ class FrigateUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         generic_render(self, context)
+
+
+from vigil.core.ui.spec import generic_render, register_formatter, register_color_rule
+
+_RANK_TO_LABEL = {0: 'UNUSABLE', 1: 'POOR', 2: 'FAIR', 3: 'EXCELLENT'}
+
+
+@register_formatter('frigate_quality_rank')
+def _quality_text(v):
+    return '--' if v is None else _RANK_TO_LABEL.get(int(v), 'UNKNOWN')
+
+
+@register_color_rule('frigate_quality_rank_color')
+def _quality_rank_color(v):
+    if v is None:
+        return None
+    rank = int(v)
+    if rank == 0:
+        return 'failed'
+    if rank == 1:
+        return 'warning'
+    return 'online'

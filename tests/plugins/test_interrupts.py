@@ -1,7 +1,7 @@
 import pytest
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.interrupts import InterruptsCollectorPlugin, _extract_counter
+from vigil.plugins.interrupts import Interrupts, _extract_counter
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -27,7 +27,7 @@ def _two_snaps(s1: str, s2: str) -> str:
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(InterruptsCollectorPlugin, BASE_CFG)
+    return make_plugin(Interrupts, BASE_CFG)
 
 
 def _latest_status(plugin_id: str = "test-irq"):
@@ -66,13 +66,13 @@ class TestInterruptsCollection:
         assert _latest_metric("test-irq", "ctxt_per_sec") == pytest.approx(2000.0)
 
     async def test_warning_threshold(self, make_plugin, run_cycle):
-        p = make_plugin(InterruptsCollectorPlugin, {**BASE_CFG, "irq_warning": 100, "irq_threshold": 10000})
+        p = make_plugin(Interrupts, {**BASE_CFG, "irq_warning": 100, "irq_threshold": 10000})
         stdout = _two_snaps(_make_stat(0, 0), _make_stat(500, 0))
         run_cycle(p, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "warning"
 
     async def test_failed_threshold(self, make_plugin, run_cycle):
-        p = make_plugin(InterruptsCollectorPlugin, {**BASE_CFG, "irq_warning": 100, "irq_threshold": 1000})
+        p = make_plugin(Interrupts, {**BASE_CFG, "irq_warning": 100, "irq_threshold": 1000})
         stdout = _two_snaps(_make_stat(0, 0), _make_stat(5000, 0))
         run_cycle(p, lambda c: CmdResult(0, stdout, ""))
         assert _latest_status() == "failed"

@@ -3,7 +3,7 @@ import json
 import pytest
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.frigate import FrigateCollectorPlugin, _build_fetch_script, _parse_response
+from vigil.plugins.frigate import Frigate, _build_fetch_script, _parse_response
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -32,7 +32,7 @@ def _stats(cameras=None, detectors=None):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(FrigateCollectorPlugin, BASE_CFG)
+    return make_plugin(Frigate, BASE_CFG)
 
 
 def _result(stats=None):
@@ -108,7 +108,7 @@ class TestFrigateCollection:
         assert _latest_status() == "failed"
 
     async def test_camera_filter_excludes_others(self, make_plugin, run_cycle):
-        p = make_plugin(FrigateCollectorPlugin, {**BASE_CFG, "cameras": ["only_this"]})
+        p = make_plugin(Frigate, {**BASE_CFG, "cameras": ["only_this"]})
         run_cycle(p, lambda c: _result(_stats(cameras={
             "only_this": {"camera_fps": 5.0, "connection_quality": "excellent",
                          "stalls_last_hour": 0, "reconnects_last_hour": 0},
@@ -118,7 +118,7 @@ class TestFrigateCollection:
         assert _latest_status("test-frigate") == "online"
 
     async def test_no_matching_cameras_sets_warning(self, make_plugin, run_cycle):
-        p = make_plugin(FrigateCollectorPlugin, {**BASE_CFG, "cameras": ["nonexistent"]})
+        p = make_plugin(Frigate, {**BASE_CFG, "cameras": ["nonexistent"]})
         run_cycle(p, lambda c: _result())
         assert _latest_status("test-frigate") == "warning"
 

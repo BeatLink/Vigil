@@ -71,7 +71,7 @@ def make_plugin(db_manager):
 
 @pytest.fixture
 def run_cycle():
-    """Drives a CollectorPlugin's commands()/parse() through a fake command
+    """Drives a Plugin's commands()/parse() through a fake command
     runner and applies the result via StorageOrchestrator, mirroring
     VigilEngine._run_cycle without needing a real NetworkOrchestrator/event
     loop scheduler. commands()/parse() are pure/synchronous, so no awaiting

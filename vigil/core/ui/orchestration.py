@@ -1,32 +1,10 @@
-import json
 from functools import partial
-from typing import Any, List, Optional
-
-
-class WebStorageOrchestrator:
-    def __init__(self, db: Any, plugin_id: str):
-        self._db = db
-        self._plugin_id = plugin_id
-
-    def latest_metric(self, metric_name: str):
-        return self._db.latest_metric_cached(self._plugin_id, metric_name)
-
-    def latest_snapshot(self, default: Any = None) -> Any:
-        raw = self._db.get_snapshot(self._plugin_id)
-        if raw is None:
-            return default
-        try:
-            return json.loads(raw)
-        except (ValueError, TypeError):
-            return default
-
-    def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        return self._db.get_setting(key, default)
+from typing import Any, List
 
 
 class UIOrchestrator:
     def __init__(self, plugin: Any):
-        from vigil.core.ui.ui.components import (render_host_card, render_status_card,
+        from vigil.core.ui.components import (render_host_card, render_status_card,
                                              metric_table, log_table, event_table,
                                              open_dialog_impl)
 
@@ -39,5 +17,5 @@ class UIOrchestrator:
         self.open_dialog = partial(open_dialog_impl, plugin)
 
     def page(self, metric_names: List[str] = (), interval: float = 1.0) -> "PluginPage":
-        from vigil.core.ui.ui.model import PluginPage
+        from vigil.core.ui.model import PluginPage
         return PluginPage(self._plugin, metric_names=metric_names, interval=interval)

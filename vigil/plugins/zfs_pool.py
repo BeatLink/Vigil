@@ -1,8 +1,7 @@
 from typing import Dict, Any, List
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 
 _DEFAULT_LAYOUT = [
@@ -12,11 +11,20 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class ZFSPoolCollectorPlugin(CollectorPlugin):
+class ZFSPool(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.pool = config.get('pool')
         self.threshold = int(config.get('threshold', 90))
+
+        from vigil.core.ui.spec import register_color_rule
+        self._color_rule_name = f'zfs_pool_threshold_{self.id}'
+
+        @register_color_rule(self._color_rule_name)
+        def _usage_color(v, _threshold=self.threshold):
+            if v is None:
+                return None
+            return 'failed' if v >= _threshold else 'online'
 
     def commands(self) -> List[Command]:
         return [Command(f"zpool list -H -o name,capacity {self.pool}")]
@@ -39,22 +47,6 @@ class ZFSPoolCollectorPlugin(CollectorPlugin):
             status='failed' if usage_pct >= self.threshold else 'online',
         )
 
-
-class ZFSPoolUIPlugin(UIPlugin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.pool = self.config.get('pool')
-        self.threshold = int(self.config.get('threshold', 90))
-
-        from vigil.core.ui.ui.spec import register_color_rule
-        self._color_rule_name = f'zfs_pool_threshold_{self.id}'
-
-        @register_color_rule(self._color_rule_name)
-        def _usage_color(v, _threshold=self.threshold):
-            if v is None:
-                return None
-            return 'failed' if v >= _threshold else 'online'
-
     @property
     def UI_SPEC(self):
         return {
@@ -72,5 +64,5 @@ class ZFSPoolUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

@@ -1,10 +1,9 @@
 import time
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
-from vigil.plugins.base.time_utils import format_age, format_duration
+from vigil.plugins.base.plugin_helpers import format_age, format_duration
 
 _DEFAULT_LAYOUT = [
     ['status_card', 'lastbeat_card', 'maxage_card'],
@@ -14,7 +13,7 @@ _DEFAULT_LAYOUT = [
 _VALID_PUSH_STATUSES = {'up', 'down'}
 
 
-class PushCollectorPlugin(CollectorPlugin):
+class Push(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.max_age = int(config.get('max_age', self.interval * 2))
@@ -69,12 +68,6 @@ class PushCollectorPlugin(CollectorPlugin):
         self.storage.apply(result)
         return True
 
-
-class PushUIPlugin(UIPlugin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.max_age = int(self.config.get('max_age', self.interval * 2))
-
     @property
     def _last_heartbeat_text(self) -> str:
         last = self.storage.latest_metric('last_push_epoch')
@@ -97,5 +90,5 @@ class PushUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

@@ -1,6 +1,6 @@
 import pytest
 
-from vigil.plugins.calibre_web import CalibreWebCollectorPlugin, _SEP, _looks_like_opds, _parse_response
+from vigil.plugins.calibre_web import CalibreWeb, _SEP, _looks_like_opds, _parse_response
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -18,7 +18,7 @@ _OPDS_BODY = '<feed xmlns="http://www.w3.org/2005/Atom"><title>Calibre-Web</titl
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(CalibreWebCollectorPlugin, BASE_CFG)
+    return make_plugin(CalibreWeb, BASE_CFG)
 
 
 def _result(status=200, body=_OPDS_BODY, time_total="0.05"):

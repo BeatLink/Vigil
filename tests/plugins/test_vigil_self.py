@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from vigil.plugins.vigil_self import (
-    VigilSelfCollectorPlugin,
+    VigilSelfPlugin,
     _format_uptime,
     _read_rss_mb,
     _read_cpu_seconds,
@@ -28,10 +28,10 @@ def _make_engine(plugins, last_collected=None):
 
 @pytest.fixture
 def plugin(make_plugin):
-    p = make_plugin(VigilSelfCollectorPlugin, BASE_CFG)
+    p = make_plugin(VigilSelfPlugin, BASE_CFG)
     p.engine = _make_engine([])
     yield p
-    VigilSelfCollectorPlugin.engine = None
+    VigilSelfPlugin.engine = None
 
 
 def _latest_status(plugin_id: str = "test-self") -> str | None:

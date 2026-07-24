@@ -1,8 +1,7 @@
 from typing import Dict, Any, List, Optional, Tuple
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _SECTOR_BYTES = 512
 
@@ -62,7 +61,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class DiskIoCollectorPlugin(CollectorPlugin):
+class DiskIo(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.device: Optional[str] = config.get('device')
@@ -102,8 +101,6 @@ class DiskIoCollectorPlugin(CollectorPlugin):
             settings={f"diskio:{self.id}:active_device": device},
         )
 
-
-class DiskIoUIPlugin(UIPlugin):
     @property
     def _active_device_text(self) -> str:
         return (self.storage.get_setting(f"diskio:{self.id}:active_device")
@@ -126,5 +123,5 @@ class DiskIoUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

@@ -7,7 +7,7 @@ from vigil.core.database.database import Setting
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
 from .components import action_chip, card, section_title, on_data_event, offload, refresh_rows
 
-_ICON = Path(__file__).parent.parent.parent / 'static' / 'icon.svg'
+_ICON = Path(__file__).parent / 'static' / 'icon.svg'
 
 _navigation_state = {'switch_func': None}
 
@@ -20,8 +20,7 @@ def navigate_to(plugin_instance: Any):
 
 
 def init_gui(engine: Any, port: int = 8080):
-    from vigil.core.database.events import bus
-    bus.polling_mode = True
+    app.on_startup(engine.run)
 
     app.add_static_file(local_file=_ICON, url_path='/icon.svg')
 

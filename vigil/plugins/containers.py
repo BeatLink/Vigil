@@ -1,8 +1,7 @@
 from typing import Dict, Any, List, Optional, Union
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _PS_FMT = "ps -a --format '{{.Names}}\t{{.State}}'"
 
@@ -16,7 +15,23 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class ContainersCollectorPlugin(CollectorPlugin):
+class Containers(Plugin):
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'total_card': {'metric': 'containers_total', 'title': 'CONTAINERS', 'format': 'int'},
+            'running_card': {
+                'metric': 'containers_running', 'title': 'RUNNING', 'format': 'int',
+                'color': 'containers_always_online',
+            },
+            'stopped_card': {
+                'metric': 'containers_stopped', 'title': 'STOPPED', 'format': 'int',
+                'color': 'nonzero_warning',
+            },
+        },
+        'events': True,
+    }
+
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.runtime = config.get('runtime', 'docker')
@@ -110,30 +125,12 @@ class ContainersCollectorPlugin(CollectorPlugin):
             return CollectResult.failed(f"Restart of {cname} failed: {result.stderr}")
         return result.exit_code == 0
 
-
-class ContainersUIPlugin(UIPlugin):
-    UI_SPEC = {
-        'layout': _DEFAULT_LAYOUT,
-        'cards': {
-            'total_card': {'metric': 'containers_total', 'title': 'CONTAINERS', 'format': 'int'},
-            'running_card': {
-                'metric': 'containers_running', 'title': 'RUNNING', 'format': 'int',
-                'color': 'containers_always_online',
-            },
-            'stopped_card': {
-                'metric': 'containers_stopped', 'title': 'STOPPED', 'format': 'int',
-                'color': 'nonzero_warning',
-            },
-        },
-        'events': True,
-    }
-
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_color_rule
+from vigil.core.ui.spec import register_color_rule
 
 
 @register_color_rule('containers_always_online')

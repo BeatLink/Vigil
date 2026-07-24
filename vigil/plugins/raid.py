@@ -1,9 +1,8 @@
 import re
 from typing import Any, Dict, List
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _ARRAY_RE = re.compile(r'^(md\d+)\s*:\s*(\S+)\s+(\S+)', re.MULTILINE)
 _STATE_RE = re.compile(r'\[(\d+)/(\d+)\]\s*\[([U_]+)\]')
@@ -16,10 +15,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class RaidCollectorPlugin(CollectorPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
-
+class Raid(Plugin):
     def commands(self) -> List[Command]:
         return [Command("cat /proc/mdstat 2>&1")]
 
@@ -79,8 +75,6 @@ class RaidCollectorPlugin(CollectorPlugin):
 
         return CollectResult(metrics=metrics, logs=logs, status=status)
 
-
-class RaidUIPlugin(UIPlugin):
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -98,11 +92,11 @@ class RaidUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_color_rule
+from vigil.core.ui.spec import register_color_rule
 
 
 @register_color_rule('raid_always_online')

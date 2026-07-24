@@ -2,9 +2,8 @@ import json
 import shlex
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
 
@@ -179,7 +178,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class QbittorrentCollectorPlugin(CollectorPlugin):
+class Qbittorrent(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8080')
@@ -192,6 +191,25 @@ class QbittorrentCollectorPlugin(CollectorPlugin):
         self.firewalled_warning = bool(config.get('firewalled_warning', True))
         self.min_downloading = int(config.get('min_downloading', 1))
         self.api_timeout = int(config.get('api_timeout', 10))
+
+        from vigil.core.ui.spec import register_formatter, register_color_rule, register_item_formatter
+        self._connection_format_name = f'qbittorrent_connection_{self.id}'
+        register_formatter(self._connection_format_name)(
+            lambda v: '--' if v is None else ('CONNECTED' if v >= 1.0 else 'DISCONNECTED'))
+        self._connection_color_name = f'qbittorrent_connection_color_{self.id}'
+        register_color_rule(self._connection_color_name)(
+            lambda v: None if v is None else ('online' if v >= 1.0 else 'failed'))
+
+        self._speed_format_name = f'qbittorrent_speed_{self.id}'
+        register_item_formatter(self._speed_format_name)(self._speed_text)
+        self._torrents_format_name = f'qbittorrent_torrents_{self.id}'
+        register_item_formatter(self._torrents_format_name)(self._torrents_text)
+
+        self._stalled_color_name = f'qbittorrent_stalled_color_{self.id}'
+        register_color_rule(self._stalled_color_name)(self._stalled_color)
+        self._errored_color_name = f'qbittorrent_errored_color_{self.id}'
+        register_color_rule(self._errored_color_name)(
+            lambda v: None if v is None else ('failed' if int(v) else 'online'))
 
     def commands(self) -> List[Command]:
         script = _build_fetch_script(
@@ -348,32 +366,6 @@ class QbittorrentCollectorPlugin(CollectorPlugin):
 
         return result.exit_code == 0
 
-
-class QbittorrentUIPlugin(UIPlugin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.stalled_warning = int(self.config.get('stalled_warning', 3))
-        self.stalled_threshold = int(self.config.get('stalled_threshold', 10))
-
-        from vigil.core.ui.ui.spec import register_formatter, register_color_rule, register_item_formatter
-        self._connection_format_name = f'qbittorrent_connection_{self.id}'
-        register_formatter(self._connection_format_name)(
-            lambda v: '--' if v is None else ('CONNECTED' if v >= 1.0 else 'DISCONNECTED'))
-        self._connection_color_name = f'qbittorrent_connection_color_{self.id}'
-        register_color_rule(self._connection_color_name)(
-            lambda v: None if v is None else ('online' if v >= 1.0 else 'failed'))
-
-        self._speed_format_name = f'qbittorrent_speed_{self.id}'
-        register_item_formatter(self._speed_format_name)(self._speed_text)
-        self._torrents_format_name = f'qbittorrent_torrents_{self.id}'
-        register_item_formatter(self._torrents_format_name)(self._torrents_text)
-
-        self._stalled_color_name = f'qbittorrent_stalled_color_{self.id}'
-        register_color_rule(self._stalled_color_name)(self._stalled_color)
-        self._errored_color_name = f'qbittorrent_errored_color_{self.id}'
-        register_color_rule(self._errored_color_name)(
-            lambda v: None if v is None else ('failed' if int(v) else 'online'))
-
     @staticmethod
     def _speed_text(values: Dict[str, Any]) -> str:
         dl, up = values.get('dl_speed_bytes'), values.get('up_speed_bytes')
@@ -423,5 +415,5 @@ class QbittorrentUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

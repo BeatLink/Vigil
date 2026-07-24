@@ -2,7 +2,7 @@ import asyncio
 import pytest
 import yaml
 from unittest.mock import MagicMock, AsyncMock, patch
-from vigil.core.connectors.engine import VigilEngine
+from vigil.core.app.main import VigilEngine
 from vigil.core.database.database import db
 
 
@@ -229,7 +229,7 @@ class TestPerMonitorScheduling:
         engine._collecting = {}
         engine._last_collected = {}
         engine.run_cycle_now = AsyncMock(return_value=True)
-        with patch("vigil.core.connectors.engine.asyncio.sleep", side_effect=fake_sleep):
+        with patch("vigil.core.app.main.asyncio.sleep", side_effect=fake_sleep):
             with pytest.raises(asyncio.CancelledError):
                 await engine._monitor_loop(plugin)
 
@@ -250,7 +250,7 @@ class TestPerMonitorScheduling:
         engine._collecting = {}
         engine._last_collected = {}
         engine.run_cycle_now = AsyncMock(side_effect=RuntimeError("boom"))
-        with patch("vigil.core.connectors.engine.asyncio.sleep", side_effect=fake_sleep):
+        with patch("vigil.core.app.main.asyncio.sleep", side_effect=fake_sleep):
             with pytest.raises(asyncio.CancelledError):
                 await engine._monitor_loop(plugin)
 
@@ -278,13 +278,12 @@ class TestPerMonitorScheduling:
             coro.close()
             return MagicMock()
 
-        with patch("vigil.core.connectors.engine.asyncio.create_task", side_effect=spy_create_task):
-            with patch.object(engine, "_prune_loop", AsyncMock()):
-                await engine.run()
+        with patch("vigil.core.app.main.asyncio.create_task", side_effect=spy_create_task):
+            await engine.run()
 
         monitor_tasks = [c for c in created if c.cr_code.co_name == "_monitor_loop"]
         assert len(monitor_tasks) == 2
-        assert any(c.cr_code.co_name == "_run_internal_api" for c in created)
+        assert any(c.cr_code.co_name == "_prune_loop" for c in created)
 
 
 class TestExceptionIsolation:

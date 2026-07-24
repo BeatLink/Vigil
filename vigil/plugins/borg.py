@@ -5,10 +5,9 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Union
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult, JobPlan
-from vigil.plugins.base.web_plugin_base import UIPlugin
-from vigil.plugins.base.time_utils import parse_duration, format_duration, format_age
+from vigil.plugins.base.plugin_helpers import parse_duration, format_duration, format_age
 
 
 _DEFAULT_LAYOUT = [
@@ -87,7 +86,7 @@ def _parse_archive_time(value: str) -> int:
     return int(dt.timestamp())
 
 
-class BorgCollectorPlugin(CollectorPlugin):
+class Borg(Plugin):
     DEFAULT_TIMEOUT = 180.0
 
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
@@ -117,6 +116,9 @@ class BorgCollectorPlugin(CollectorPlugin):
         self.cache_dir = config.get('cache_dir', '/var/cache/vigil-borg')
         self.backup_lock_wait = config.get('backup_lock_wait', 600)
 
+        from vigil.core.ui.spec import register_enabled_predicate
+        self._has_sources_name = f'borg_has_sources_{self.id}'
+        register_enabled_predicate(self._has_sources_name)(lambda p: bool(p.source_paths))
 
     def _read_passphrase_file(self) -> Optional[str]:
         try:
@@ -464,7 +466,6 @@ class BorgCollectorPlugin(CollectorPlugin):
             return [], {}
         return data.get('archives') or [], data.get('repository') or {}
 
-
     def get_actions(self) -> List[Dict[str, str]]:
         if not self.source_paths:
             return []
@@ -541,18 +542,6 @@ class BorgCollectorPlugin(CollectorPlugin):
             message = record.get('message') or ''
             if message and level in ('WARNING', 'ERROR', 'CRITICAL'):
                 self.storage.apply(CollectResult(logs=[(f"borg: {message}", level)]))
-
-
-class BorgUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.repo = config.get('repo')
-        self.max_age = parse_duration(config.get('max_age', '1d'))
-        self.source_paths = _as_list(config.get('source_paths'))
-
-        from vigil.core.ui.ui.spec import register_enabled_predicate
-        self._has_sources_name = f'borg_has_sources_{self.id}'
-        register_enabled_predicate(self._has_sources_name)(lambda p: bool(p.source_paths))
 
     def _epoch(self) -> Optional[float]:
         m = self.storage.latest_metric('last_backup_epoch')
@@ -638,18 +627,6 @@ class BorgUIPlugin(UIPlugin):
             'events': {'title': 'EVENTS', 'limit': 100, 'full_height': True},
         }
 
-    def cached_archives(self) -> (List[Dict[str, Any]], Dict[str, Any]):
-        metric = self.storage.latest_metric('archive_list')
-        if metric is None or not metric.metadata:
-            return [], {}
-        try:
-            data = json.loads(metric.metadata)
-        except (json.JSONDecodeError, ValueError):
-            return [], {}
-        if not isinstance(data, dict):
-            return [], {}
-        return data.get('archives') or [], data.get('repository') or {}
-
     @property
     def _archive_rows(self) -> List[Dict[str, Any]]:
         archives, _ = self.cached_archives()
@@ -672,5 +649,5 @@ class BorgUIPlugin(UIPlugin):
         ]
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

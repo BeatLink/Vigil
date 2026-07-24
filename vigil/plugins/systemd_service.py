@@ -3,10 +3,9 @@ import shlex
 import time
 from typing import Any, Dict, List, Optional, Union
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
-from vigil.plugins.base.time_utils import parse_duration, format_duration, format_age
+from vigil.plugins.base.plugin_helpers import parse_duration, format_duration, format_age
 
 _DEFAULT_UNIT_FILE_WRITE_PATHS = (
     '/etc/systemd/system',
@@ -32,7 +31,7 @@ _ONESHOT_LAYOUT = [
 _RUNNING_SUBSTATES = {'running', 'start', 'start-pre', 'start-post', 'start-chroot', 'reload'}
 
 
-class SystemdCollectorPlugin(CollectorPlugin):
+class SystemdService(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.service_name = config.get('service_name')
@@ -40,6 +39,10 @@ class SystemdCollectorPlugin(CollectorPlugin):
         self.max_age = parse_duration(config['max_age']) if 'max_age' in config else None
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
         self.allowed_write_paths = tuple(config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
+
+        from vigil.core.ui.spec import register_enabled_predicate
+        self._edit_predicate_name = f'systemd_edit_{self.id}'
+        register_enabled_predicate(self._edit_predicate_name)(lambda p: p.allow_unit_file_edit)
 
     def commands(self) -> List[Command]:
         journal_cmd = Command(
@@ -151,7 +154,7 @@ class SystemdCollectorPlugin(CollectorPlugin):
         for line in journal_result.stdout.splitlines():
             if not line.strip():
                 continue
-            log_time, message = SystemdCollectorPlugin._split_iso_line(line)
+            log_time, message = SystemdService._split_iso_line(line)
             level = 'ERROR' if any(k in line.upper() for k in ('ERROR', 'FAIL', 'CRITICAL')) else 'INFO'
             log_lines.append((message, level, log_time))
         return True, log_lines
@@ -227,37 +230,6 @@ class SystemdCollectorPlugin(CollectorPlugin):
             return CollectResult.failed(f"systemctl {command} failed: {result.stderr}")
         return True
 
-
-_UNIT_FILE_DIALOGS = {
-    'view_unit_file': {'kind': 'read', 'title': 'Unit File: {plugin.service_name}',
-                       'action_id': 'view_unit_file', 'params': {}, 'render': 'textarea_readonly'},
-    'edit_unit_file': {'kind': 'edit', 'title': 'Edit Unit File: {plugin.service_name}',
-                       'load_action_id': 'view_unit_file', 'load_params': {},
-                       'save_action_id': 'write_unit_file', 'save_params': {}, 'save_content_kwarg': 'content',
-                       'success_message': 'Unit file written successfully'},
-}
-
-
-class SystemdUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-
-        from vigil.core.ui.ui.spec import register_enabled_predicate
-        self._edit_predicate_name = f'systemd_edit_{self.id}'
-        register_enabled_predicate(self._edit_predicate_name)(lambda p: p.allow_unit_file_edit)
-
-    @property
-    def service_name(self):
-        return self.config.get('service_name')
-
-    @property
-    def max_age(self):
-        return parse_duration(self.config['max_age']) if 'max_age' in self.config else None
-
-    @property
-    def allow_unit_file_edit(self):
-        return bool(self.config.get('allow_unit_file_edit', False))
-
     @property
     def UI_SPEC(self):
         return {'dialogs': _UNIT_FILE_DIALOGS}
@@ -275,7 +247,7 @@ class SystemdUIPlugin(UIPlugin):
 
     def _render_unit_file_controls(self):
         from nicegui import ui
-        from vigil.core.ui.ui.components import render_buttons
+        from vigil.core.ui.components import render_buttons
 
         with ui.card().classes('p-4 h-full'):
             ui.label('Unit File').classes('font-bold mb-2')
@@ -289,8 +261,8 @@ class SystemdUIPlugin(UIPlugin):
 
     def _render_continuous_ui(self, context: str = 'page'):
         from vigil.core.database.database import StatusHistory
-        from vigil.core.ui.ui.layout import PluginLayout, make_inline_layout
-        from vigil.core.ui.ui.components import info_card
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.core.ui.components import info_card
 
         layout = PluginLayout(self.config, _CONTINUOUS_LAYOUT if context == 'page' else make_inline_layout(_CONTINUOUS_LAYOUT))
         page = self.ui.page()
@@ -326,9 +298,9 @@ class SystemdUIPlugin(UIPlugin):
 
     def _render_oneshot_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.ui.ui.theme import STATUS_COLORS
-        from vigil.core.ui.ui.layout import PluginLayout, make_inline_layout
-        from vigil.core.ui.ui.components import info_card
+        from vigil.core.ui.theme import STATUS_COLORS
+        from vigil.core.ui.layout import PluginLayout, make_inline_layout
+        from vigil.core.ui.components import info_card
 
         layout = PluginLayout(self.config, _ONESHOT_LAYOUT if context == 'page' else make_inline_layout(_ONESHOT_LAYOUT))
         page = self.ui.page(metric_names=['is_running', 'last_run_epoch', 'last_run_success'])
@@ -397,3 +369,13 @@ class SystemdUIPlugin(UIPlugin):
         page.on_refresh(update)
         update()
         page.start()
+
+
+_UNIT_FILE_DIALOGS = {
+    'view_unit_file': {'kind': 'read', 'title': 'Unit File: {plugin.service_name}',
+                       'action_id': 'view_unit_file', 'params': {}, 'render': 'textarea_readonly'},
+    'edit_unit_file': {'kind': 'edit', 'title': 'Edit Unit File: {plugin.service_name}',
+                       'load_action_id': 'view_unit_file', 'load_params': {},
+                       'save_action_id': 'write_unit_file', 'save_params': {}, 'save_content_kwarg': 'content',
+                       'success_message': 'Unit file written successfully'},
+}

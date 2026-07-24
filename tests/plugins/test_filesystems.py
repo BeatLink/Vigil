@@ -2,7 +2,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.filesystems import (
-    FilesystemsCollectorPlugin, _sanitize, _parse_inodes, _parse_readonly, _SNAP,
+    Filesystems, _sanitize, _parse_inodes, _parse_readonly, _SNAP,
 )
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
@@ -67,7 +67,7 @@ def _combined(space, inodes=None, mounts=None):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(FilesystemsCollectorPlugin, BASE_CFG)
+    return make_plugin(Filesystems, BASE_CFG)
 
 
 class TestSanitize:
@@ -195,7 +195,7 @@ class TestReadOnlyDetection:
 
     async def test_readonly_as_warning_when_configured(self, make_plugin, run_cycle):
         cfg = dict(BASE_CFG, readonly_is_failure=False)
-        p = make_plugin(FilesystemsCollectorPlugin, cfg)
+        p = make_plugin(Filesystems, cfg)
         run_cycle(p, lambda c: CmdResult(0, _combined(
             _df(("/data", 100, 20, 20)),
             _df_inodes(("/data", 5)),

@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from vigil.plugins.group import GroupCollectorPlugin, SEVERITY_ORDER
+from vigil.plugins.group import Group, SEVERITY_ORDER
 from vigil.core.database.database import db, StatusHistory
 
 
@@ -19,7 +19,7 @@ def group(db_manager):
          patch("vigil.core.connectors.orchestration.network_orchestrator.SSHCollector"), \
          patch("vigil.core.connectors.orchestration.network_orchestrator.SSHController"):
         MockSSH.from_config.return_value = MagicMock(host="localhost")
-        plugin = GroupCollectorPlugin("test-group", GROUP_CFG, db_manager, SSHConnectionPool())
+        plugin = Group("test-group", GROUP_CFG, db_manager, SSHConnectionPool())
     return plugin
 
 

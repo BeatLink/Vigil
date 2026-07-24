@@ -1,9 +1,8 @@
 import re
 from typing import Dict, Any, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _DEFAULT_LAYOUT_METRIC = [
@@ -18,7 +17,7 @@ _DEFAULT_LAYOUT_PLAIN = [
 ]
 
 
-class CommandCollectorPlugin(CollectorPlugin):
+class CommandPlugin(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.command = config.get('command')
@@ -31,6 +30,17 @@ class CommandCollectorPlugin(CollectorPlugin):
         self.nonzero_is_warning = bool(config.get('nonzero_is_warning', False))
         self.value_label = config.get('value_label', 'VALUE')
         self.value_unit = config.get('value_unit', '')
+        self.has_value = self.pattern is not None
+
+        from vigil.core.ui.spec import register_color_rule, register_formatter
+        self._exit_color_name = f'command_exit_{self.id}'
+        register_color_rule(self._exit_color_name)(
+            lambda code: None if code is None else ('online' if code == 0 else 'failed'))
+        self._value_color_name = f'command_value_{self.id}'
+        register_color_rule(self._value_color_name)(self._value_color)
+        self._value_format_name = f'command_value_fmt_{self.id}'
+        register_formatter(self._value_format_name)(
+            lambda v: '--' if v is None else f'{v:g}{self.value_unit}')
 
     def _level_for_value(self, value: float) -> str:
         if self.warning is None or self.threshold is None:
@@ -90,28 +100,6 @@ class CommandCollectorPlugin(CollectorPlugin):
         except (ValueError, TypeError):
             return None
 
-
-class CommandUIPlugin(UIPlugin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.pattern = self.config.get('pattern')
-        self.warning = self.config.get('warning')
-        self.threshold = self.config.get('threshold')
-        self.invert = bool(self.config.get('invert', False))
-        self.value_label = self.config.get('value_label', 'VALUE')
-        self.value_unit = self.config.get('value_unit', '')
-        self.has_value = self.pattern is not None
-
-        from vigil.core.ui.ui.spec import register_color_rule, register_formatter
-        self._exit_color_name = f'command_exit_{self.id}'
-        register_color_rule(self._exit_color_name)(
-            lambda code: None if code is None else ('online' if code == 0 else 'failed'))
-        self._value_color_name = f'command_value_{self.id}'
-        register_color_rule(self._value_color_name)(self._value_color)
-        self._value_format_name = f'command_value_fmt_{self.id}'
-        register_formatter(self._value_format_name)(
-            lambda v: '--' if v is None else f'{v:g}{self.value_unit}')
-
     def _value_color(self, value: Optional[float]) -> Optional[str]:
         if value is None:
             return None
@@ -139,7 +127,7 @@ class CommandUIPlugin(UIPlugin):
         return spec
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 

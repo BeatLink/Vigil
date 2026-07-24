@@ -1,8 +1,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _VIRTUAL_PREFIXES = ('lo', 'veth', 'docker', 'virbr', 'br-', 'tun', 'tap')
 
@@ -47,7 +46,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class NetworkUsageCollectorPlugin(CollectorPlugin):
+class NetworkUsage(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.interface: Optional[str] = config.get('interface')
@@ -91,8 +90,6 @@ class NetworkUsageCollectorPlugin(CollectorPlugin):
             status='online',
         )
 
-
-class NetworkUsageUIPlugin(UIPlugin):
     @property
     def UI_SPEC(self):
         return {
@@ -110,5 +107,5 @@ class NetworkUsageUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

@@ -15,7 +15,7 @@ STATUS_COLORS = {
 
 
 def configure(cfg: dict) -> None:
-    import vigil.core.ui.ui.theme as _m
+    import vigil.core.ui.theme as _m
     if 'primary'          in cfg: _m.PRIMARY          = cfg['primary']
     if 'accent'           in cfg: _m.ACCENT            = cfg['accent']
     if 'background'       in cfg: _m.BACKGROUND        = cfg['background']

@@ -2,9 +2,8 @@ import shlex
 import time as _time
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _PROPFIND_BODY = (
     '<?xml version="1.0"?>'
@@ -57,7 +56,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class RadicaleCollectorPlugin(CollectorPlugin):
+class Radicale(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.url = config.get('url', 'http://127.0.0.1:5232')
@@ -115,8 +114,6 @@ class RadicaleCollectorPlugin(CollectorPlugin):
             msg = f"PROPFIND returned unexpected status {status}: {body[:200]}"
         return CollectResult(metrics=metrics, logs=[(msg, "ERROR")], status='failed')
 
-
-class RadicaleUIPlugin(UIPlugin):
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -131,11 +128,11 @@ class RadicaleUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_formatter, register_color_rule
+from vigil.core.ui.spec import register_formatter, register_color_rule
 
 
 @register_formatter('radicale_ok_text')

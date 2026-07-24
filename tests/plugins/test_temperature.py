@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.temperature import TemperatureCollectorPlugin, _level_for
+from vigil.plugins.temperature import Temperature, _level_for
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -26,7 +26,7 @@ def _make_output(temps_mc):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(TemperatureCollectorPlugin, BASE_CFG)
+    return make_plugin(Temperature, BASE_CFG)
 
 
 def _latest_status(plugin_id: str = "test-temp") -> str | None:
@@ -99,7 +99,7 @@ class TestTemperatureCollection:
     async def test_custom_thresholds_respected(self, make_plugin, run_cycle):
         cfg = {**BASE_CFG, "name": "test-temp-custom", "id": "test-temp-custom",
                "temp_warning": 30, "temp_threshold": 40}
-        p = make_plugin(TemperatureCollectorPlugin, cfg)
+        p = make_plugin(Temperature, cfg)
         run_cycle(p, lambda c: CmdResult(0, _make_output(_TEMPS_ONLINE), ""))
         assert _latest_status("test-temp-custom") == "failed"
 

@@ -1,9 +1,8 @@
 import json
 from typing import Any, Callable, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 SEVERITY_ORDER = {
     'online': 0,
@@ -13,7 +12,11 @@ SEVERITY_ORDER = {
 }
 
 
-class GroupCollectorPlugin(CollectorPlugin):
+class Group(Plugin):
+    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+        super().__init__(name, config, db, ssh_pool)
+        self._expanded: Dict[str, bool] = self._load_expanded()
+
     def commands(self) -> List[Command]:
         return []
 
@@ -40,13 +43,6 @@ class GroupCollectorPlugin(CollectorPlugin):
     def parse_local(self, result: Any) -> CollectResult:
         return CollectResult(status=self._aggregate_status(result))
 
-
-class GroupUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self._expanded: Dict[str, bool] = self._load_expanded()
-
-
     def _setting_key(self) -> str:
         return f'group_expanded_{self.id}'
 
@@ -62,11 +58,10 @@ class GroupUIPlugin(UIPlugin):
     def _save_expanded(self):
         self.db.set_setting(self._setting_key(), json.dumps(self._expanded))
 
-
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.ui.ui.theme import STATUS_COLORS, TEXT, TEXT_MUTED
-        from vigil.core.ui.ui.components import card
+        from vigil.core.ui.theme import STATUS_COLORS, TEXT, TEXT_MUTED
+        from vigil.core.ui.components import card
 
         min_card_width = self.config.get('grid_min_width', '320px')
         with ui.element('div').style(

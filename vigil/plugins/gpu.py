@@ -1,8 +1,7 @@
 from typing import Any, Dict, List
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _COLLECT_CMD = (
@@ -18,7 +17,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class GpuCollectorPlugin(CollectorPlugin):
+class Gpu(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.util_warning   = int(config.get('util_warning',   85))
@@ -27,6 +26,20 @@ class GpuCollectorPlugin(CollectorPlugin):
         self.mem_threshold  = int(config.get('mem_threshold',  95))
         self.temp_warning   = int(config.get('temp_warning',   80))
         self.temp_threshold = int(config.get('temp_threshold', 90))
+
+        from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
+        self._util_color_rule_name = f'gpu_util_{self.id}'
+        register_item_color_rule(self._util_color_rule_name)(
+            lambda item: _level_for(item.get('value') or 0.0, self.util_warning, self.util_threshold))
+        self._util_card_color_name = f'gpu_util_card_{self.id}'
+        register_color_rule(self._util_card_color_name)(
+            threshold_color(warning=self.util_warning, threshold=self.util_threshold))
+        self._mem_card_color_name = f'gpu_mem_card_{self.id}'
+        register_color_rule(self._mem_card_color_name)(
+            threshold_color(warning=self.mem_warning, threshold=self.mem_threshold))
+        self._temp_card_color_name = f'gpu_temp_card_{self.id}'
+        register_color_rule(self._temp_card_color_name)(
+            threshold_color(warning=self.temp_warning, threshold=self.temp_threshold))
 
     def commands(self) -> List[Command]:
         return [Command(_COLLECT_CMD)]
@@ -94,31 +107,6 @@ class GpuCollectorPlugin(CollectorPlugin):
             status=overall,
         )
 
-
-class GpuUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.util_warning   = int(config.get('util_warning',   85))
-        self.util_threshold = int(config.get('util_threshold', 95))
-        self.mem_warning    = int(config.get('mem_warning',    85))
-        self.mem_threshold  = int(config.get('mem_threshold',  95))
-        self.temp_warning   = int(config.get('temp_warning',   80))
-        self.temp_threshold = int(config.get('temp_threshold', 90))
-
-        from vigil.core.ui.ui.spec import register_item_color_rule, register_color_rule, threshold_color
-        self._util_color_rule_name = f'gpu_util_{self.id}'
-        register_item_color_rule(self._util_color_rule_name)(
-            lambda item: _level_for(item.get('value') or 0.0, self.util_warning, self.util_threshold))
-        self._util_card_color_name = f'gpu_util_card_{self.id}'
-        register_color_rule(self._util_card_color_name)(
-            threshold_color(warning=self.util_warning, threshold=self.util_threshold))
-        self._mem_card_color_name = f'gpu_mem_card_{self.id}'
-        register_color_rule(self._mem_card_color_name)(
-            threshold_color(warning=self.mem_warning, threshold=self.mem_threshold))
-        self._temp_card_color_name = f'gpu_temp_card_{self.id}'
-        register_color_rule(self._temp_card_color_name)(
-            threshold_color(warning=self.temp_warning, threshold=self.temp_threshold))
-
     @property
     def UI_SPEC(self):
         return {
@@ -148,5 +136,5 @@ class GpuUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

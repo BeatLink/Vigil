@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from vigil.plugins.syncthing import SyncthingCollectorPlugin
+from vigil.plugins.syncthing import Syncthing
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -34,7 +34,7 @@ def _connections(connected=True):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(SyncthingCollectorPlugin, BASE_CFG)
+    return make_plugin(Syncthing, BASE_CFG)
 
 
 def _collect_twice(plugin, run_cycle, config=None, folder_statuses=None, connections=None,
@@ -117,7 +117,7 @@ class TestSyncthingCollection:
         assert plugin._cached_folder_ids == ["docs", "photos"]
 
     async def test_folder_filter_excludes_others(self, make_plugin, run_cycle):
-        p = make_plugin(SyncthingCollectorPlugin, {**BASE_CFG, "folders": ["docs"]})
+        p = make_plugin(Syncthing, {**BASE_CFG, "folders": ["docs"]})
         _collect_twice(p, run_cycle, watched_folders=["docs"], folder_statuses={
             "docs": _folder_status(),
             "photos": _folder_status(state="error"),

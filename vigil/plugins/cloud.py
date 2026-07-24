@@ -1,8 +1,7 @@
 from typing import Dict, Any, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _MD = "169.254.169.254"
 
@@ -42,7 +41,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class CloudCollectorPlugin(CollectorPlugin):
+class Cloud(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.provider = str(config.get('provider', 'auto')).lower()
@@ -86,8 +85,6 @@ class CloudCollectorPlugin(CollectorPlugin):
             status='offline',
         )
 
-
-class CloudUIPlugin(UIPlugin):
     def _cloud_fields(self) -> Dict[str, str]:
         import json
         raw = self.storage.get_setting(f"cloud:{self.id}")
@@ -130,7 +127,7 @@ class CloudUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 

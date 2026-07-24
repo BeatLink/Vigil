@@ -2,9 +2,8 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _CLOCK_TICKS = os.sysconf('SC_CLK_TCK') if hasattr(os, 'sysconf') else 100
@@ -36,9 +35,7 @@ def _read_cpu_seconds() -> Optional[float]:
         return None
 
 
-class VigilSelfCollectorPlugin(CollectorPlugin):
-    engine: Any = None
-
+class VigilSelfPlugin(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.memory_warning   = float(config.get('memory_warning',   256))
@@ -48,6 +45,19 @@ class VigilSelfCollectorPlugin(CollectorPlugin):
         self._started_at = time.time()
         self._last_cpu_sample: Optional[Tuple[float, float]] = None
         self.target = 'vigil'
+
+        from vigil.core.ui.spec import register_color_rule, register_formatter, threshold_color, register_item_formatter
+        self._memory_color_name = f'vigil_self_memory_{self.id}'
+        register_color_rule(self._memory_color_name)(
+            threshold_color(warning=self.memory_warning, threshold=self.memory_threshold))
+        self._uptime_format_name = f'vigil_self_uptime_{self.id}'
+        register_formatter(self._uptime_format_name)(lambda v: '--' if v is None else _format_uptime(v))
+        self._memory_format_name = f'vigil_self_memory_fmt_{self.id}'
+        register_formatter(self._memory_format_name)(lambda v: '-- MB' if v is None else f'{v:.0f} MB')
+        self._monitors_format_name = f'vigil_self_monitors_{self.id}'
+        register_item_formatter(self._monitors_format_name)(self._monitors_text)
+        self._monitors_color_name = f'vigil_self_monitors_color_{self.id}'
+        register_item_formatter(self._monitors_color_name)(self._monitors_color)
 
     def commands(self) -> List[Command]:
         return []
@@ -160,26 +170,6 @@ class VigilSelfCollectorPlugin(CollectorPlugin):
         log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
         return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=overall)
 
-
-class VigilSelfUIPlugin(UIPlugin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.memory_warning   = float(self.config.get('memory_warning',   256))
-        self.memory_threshold = float(self.config.get('memory_threshold', 512))
-
-        from vigil.core.ui.ui.spec import register_color_rule, register_formatter, threshold_color, register_item_formatter
-        self._memory_color_name = f'vigil_self_memory_{self.id}'
-        register_color_rule(self._memory_color_name)(
-            threshold_color(warning=self.memory_warning, threshold=self.memory_threshold))
-        self._uptime_format_name = f'vigil_self_uptime_{self.id}'
-        register_formatter(self._uptime_format_name)(lambda v: '--' if v is None else _format_uptime(v))
-        self._memory_format_name = f'vigil_self_memory_fmt_{self.id}'
-        register_formatter(self._memory_format_name)(lambda v: '-- MB' if v is None else f'{v:.0f} MB')
-        self._monitors_format_name = f'vigil_self_monitors_{self.id}'
-        register_item_formatter(self._monitors_format_name)(self._monitors_text)
-        self._monitors_color_name = f'vigil_self_monitors_color_{self.id}'
-        register_item_formatter(self._monitors_color_name)(self._monitors_color)
-
     @staticmethod
     def _monitors_text(values: Dict[str, Any]) -> str:
         total = values.get('monitors_total')
@@ -221,7 +211,7 @@ class VigilSelfUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 

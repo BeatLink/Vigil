@@ -1,8 +1,7 @@
 from typing import Any, Dict, List
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 from vigil.plugins.base.plugin_helpers import level_for as _level_for, format_bytes as _fmt_gb
 
 _COLLECT_CMD = "grep -E 'MemTotal:|MemAvailable:' /proc/meminfo"
@@ -15,11 +14,18 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class MemoryUsageCollectorPlugin(CollectorPlugin):
+class MemoryUsage(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.memory_warning   = int(config.get('memory_warning',   75))
         self.memory_threshold = int(config.get('memory_threshold', 90))
+
+        from vigil.core.ui.spec import register_color_rule, threshold_color, register_item_formatter
+        self._color_rule_name = f'memory_usage_threshold_{self.id}'
+        register_color_rule(self._color_rule_name)(
+            threshold_color(warning=self.memory_warning, threshold=self.memory_threshold))
+        self._used_format_name = f'memory_usage_used_{self.id}'
+        register_item_formatter(self._used_format_name)(self._format_used)
 
     def commands(self) -> List[Command]:
         return [Command(_COLLECT_CMD)]
@@ -64,20 +70,6 @@ class MemoryUsageCollectorPlugin(CollectorPlugin):
             status=overall,
         )
 
-
-class MemoryUsageUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.memory_warning   = int(config.get('memory_warning',   75))
-        self.memory_threshold = int(config.get('memory_threshold', 90))
-
-        from vigil.core.ui.ui.spec import register_color_rule, threshold_color, register_item_formatter
-        self._color_rule_name = f'memory_usage_threshold_{self.id}'
-        register_color_rule(self._color_rule_name)(
-            threshold_color(warning=self.memory_warning, threshold=self.memory_threshold))
-        self._used_format_name = f'memory_usage_used_{self.id}'
-        register_item_formatter(self._used_format_name)(self._format_used)
-
     @staticmethod
     def _format_used(values: Dict[str, Any]) -> str:
         used, total = values.get('memory_used_gb'), values.get('memory_total_gb')
@@ -100,5 +92,5 @@ class MemoryUsageUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

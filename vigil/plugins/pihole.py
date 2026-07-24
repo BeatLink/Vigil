@@ -2,10 +2,9 @@ import json
 import shlex
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from vigil.plugins.base.time_utils import parse_duration
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_helpers import parse_duration
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
 
@@ -119,7 +118,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class PiholeCollectorPlugin(CollectorPlugin):
+class Pihole(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:80')
@@ -131,6 +130,22 @@ class PiholeCollectorPlugin(CollectorPlugin):
         self.min_queries = int(config.get('min_queries', 100))
         self.api_timeout = int(config.get('api_timeout', 10))
         self.gravity_timeout = int(config.get('gravity_timeout', 120))
+
+        from vigil.core.ui.spec import register_color_rule, register_item_formatter, register_formatter
+        self._block_rate_rule_name = f'pihole_block_rate_{self.id}'
+        register_color_rule(self._block_rate_rule_name)(self._block_rate_color)
+
+        self._gravity_format_name = f'pihole_gravity_text_{self.id}'
+        register_item_formatter(self._gravity_format_name)(self._gravity_text)
+        self._gravity_color_name = f'pihole_gravity_color_{self.id}'
+        register_item_formatter(self._gravity_color_name)(self._gravity_color)
+
+        self._blocking_format_name = f'pihole_blocking_text_{self.id}'
+        register_formatter(self._blocking_format_name)(
+            lambda v: '--' if v is None else ('ENABLED' if v >= 1.0 else 'DISABLED'))
+        self._blocking_color_name = f'pihole_blocking_color_{self.id}'
+        register_color_rule(self._blocking_color_name)(
+            lambda v: None if v is None else ('online' if v >= 1.0 else 'failed'))
 
     def commands(self) -> List[Command]:
         script = _build_fetch_script(
@@ -274,30 +289,6 @@ class PiholeCollectorPlugin(CollectorPlugin):
 
         return result.exit_code == 0
 
-
-class PiholeUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.block_rate_warning = float(config.get('block_rate_warning', 5))
-        self.block_rate_threshold = float(config.get('block_rate_threshold', 1))
-        self.gravity_max_age = parse_duration(config.get('gravity_max_age', '8d'))
-
-        from vigil.core.ui.ui.spec import register_color_rule, register_item_formatter, register_formatter
-        self._block_rate_rule_name = f'pihole_block_rate_{self.id}'
-        register_color_rule(self._block_rate_rule_name)(self._block_rate_color)
-
-        self._gravity_format_name = f'pihole_gravity_text_{self.id}'
-        register_item_formatter(self._gravity_format_name)(self._gravity_text)
-        self._gravity_color_name = f'pihole_gravity_color_{self.id}'
-        register_item_formatter(self._gravity_color_name)(self._gravity_color)
-
-        self._blocking_format_name = f'pihole_blocking_text_{self.id}'
-        register_formatter(self._blocking_format_name)(
-            lambda v: '--' if v is None else ('ENABLED' if v >= 1.0 else 'DISABLED'))
-        self._blocking_color_name = f'pihole_blocking_color_{self.id}'
-        register_color_rule(self._blocking_color_name)(
-            lambda v: None if v is None else ('online' if v >= 1.0 else 'failed'))
-
     def _block_rate_color(self, v: Optional[float]) -> Optional[str]:
         if v is None:
             return None
@@ -342,5 +333,5 @@ class PiholeUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

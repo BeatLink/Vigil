@@ -2,9 +2,8 @@ import json
 import shlex
 from typing import Any, Dict, List, Tuple
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _MSG_TYPE_STATUS = 0
 _MSG_TYPE_CONNECT = 1
@@ -42,7 +41,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class OpenbooksCollectorPlugin(CollectorPlugin):
+class Openbooks(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.ws_url = config.get('ws_url', 'ws://127.0.0.1:9777/ws')
@@ -93,8 +92,6 @@ class OpenbooksCollectorPlugin(CollectorPlugin):
             status='failed',
         )
 
-
-class OpenbooksUIPlugin(UIPlugin):
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -108,11 +105,11 @@ class OpenbooksUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_formatter, register_color_rule
+from vigil.core.ui.spec import register_formatter, register_color_rule
 
 
 @register_formatter('openbooks_bridge_text')

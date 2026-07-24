@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from vigil.plugins.traccar import TraccarCollectorPlugin, _age_hours, _AUTH_FAILED
+from vigil.plugins.traccar import Traccar, _age_hours, _AUTH_FAILED
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -33,7 +33,7 @@ def _device(name="Phone", hours_ago=1.0, disabled=False):
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(TraccarCollectorPlugin, BASE_CFG)
+    return make_plugin(Traccar, BASE_CFG)
 
 
 def _run(plugin, run_cycle, devices=None):
@@ -96,7 +96,7 @@ class TestTraccarCollection:
 
     async def test_missing_username_sets_failed(self, make_plugin, run_cycle):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "username"}
-        p = make_plugin(TraccarCollectorPlugin, cfg)
+        p = make_plugin(Traccar, cfg)
         run_cycle(p, lambda c: CmdResult(0, "", ""))
         assert _latest_status("test-traccar") == "failed"
 
@@ -105,7 +105,7 @@ class TestTraccarCollection:
         assert _latest_status() == "failed"
 
     async def test_device_filter_excludes_others(self, make_plugin, run_cycle):
-        p = make_plugin(TraccarCollectorPlugin, {**BASE_CFG, "devices": ["Phone"]})
+        p = make_plugin(Traccar, {**BASE_CFG, "devices": ["Phone"]})
         _run(p, run_cycle, [_device(name="Phone", hours_ago=1.0),
                             _device(name="OldTablet", hours_ago=500.0)])
         assert _latest_status("test-traccar") == "online"

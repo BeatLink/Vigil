@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.cloud import CloudCollectorPlugin, _parse_kv
+from vigil.plugins.cloud import Cloud, _parse_kv
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -48,19 +48,19 @@ class TestParseKv:
 
 class TestCloudCollection:
     async def test_aws_detected_online(self, make_plugin, run_cycle):
-        p = make_plugin(CloudCollectorPlugin, _cfg(provider="aws"))
+        p = make_plugin(Cloud, _cfg(provider="aws"))
         run_cycle(p, lambda c: CmdResult(0, _AWS_OUT, ""))
         assert _latest_status() == "online"
         assert _latest_metric("on_cloud") == pytest.approx(1.0)
 
     async def test_not_cloud_offline(self, make_plugin, run_cycle):
-        p = make_plugin(CloudCollectorPlugin, _cfg(provider="aws"))
+        p = make_plugin(Cloud, _cfg(provider="aws"))
         run_cycle(p, lambda c: CmdResult(7, "", ""))
         assert _latest_status() == "offline"
         assert _latest_metric("on_cloud") == pytest.approx(0.0)
 
     async def test_auto_falls_through_providers(self, make_plugin, run_cycle):
-        p = make_plugin(CloudCollectorPlugin, _cfg(provider="auto"))
+        p = make_plugin(Cloud, _cfg(provider="auto"))
         outputs = [
             CmdResult(7, "", ""),
             CmdResult(7, "", ""),
@@ -70,12 +70,12 @@ class TestCloudCollection:
         assert _latest_status() == "online"
 
     async def test_auto_none_respond_offline(self, make_plugin, run_cycle):
-        p = make_plugin(CloudCollectorPlugin, _cfg(provider="auto"))
+        p = make_plugin(Cloud, _cfg(provider="auto"))
         run_cycle(p, lambda c: CmdResult(7, "", ""))
         assert _latest_status() == "offline"
 
 
 class TestCloudActions:
     async def test_on_action_returns_false(self, make_plugin):
-        p = make_plugin(CloudCollectorPlugin, _cfg())
+        p = make_plugin(Cloud, _cfg())
         assert p.plan_action("anything") is None

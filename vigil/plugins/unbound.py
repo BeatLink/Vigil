@@ -1,9 +1,8 @@
 import shlex
 from typing import Any, Dict, List, Tuple
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
 
@@ -57,7 +56,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class UnboundCollectorPlugin(CollectorPlugin):
+class Unbound(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.control_cmd = config.get('control_cmd', 'unbound-control stats_noreset')
@@ -68,6 +67,11 @@ class UnboundCollectorPlugin(CollectorPlugin):
         self.servfail_warning = float(config.get('servfail_warning', 5))
         self.servfail_threshold = float(config.get('servfail_threshold', 20))
         self.min_queries = int(config.get('min_queries', 20))
+
+        from vigil.core.ui.spec import register_color_rule, threshold_color
+        self._color_rule_name = f'unbound_servfail_{self.id}'
+        register_color_rule(self._color_rule_name)(
+            threshold_color(warning=self.servfail_warning, threshold=self.servfail_threshold))
 
     def commands(self) -> List[Command]:
         script = _build_probe_script(
@@ -143,18 +147,6 @@ class UnboundCollectorPlugin(CollectorPlugin):
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
         return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
 
-
-class UnboundUIPlugin(UIPlugin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.servfail_warning = float(self.config.get('servfail_warning', 5))
-        self.servfail_threshold = float(self.config.get('servfail_threshold', 20))
-
-        from vigil.core.ui.ui.spec import register_color_rule, threshold_color
-        self._color_rule_name = f'unbound_servfail_{self.id}'
-        register_color_rule(self._color_rule_name)(
-            threshold_color(warning=self.servfail_warning, threshold=self.servfail_threshold))
-
     @property
     def UI_SPEC(self):
         return {
@@ -180,11 +172,11 @@ class UnboundUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_formatter, register_color_rule
+from vigil.core.ui.spec import register_formatter, register_color_rule
 
 
 @register_formatter('unbound_resolution_text')

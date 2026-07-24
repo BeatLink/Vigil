@@ -92,7 +92,8 @@ def on_data_event(event, element, callback, run_now: bool = True):
     offs.extend(bus.on(ev, _wrapped) for ev in events)
     element.client.on_disconnect(_unsubscribe)
     if run_now:
-        _wrapped()
+        import asyncio
+        asyncio.create_task(_wrapped())
 
 
 LABEL_CLASS = 'text-xs font-bold'
@@ -345,8 +346,8 @@ _LABEL_TRANSFORMS = {
 
 
 def render_repeat_card(plugin, page, repeat_spec: dict):
-    from vigil.core.ui.ui.spec import FORMATTERS, ITEM_COLOR_RULES, ITEM_FORMATTERS
-    from vigil.core.ui.ui.theme import STATUS_COLORS
+    from vigil.core.ui.spec import FORMATTERS, ITEM_COLOR_RULES, ITEM_FORMATTERS
+    from vigil.core.ui.theme import STATUS_COLORS
 
     source = repeat_spec.get('source', 'snapshot')
     container_kind = repeat_spec.get('container', 'chips')
@@ -401,7 +402,7 @@ def render_repeat_card(plugin, page, repeat_spec: dict):
 
 
 def render_buttons(plugin, button_specs: list):
-    from vigil.core.ui.ui.spec import ENABLED_PREDICATES
+    from vigil.core.ui.spec import ENABLED_PREDICATES
 
     with ui.row().classes('gap-2 items-center'):
         for spec in button_specs:
@@ -438,7 +439,7 @@ def _substitute(template: str, row: Optional[dict], plugin) -> str:
 
 
 async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None):
-    from vigil.core.ui.ui.spec import _dialog_spec_for
+    from vigil.core.ui.spec import _dialog_spec_for
     spec = _dialog_spec_for(plugin, dialog_name)
     if spec is None:
         ui.notify(f'Unknown dialog {dialog_name!r}', type='negative')
@@ -493,8 +494,8 @@ async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None)
 
 
 def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optional[dict] = None):
-    from vigil.core.ui.ui.spec import ENABLED_PREDICATES, FORMATTERS, ITEM_COLOR_RULES
-    from vigil.core.ui.ui.theme import STATUS_COLORS
+    from vigil.core.ui.spec import ENABLED_PREDICATES, FORMATTERS, ITEM_COLOR_RULES
+    from vigil.core.ui.theme import STATUS_COLORS
 
     row_key = table_spec.get('row_key', 'id')
     columns = list(table_spec.get('columns', []))
@@ -602,9 +603,9 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
 
 
 def render_job_panel(plugin, spec: dict):
-    from vigil.core.ui.ui.spec import ENABLED_PREDICATES
-    from vigil.core.ui.ui.theme import PRIMARY, STATUS_COLORS
-    from vigil.plugins.base.time_utils import format_duration
+    from vigil.core.ui.spec import ENABLED_PREDICATES
+    from vigil.core.ui.theme import PRIMARY, STATUS_COLORS
+    from vigil.plugins.base.plugin_helpers import format_duration
 
     history_limit = spec.get('history_limit', 10)
     enabled_name = spec.get('enabled_if')

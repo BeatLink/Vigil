@@ -1,7 +1,6 @@
 from typing import Dict, Any, List
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 from vigil.plugins.base.plugin_helpers import format_bytes as _format_gb
 
@@ -14,11 +13,16 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class DiskSpaceCollectorPlugin(CollectorPlugin):
+class DiskSpace(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.path = config.get('path', '/')
         self.threshold = int(config.get('threshold', 90))
+
+        from vigil.core.ui.spec import register_color_rule, threshold_color
+        self._color_rule_name = f'disk_space_threshold_{self.id}'
+        register_color_rule(self._color_rule_name)(
+            threshold_color(warning=self.threshold, threshold=self.threshold))
 
     def commands(self) -> List[Command]:
         return [Command(f"df --output=size,used,avail,pcent -B1 '{self.path}' | tail -1")]
@@ -60,18 +64,6 @@ class DiskSpaceCollectorPlugin(CollectorPlugin):
             status='failed' if used_pct >= self.threshold else 'online',
         )
 
-
-class DiskSpaceUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.path = config.get('path', '/')
-        self.threshold = int(config.get('threshold', 90))
-
-        from vigil.core.ui.ui.spec import register_color_rule, threshold_color
-        self._color_rule_name = f'disk_space_threshold_{self.id}'
-        register_color_rule(self._color_rule_name)(
-            threshold_color(warning=self.threshold, threshold=self.threshold))
-
     @property
     def UI_SPEC(self):
         return {
@@ -91,5 +83,5 @@ class DiskSpaceUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

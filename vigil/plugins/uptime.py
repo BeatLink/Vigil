@@ -4,9 +4,8 @@ import re
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'status_card', 'latency_card'],
@@ -15,7 +14,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class UptimeCollectorPlugin(CollectorPlugin):
+class Uptime(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
 
@@ -78,8 +77,6 @@ class UptimeCollectorPlugin(CollectorPlugin):
             status='failed',
         )
 
-
-class UptimeUIPlugin(UIPlugin):
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -96,5 +93,5 @@ class UptimeUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

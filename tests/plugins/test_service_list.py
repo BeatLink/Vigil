@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import AsyncMock
-from vigil.plugins.service_list import ServiceListCollectorPlugin
+from vigil.plugins.service_list import ServiceList
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric, flush_writes
 
@@ -36,7 +36,7 @@ def _latest_metric(metric: str) -> float | None:
 class TestServiceListPlugin:
     @pytest.fixture
     def plugin(self, make_plugin):
-        return make_plugin(ServiceListCollectorPlugin, CFG)
+        return make_plugin(ServiceList, CFG)
 
     async def test_collects_services_and_metrics(self, plugin, run_cycle):
         outputs = [

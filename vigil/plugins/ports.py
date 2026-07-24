@@ -1,8 +1,7 @@
 from typing import Dict, Any, List, Optional, Tuple
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _FAIL = "FAIL"
 
@@ -75,7 +74,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class PortsCollectorPlugin(CollectorPlugin):
+class Ports(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.timeout = int(config.get('timeout', 5))
@@ -122,8 +121,6 @@ class PortsCollectorPlugin(CollectorPlugin):
             status='online',
         )
 
-
-class PortsUIPlugin(UIPlugin):
     @property
     def _checks(self) -> List[Dict[str, Any]]:
         return _named_checks(self.config.get('checks', []))
@@ -180,5 +177,5 @@ class PortsUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

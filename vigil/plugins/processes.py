@@ -1,8 +1,7 @@
 from typing import Dict, Any, List, Optional, Union
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _SEVERITY = {'online': 0, 'warning': 1, 'failed': 2}
@@ -37,7 +36,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class ProcessesCollectorPlugin(CollectorPlugin):
+class Processes(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.max_processes = int(config.get('max_processes', 20))
@@ -45,6 +44,19 @@ class ProcessesCollectorPlugin(CollectorPlugin):
         self.kill_signal   = str(config.get('kill_signal', 'TERM')).upper()
         self.cpu_warning   = float(config['cpu_warning'])   if 'cpu_warning'   in config else None
         self.cpu_threshold = float(config['cpu_threshold'])  if 'cpu_threshold'  in config else None
+
+        if self.cpu_warning is not None and self.cpu_threshold is not None:
+            from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
+            self._cpu_color_rule_name = f'processes_cpu_{self.id}'
+            register_item_color_rule(self._cpu_color_rule_name)(
+                lambda row: _level_for(row['cpu'], self.cpu_warning, self.cpu_threshold)
+            )
+            self._top_cpu_color_rule_name = f'processes_top_cpu_{self.id}'
+            register_color_rule(self._top_cpu_color_rule_name)(
+                threshold_color(warning=self.cpu_warning, threshold=self.cpu_threshold))
+        else:
+            self._cpu_color_rule_name = None
+            self._top_cpu_color_rule_name = None
 
     def commands(self) -> List[Command]:
         cmd = (
@@ -102,26 +114,6 @@ class ProcessesCollectorPlugin(CollectorPlugin):
             return CollectResult.failed(f"Failed to send SIG{signal} to PID {pid}: {result.stderr}")
         return CollectResult(logs=[(f"Sent SIG{signal} to PID {pid}", "INFO")], success=True)
 
-
-class ProcessesUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.cpu_warning   = float(config['cpu_warning'])   if 'cpu_warning'   in config else None
-        self.cpu_threshold = float(config['cpu_threshold']) if 'cpu_threshold' in config else None
-
-        if self.cpu_warning is not None and self.cpu_threshold is not None:
-            from vigil.core.ui.ui.spec import register_item_color_rule, register_color_rule, threshold_color
-            self._cpu_color_rule_name = f'processes_cpu_{self.id}'
-            register_item_color_rule(self._cpu_color_rule_name)(
-                lambda row: _level_for(row['cpu'], self.cpu_warning, self.cpu_threshold)
-            )
-            self._top_cpu_color_rule_name = f'processes_top_cpu_{self.id}'
-            register_color_rule(self._top_cpu_color_rule_name)(
-                threshold_color(warning=self.cpu_warning, threshold=self.cpu_threshold))
-        else:
-            self._cpu_color_rule_name = None
-            self._top_cpu_color_rule_name = None
-
     @property
     def UI_SPEC(self):
         return {
@@ -158,5 +150,5 @@ class ProcessesUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

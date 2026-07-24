@@ -1,8 +1,7 @@
 from typing import Dict, Any, List, Optional, Union
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _LIST_CMD = "virsh list --all"
 
@@ -34,7 +33,7 @@ def _parse_row(line: str):
     return name, state
 
 
-class VmsCollectorPlugin(CollectorPlugin):
+class Vms(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.uri = config.get('uri', 'qemu:///system')
@@ -133,8 +132,6 @@ class VmsCollectorPlugin(CollectorPlugin):
             return CollectResult.failed(f"{verb} of {name} failed: {result.stderr}")
         return True
 
-
-class VmsUIPlugin(UIPlugin):
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -149,11 +146,11 @@ class VmsUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_color_rule
+from vigil.core.ui.spec import register_color_rule
 
 
 @register_color_rule('vms_always_online')

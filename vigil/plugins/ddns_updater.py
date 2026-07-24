@@ -6,10 +6,9 @@ import dns.exception
 import dns.resolver
 import requests
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult, LocalActionPlan
-from vigil.plugins.base.web_plugin_base import UIPlugin
-from vigil.plugins.base.time_utils import format_age
+from vigil.plugins.base.plugin_helpers import format_age
 
 _IP_ECHO_SERVICES = (
     "https://api.ipify.org",
@@ -24,7 +23,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class DdnsUpdaterCollectorPlugin(CollectorPlugin):
+class DdnsUpdater(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.domain = config.get('domain')
@@ -217,8 +216,6 @@ class DdnsUpdaterCollectorPlugin(CollectorPlugin):
             success=True,
         )
 
-
-class DdnsUpdaterUIPlugin(UIPlugin):
     @property
     def _public_ip_text(self) -> str:
         return self.storage.get_setting(f"ddns:{self.id}:public_ip") or '--'
@@ -258,5 +255,5 @@ class DdnsUpdaterUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

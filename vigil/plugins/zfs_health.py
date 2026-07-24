@@ -1,8 +1,7 @@
 from typing import Dict, Any, List
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _UNHEALTHY = {'DEGRADED', 'FAULTED', 'OFFLINE', 'UNAVAIL', 'REMOVED'}
 
@@ -12,7 +11,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class ZFSHealthCollectorPlugin(CollectorPlugin):
+class ZFSHealth(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
 
@@ -49,8 +48,6 @@ class ZFSHealthCollectorPlugin(CollectorPlugin):
             status='failed' if degraded > 0 else 'online',
         )
 
-
-class ZFSHealthUIPlugin(UIPlugin):
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -68,11 +65,11 @@ class ZFSHealthUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_color_rule
+from vigil.core.ui.spec import register_color_rule
 
 
 @register_color_rule('zfs_health_always_online')

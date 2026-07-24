@@ -1,8 +1,7 @@
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 
 def _extract_counter(block: str, key: str) -> Optional[int]:
@@ -23,13 +22,22 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class OomCollectorPlugin(CollectorPlugin):
+class Oom(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.alert_for  = int(config.get('alert_for', 3))
         self.is_warning = bool(config.get('is_warning', False))
         self._last_total: Optional[int] = None
         self._since_kill: Optional[int] = None
+
+        from vigil.core.ui.spec import register_color_rule
+        self._color_rule_name = f'oom_recent_{self.id}'
+
+        @register_color_rule(self._color_rule_name)
+        def _recent_color(v, _is_warning=self.is_warning):
+            if v is None:
+                return None
+            return 'online' if v == 0 else ('warning' if _is_warning else 'failed')
 
     def commands(self) -> List[Command]:
         return [Command("cat /proc/vmstat")]
@@ -98,21 +106,6 @@ class OomCollectorPlugin(CollectorPlugin):
             status='online',
         )
 
-
-class OomUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.is_warning = bool(config.get('is_warning', False))
-
-        from vigil.core.ui.ui.spec import register_color_rule
-        self._color_rule_name = f'oom_recent_{self.id}'
-
-        @register_color_rule(self._color_rule_name)
-        def _recent_color(v, _is_warning=self.is_warning):
-            if v is None:
-                return None
-            return 'online' if v == 0 else ('warning' if _is_warning else 'failed')
-
     @property
     def UI_SPEC(self):
         return {
@@ -132,5 +125,5 @@ class OomUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

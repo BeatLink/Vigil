@@ -2,11 +2,11 @@ import asyncio
 import pytest
 from typing import List
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
 
 
-class _Probe(CollectorPlugin):
+class _Probe(Plugin):
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self.collections = 0
@@ -20,6 +20,9 @@ class _Probe(CollectorPlugin):
         self.collections += 1
         return CollectResult()
 
+    def render_ui(self, context: str = 'page'):
+        pass
+
 
 @pytest.fixture
 def probe(make_plugin):
@@ -29,10 +32,10 @@ def probe(make_plugin):
 @pytest.fixture
 def engine(tmp_path):
     from unittest.mock import patch
-    from vigil.core.connectors.engine import VigilEngine
+    from vigil.core.app.main import VigilEngine
     cfg = tmp_path / "c.yaml"
     cfg.write_text("plugins: []\n")
-    with patch("vigil.core.connectors.engine.VigilEngine._connect", create=True):
+    with patch("vigil.core.app.main.VigilEngine._connect", create=True):
         return VigilEngine(str(cfg), db_path_override=str(tmp_path / "e.db"))
 
 

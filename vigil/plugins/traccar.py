@@ -3,9 +3,8 @@ import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _AUTH_FAILED = "VIGIL_AUTH_FAILED"
 
@@ -59,7 +58,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class TraccarCollectorPlugin(CollectorPlugin):
+class Traccar(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8082')
@@ -153,8 +152,6 @@ class TraccarCollectorPlugin(CollectorPlugin):
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
         return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
 
-
-class TraccarUIPlugin(UIPlugin):
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
         'cards': {
@@ -169,11 +166,11 @@ class TraccarUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_color_rule
+from vigil.core.ui.spec import register_color_rule
 
 
 @register_color_rule('traccar_nonzero_failed')

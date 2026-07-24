@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import logging
 import importlib
@@ -6,15 +7,14 @@ import random
 import sys
 import time
 from typing import List, Optional, Dict, Tuple
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+
+from peewee import OperationalError
+
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.network_orchestrator import SSHConnectionPool
 from vigil.core.connectors.orchestration.types import JobPlan
 from vigil.core.database.config_file import ConfigFileManager as VigilConfig
 from vigil.core.database.database import DatabaseManager as VigilDatabase
-from peewee import OperationalError
-
-DEFAULT_INTERNAL_API_HOST = '127.0.0.1'
-DEFAULT_INTERNAL_API_PORT = 8081
 
 STARTUP_JITTER_SECONDS = 3.0
 
@@ -25,7 +25,7 @@ class VigilEngine:
     def __init__(self, config_path: str, db_path_override: Optional[str] = None):
         self.config_loader = VigilConfig(config_path)
         self.config = self.config_loader.data
-        self.plugins: List[CollectorPlugin] = []
+        self.plugins: List[Plugin] = []
         self.log_retention_days = self.config_loader.log_retention_days
         self._last_prune = 0.0
         self.ssh_pool = SSHConnectionPool()
@@ -54,7 +54,7 @@ class VigilEngine:
         merged['ssh_config'] = {**defaults, **plugin_cfg['ssh_config']}
         return merged
 
-    def setup_modules(self, plugins_cfg: Optional[List[Dict]] = None) -> List[CollectorPlugin]:
+    def setup_modules(self, plugins_cfg: Optional[List[Dict]] = None) -> List[Plugin]:
         current_level_plugins = []
         target_cfg = plugins_cfg if plugins_cfg is not None else self.config_loader.plugins
 
@@ -67,18 +67,19 @@ class VigilEngine:
                 module = importlib.import_module(module_path)
 
                 for _, obj in inspect.getmembers(module, inspect.isclass):
-                    if issubclass(obj, CollectorPlugin) and obj is not CollectorPlugin:
+                    if issubclass(obj, Plugin) and obj is not Plugin:
                         plugin_instance = obj(name, plugin_cfg, self.db, self.ssh_pool)
-                        
+                        plugin_instance.engine = self
+
                         if 'children' in plugin_cfg:
                             plugin_instance.children = self.setup_modules(plugin_cfg['children'])
-                        
+
                         current_level_plugins.append(plugin_instance)
                         logging.info(f"Loaded plugin '{name}' of type '{p_type}'")
                         break
             except Exception as e:
                 logging.error(f"Failed to load plugin '{name}' ({p_type}): {e}")
-        
+
         if plugins_cfg is None:
             self.plugins = current_level_plugins
             logging.info(f"Plugin registry built with {len(self.plugins)} root-level monitors.")
@@ -114,11 +115,11 @@ class VigilEngine:
 
     def _wire_self_monitor(self):
         try:
-            from vigil.plugins.vigil_self import VigilSelfCollectorPlugin
+            from vigil.plugins.vigil_self import VigilSelfPlugin
         except ImportError as e:
             logging.debug(f"Self-monitoring plugin unavailable: {e}")
             return
-        VigilSelfCollectorPlugin.engine = self
+        VigilSelfPlugin.engine = self
 
     def _start_exporters(self):
         exporters_cfg = self.config_loader.exporters or {}
@@ -133,12 +134,12 @@ class VigilEngine:
                 logging.error(f"Failed to start InfluxDB exporter: {e}")
 
     @staticmethod
-    def _flatten(plugins: List[CollectorPlugin]):
+    def _flatten(plugins: List[Plugin]):
         for p in plugins:
             yield p
             yield from VigilEngine._flatten(p.children)
 
-    async def _run_cycle(self, plugin: CollectorPlugin) -> bool:
+    async def _run_cycle(self, plugin: Plugin) -> bool:
         """The orchestration loop: async/IO lives here, plugin.commands()/
         parse() (or local_call()/parse_local() for non-SSH plugins) are
         pure and never touched directly by anything but this."""
@@ -153,8 +154,8 @@ class VigilEngine:
         plugin.storage.apply(result)
         return True
 
-    async def run_cycle_now(self, plugin: CollectorPlugin) -> bool:
-        """Single-flight wrapper for out-of-band (web-poll-triggered)
+    async def run_cycle_now(self, plugin: Plugin) -> bool:
+        """Single-flight wrapper for out-of-band (dashboard-poll-triggered)
         collection, sharing the same reentrancy guard as the scheduler."""
         if self._collecting.get(plugin.id):
             logging.debug(f"{plugin.name}: previous collection still running, skipping poll-triggered cycle")
@@ -166,7 +167,7 @@ class VigilEngine:
             self._last_collected[plugin.id] = time.monotonic()
             self._collecting[plugin.id] = False
 
-    async def dispatch_action(self, plugin: CollectorPlugin, action_id: str, **kwargs) -> Tuple[bool, Optional[Dict[str, str]]]:
+    async def dispatch_action(self, plugin: Plugin, action_id: str, **kwargs) -> Tuple[bool, Optional[Dict[str, str]]]:
         """Returns (success, metadata). metadata is the applied CollectResult's
         .metadata dict when one was applied (e.g. carrying 'content' for
         read-style dialog actions), else None. Plain bool outcomes (the
@@ -201,7 +202,7 @@ class VigilEngine:
             return outcome.success, (outcome.metadata or None)
         return bool(outcome), None
 
-    async def _monitor_loop(self, plugin: CollectorPlugin):
+    async def _monitor_loop(self, plugin: Plugin):
         await asyncio.sleep(random.uniform(0, STARTUP_JITTER_SECONDS))
         while True:
             try:
@@ -230,19 +231,7 @@ class VigilEngine:
         for plugin in monitors:
             asyncio.create_task(self._monitor_loop(plugin))
 
-        asyncio.create_task(self._run_internal_api())
-
-        await self._prune_loop()
-
-    async def _run_internal_api(self):
-        from vigil.core.connectors.internal_api import run_internal_api
-        api_cfg = self.config_loader.data.get('internal_api', {}) or {}
-        host = api_cfg.get('host', DEFAULT_INTERNAL_API_HOST)
-        port = int(api_cfg.get('port', DEFAULT_INTERNAL_API_PORT))
-        try:
-            await run_internal_api(self, host=host, port=port)
-        except Exception as e:
-            logging.critical(f"Collector internal API failed to start: {e}")
+        asyncio.create_task(self._prune_loop())
 
     def _maybe_prune_logs(self, interval: float = 3600.0):
         if self.log_retention_days <= 0:
@@ -256,3 +245,26 @@ class VigilEngine:
             self.db.prune_jobs(self.log_retention_days)
         except Exception as e:
             logging.error(f"Log retention prune failed: {e}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Vigil")
+    parser.add_argument("--config", default="config.yaml", help="Path to config file")
+    parser.add_argument("--db", help="Path to the SQLite database file (overrides config)")
+    parser.add_argument("--port", type=int, default=8080, help="Port for the web dashboard / GUI")
+    args = parser.parse_args()
+
+    logging.basicConfig(level=logging.INFO)
+
+    engine = VigilEngine(args.config, db_path_override=args.db)
+    engine.setup_modules()
+
+    import vigil.core.ui.theme as theme
+    theme.configure(engine.config_loader.theme_settings)
+
+    from vigil.core.ui.main_dashboard import init_gui
+    init_gui(engine=engine, port=args.port)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,8 +1,7 @@
 from typing import Any, Dict, List
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _COLLECT_CMD = (
@@ -27,11 +26,19 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class TemperatureCollectorPlugin(CollectorPlugin):
+class Temperature(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.temp_warning   = int(config.get('temp_warning',   70))
         self.temp_threshold = int(config.get('temp_threshold', 80))
+
+        from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
+        self._item_color_rule_name = f'temperature_zone_{self.id}'
+        register_item_color_rule(self._item_color_rule_name)(
+            lambda item: _level_for(item.get('value') or 0.0, self.temp_warning, self.temp_threshold))
+        self._max_color_rule_name = f'temperature_max_{self.id}'
+        register_color_rule(self._max_color_rule_name)(
+            threshold_color(warning=self.temp_warning, threshold=self.temp_threshold))
 
     def commands(self) -> List[Command]:
         return [Command(_COLLECT_CMD)]
@@ -76,21 +83,6 @@ class TemperatureCollectorPlugin(CollectorPlugin):
             status=overall,
         )
 
-
-class TemperatureUIPlugin(UIPlugin):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.temp_warning   = int(self.config.get('temp_warning',   70))
-        self.temp_threshold = int(self.config.get('temp_threshold', 80))
-
-        from vigil.core.ui.ui.spec import register_item_color_rule, register_color_rule, threshold_color
-        self._item_color_rule_name = f'temperature_zone_{self.id}'
-        register_item_color_rule(self._item_color_rule_name)(
-            lambda item: _level_for(item.get('value') or 0.0, self.temp_warning, self.temp_threshold))
-        self._max_color_rule_name = f'temperature_max_{self.id}'
-        register_color_rule(self._max_color_rule_name)(
-            threshold_color(warning=self.temp_warning, threshold=self.temp_threshold))
-
     @property
     def UI_SPEC(self):
         return {
@@ -115,5 +107,5 @@ class TemperatureUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

@@ -1,7 +1,6 @@
 from typing import Dict, Any, List
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 from vigil.plugins.base.plugin_helpers import format_bytes as _format_gb
 
 
@@ -23,11 +22,16 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class FoldersCollectorPlugin(CollectorPlugin):
+class Folders(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.folders = config.get('folders', []) or []
         self.du_timeout = int(config.get('timeout', 60))
+
+        from vigil.core.ui.spec import register_item_color_rule
+        self._by_key = {_sanitize(f.get('path', '')): f for f in self.folders if f.get('path')}
+        self._color_rule_name = f'folders_threshold_{self.id}'
+        register_item_color_rule(self._color_rule_name)(self._item_color)
 
     def _level_for(self, gb: float, folder: Dict[str, Any]) -> str:
         threshold = folder.get('threshold')
@@ -96,17 +100,6 @@ class FoldersCollectorPlugin(CollectorPlugin):
         status = 'failed' if any_error else worst_level
         return CollectResult(metrics=metrics, logs=logs, status=status)
 
-
-class FoldersUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.folders = config.get('folders', []) or []
-
-        from vigil.core.ui.ui.spec import register_item_color_rule
-        self._by_key = {_sanitize(f.get('path', '')): f for f in self.folders if f.get('path')}
-        self._color_rule_name = f'folders_threshold_{self.id}'
-        register_item_color_rule(self._color_rule_name)(self._item_color)
-
     def _item_color(self, item: Dict[str, Any]) -> str:
         gb = item.get('value') or 0.0
         folder = self._by_key.get(item.get('key', ''), {})
@@ -142,5 +135,5 @@ class FoldersUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

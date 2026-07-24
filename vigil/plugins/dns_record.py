@@ -3,9 +3,8 @@ from typing import Any, Callable, Dict, List, Optional
 import dns.exception
 import dns.resolver
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
     ['status_card', 'type_card', 'ttl_card'],
@@ -23,7 +22,7 @@ def _answer_to_str(record_type: str, rdata) -> str:
     return str(rdata).rstrip('.')
 
 
-class DnsRecordCollectorPlugin(CollectorPlugin):
+class DnsRecord(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.domain = config.get('domain')
@@ -36,6 +35,10 @@ class DnsRecordCollectorPlugin(CollectorPlugin):
             [str(v).rstrip('.') for v in expected] if expected else None
         )
         self.target = self.domain or self.name
+
+        from vigil.core.ui.spec import register_item_color_rule
+        self._color_rule_name = f'dns_record_expected_{self.id}'
+        register_item_color_rule(self._color_rule_name)(self._item_color)
 
     def commands(self) -> List[Command]:
         return []
@@ -136,20 +139,6 @@ class DnsRecordCollectorPlugin(CollectorPlugin):
             settings=settings,
         )
 
-
-class DnsRecordUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.record_type = str(config.get('record_type', 'A')).upper()
-        expected = config.get('expected')
-        self.expected: Optional[List[str]] = (
-            [str(v).rstrip('.') for v in expected] if expected else None
-        )
-
-        from vigil.core.ui.ui.spec import register_item_color_rule
-        self._color_rule_name = f'dns_record_expected_{self.id}'
-        register_item_color_rule(self._color_rule_name)(self._item_color)
-
     def _item_color(self, item: Dict[str, Any]) -> str:
         v = item.get('value')
         return 'online' if self.expected is None or v in self.expected else 'failed'
@@ -179,5 +168,5 @@ class DnsRecordUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

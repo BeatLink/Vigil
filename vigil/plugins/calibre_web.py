@@ -1,9 +1,8 @@
 import shlex
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
 
@@ -60,7 +59,20 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class CalibreWebCollectorPlugin(CollectorPlugin):
+class CalibreWeb(Plugin):
+    UI_SPEC = {
+        'layout': _DEFAULT_LAYOUT,
+        'cards': {
+            'feed_card': {
+                'metric': 'feed_ok', 'title': 'OPDS FEED',
+                'format': 'calibre_web_ok_text', 'color': 'calibre_web_ok_color',
+            },
+            'latency_card': {'metric': 'feed_latency_ms', 'title': 'LATENCY', 'format': 'ms0'},
+        },
+        'chart': {'metric': 'feed_latency_ms', 'title': 'OPDS LATENCY (ms)'},
+        'events': True,
+    }
+
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.url = config.get('url', 'http://127.0.0.1:8083')
@@ -116,27 +128,12 @@ class CalibreWebCollectorPlugin(CollectorPlugin):
             message = f"OPDS request returned unexpected status {status}"
         return CollectResult(metrics=metrics, logs=[(message, "ERROR")], status='failed')
 
-
-class CalibreWebUIPlugin(UIPlugin):
-    UI_SPEC = {
-        'layout': _DEFAULT_LAYOUT,
-        'cards': {
-            'feed_card': {
-                'metric': 'feed_ok', 'title': 'OPDS FEED',
-                'format': 'calibre_web_ok_text', 'color': 'calibre_web_ok_color',
-            },
-            'latency_card': {'metric': 'feed_latency_ms', 'title': 'LATENCY', 'format': 'ms0'},
-        },
-        'chart': {'metric': 'feed_latency_ms', 'title': 'OPDS LATENCY (ms)'},
-        'events': True,
-    }
-
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_formatter, register_color_rule
+from vigil.core.ui.spec import register_formatter, register_color_rule
 
 
 @register_formatter('calibre_web_ok_text')

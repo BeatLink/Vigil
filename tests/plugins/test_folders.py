@@ -1,7 +1,7 @@
 import pytest
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.folders import FoldersCollectorPlugin, _sanitize
+from vigil.plugins.folders import Folders, _sanitize
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -32,7 +32,7 @@ def _cfg(**extra):
 
 class TestFoldersCollection:
     async def test_under_thresholds_online(self, make_plugin, run_cycle):
-        p = make_plugin(FoldersCollectorPlugin, _cfg(folders=[
+        p = make_plugin(Folders, _cfg(folders=[
             {"path": "/var/log", "warning": 5, "threshold": 10},
         ]))
         run_cycle(p, lambda c: CmdResult(0, f"{2 * _GB}\t/var/log", ""))
@@ -40,21 +40,21 @@ class TestFoldersCollection:
         assert _latest_metric("folder_var_log_gb") == pytest.approx(2.0)
 
     async def test_over_warning(self, make_plugin, run_cycle):
-        p = make_plugin(FoldersCollectorPlugin, _cfg(folders=[
+        p = make_plugin(Folders, _cfg(folders=[
             {"path": "/data", "warning": 5, "threshold": 10},
         ]))
         run_cycle(p, lambda c: CmdResult(0, f"{7 * _GB}\t/data", ""))
         assert _latest_status() == "warning"
 
     async def test_over_threshold_failed(self, make_plugin, run_cycle):
-        p = make_plugin(FoldersCollectorPlugin, _cfg(folders=[
+        p = make_plugin(Folders, _cfg(folders=[
             {"path": "/data", "warning": 5, "threshold": 10},
         ]))
         run_cycle(p, lambda c: CmdResult(0, f"{12 * _GB}\t/data", ""))
         assert _latest_status() == "failed"
 
     async def test_worst_across_folders(self, make_plugin, run_cycle):
-        p = make_plugin(FoldersCollectorPlugin, _cfg(folders=[
+        p = make_plugin(Folders, _cfg(folders=[
             {"path": "/a", "warning": 5, "threshold": 10},
             {"path": "/b", "warning": 5, "threshold": 10},
         ]))
@@ -66,27 +66,27 @@ class TestFoldersCollection:
         assert _latest_status() == "failed"
 
     async def test_size_only_no_thresholds_online(self, make_plugin, run_cycle):
-        p = make_plugin(FoldersCollectorPlugin, _cfg(folders=[{"path": "/media"}]))
+        p = make_plugin(Folders, _cfg(folders=[{"path": "/media"}]))
         run_cycle(p, lambda c: CmdResult(0, f"{999 * _GB}\t/media", ""))
         assert _latest_status() == "online"
 
     async def test_du_timeout_failed(self, make_plugin, run_cycle):
-        p = make_plugin(FoldersCollectorPlugin, _cfg(folders=[{"path": "/huge"}], timeout=1))
+        p = make_plugin(Folders, _cfg(folders=[{"path": "/huge"}], timeout=1))
         run_cycle(p, lambda c: CmdResult(124, "", ""))
         assert _latest_status() == "failed"
 
     async def test_missing_folder_failed(self, make_plugin, run_cycle):
-        p = make_plugin(FoldersCollectorPlugin, _cfg(folders=[{"path": "/nope"}]))
+        p = make_plugin(Folders, _cfg(folders=[{"path": "/nope"}]))
         run_cycle(p, lambda c: CmdResult(1, "", "du: cannot access"))
         assert _latest_status() == "failed"
 
     async def test_no_folders_offline(self, make_plugin, run_cycle):
-        p = make_plugin(FoldersCollectorPlugin, _cfg())
+        p = make_plugin(Folders, _cfg())
         run_cycle(p, lambda c: CmdResult(0, "", ""))
         assert _latest_status() == "offline"
 
 
 class TestFoldersActions:
     async def test_on_action_returns_false(self, make_plugin):
-        p = make_plugin(FoldersCollectorPlugin, _cfg(folders=[{"path": "/x"}]))
+        p = make_plugin(Folders, _cfg(folders=[{"path": "/x"}]))
         assert p.plan_action("anything") is None

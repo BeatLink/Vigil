@@ -1,8 +1,7 @@
 from typing import Dict, Any, List, Tuple
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _COLLECT_CMD = (
@@ -40,11 +39,16 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class CpuUsageCollectorPlugin(CollectorPlugin):
+class CpuUsage(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.cpu_warning   = int(config.get('cpu_warning',   70))
         self.cpu_threshold = int(config.get('cpu_threshold', 85))
+
+        from vigil.core.ui.spec import register_color_rule, threshold_color
+        self._color_rule_name = f'cpu_usage_threshold_{self.id}'
+        register_color_rule(self._color_rule_name)(
+            threshold_color(warning=self.cpu_warning, threshold=self.cpu_threshold))
 
     def commands(self) -> List[Command]:
         return [Command(_COLLECT_CMD)]
@@ -76,18 +80,6 @@ class CpuUsageCollectorPlugin(CollectorPlugin):
             status=overall,
         )
 
-
-class CpuUsageUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.cpu_warning   = int(config.get('cpu_warning',   70))
-        self.cpu_threshold = int(config.get('cpu_threshold', 85))
-
-        from vigil.core.ui.ui.spec import register_color_rule, threshold_color
-        self._color_rule_name = f'cpu_usage_threshold_{self.id}'
-        register_color_rule(self._color_rule_name)(
-            threshold_color(warning=self.cpu_warning, threshold=self.cpu_threshold))
-
     @property
     def UI_SPEC(self):
         return {
@@ -103,5 +95,5 @@ class CpuUsageUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)

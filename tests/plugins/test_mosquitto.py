@@ -2,7 +2,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.mosquitto import (
-    MosquittoCollectorPlugin,
+    Mosquitto,
     _TIMED_OUT,
     _MISMATCH,
     _auth_flags,
@@ -27,7 +27,7 @@ BASE_CFG = {
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(MosquittoCollectorPlugin, BASE_CFG)
+    return make_plugin(Mosquitto, BASE_CFG)
 
 
 def _ok(nonce="vigil-probe-abc123"):

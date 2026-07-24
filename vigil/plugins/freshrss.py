@@ -3,9 +3,8 @@ import shlex
 import time
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.web_plugin_base import UIPlugin
 
 
 def _build_fetch_script(api_url: str, timeout: int, username: str,
@@ -56,7 +55,7 @@ _DEFAULT_LAYOUT = [
 ]
 
 
-class FreshrssCollectorPlugin(CollectorPlugin):
+class Freshrss(Plugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
         super().__init__(name, config, db, ssh_pool)
         self.api_url = config.get('api_url', 'http://127.0.0.1:80')
@@ -67,6 +66,15 @@ class FreshrssCollectorPlugin(CollectorPlugin):
         self.feed_stale_threshold = float(config.get('feed_stale_threshold', 168))
         self.refresh_stale_warning = float(config.get('refresh_stale_warning', 6))
         self.api_timeout = int(config.get('api_timeout', 10))
+
+        from vigil.core.ui.spec import register_color_rule
+        self._color_rule_name = f'freshrss_refresh_stale_{self.id}'
+
+        @register_color_rule(self._color_rule_name)
+        def _refresh_color(v, _warning=self.refresh_stale_warning):
+            if v is None:
+                return None
+            return 'warning' if v >= _warning else 'online'
 
     def commands(self) -> List[Command]:
         if not self.username:
@@ -145,21 +153,6 @@ class FreshrssCollectorPlugin(CollectorPlugin):
         log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
         return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
 
-
-class FreshrssUIPlugin(UIPlugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
-        super().__init__(name, config, db, collector_client)
-        self.refresh_stale_warning = float(config.get('refresh_stale_warning', 6))
-
-        from vigil.core.ui.ui.spec import register_color_rule
-        self._color_rule_name = f'freshrss_refresh_stale_{self.id}'
-
-        @register_color_rule(self._color_rule_name)
-        def _refresh_color(v, _warning=self.refresh_stale_warning):
-            if v is None:
-                return None
-            return 'warning' if v >= _warning else 'online'
-
     @property
     def UI_SPEC(self):
         return {
@@ -180,11 +173,11 @@ class FreshrssUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.ui.spec import generic_render
+        from vigil.core.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.core.ui.ui.spec import register_formatter
+from vigil.core.ui.spec import register_formatter
 
 
 @register_formatter('freshrss_age')

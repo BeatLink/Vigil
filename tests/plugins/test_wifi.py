@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.wifi import WifiCollectorPlugin, _parse_wireless, _auto_detect_interface
+from vigil.plugins.wifi import Wifi, _parse_wireless, _auto_detect_interface
 from vigil.core.connectors.orchestration.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -28,12 +28,12 @@ def _make_wireless(ifaces: dict) -> str:
 
 @pytest.fixture
 def plugin(make_plugin):
-    return make_plugin(WifiCollectorPlugin, BASE_CFG)
+    return make_plugin(Wifi, BASE_CFG)
 
 
 @pytest.fixture
 def explicit_plugin(make_plugin):
-    return make_plugin(WifiCollectorPlugin, {
+    return make_plugin(Wifi, {
         "name": "test-wifi-explicit",
         "id": "test-wifi-explicit",
         "interface": "wlan0",
