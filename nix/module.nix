@@ -55,20 +55,7 @@ let
     else
       withBorgPassphrase;
 
-  # Both processes read internal_api.host/port from the same config file —
-  # the collector to know where to bind, the web process to know where to
-  # proxy to — so they always agree without a second option to keep in sync.
-  finalSettings =
-    if withAuth != null then
-      withAuth
-      // {
-        internal_api = {
-          host = cfg.internalApiHost;
-          port = cfg.internalApiPort;
-        };
-      }
-    else
-      withAuth;
+  finalSettings = withAuth;
 
   configFile =
     if cfg.configFile != null then
@@ -125,31 +112,6 @@ in
       type = types.port;
       default = 8080;
       description = "Port for the web dashboard.";
-    };
-
-    internalApiPort = mkOption {
-      type = types.port;
-      default = 8081;
-      description = ''
-        Port for the collector process's internal API, which the web process
-        uses to proxy actions (restart a service, poll now, job control,
-        push-monitor heartbeats) to live plugin instances that only exist in
-        the collector. Bound to loopback only — see
-        <option>services.vigil.internalApiHost</option> — and must never be
-        exposed to the network: reaching it lets a caller run pre-built
-        commands on any monitored host via a plugin's SSHController.
-      '';
-    };
-
-    internalApiHost = mkOption {
-      type = types.str;
-      default = "127.0.0.1";
-      description = ''
-        Bind address for the collector's internal API. Loopback by default;
-        only change this if the collector and web processes run on different
-        hosts, and firewall the port yourself if you do — Vigil applies no
-        authentication of its own to this endpoint.
-      '';
     };
 
     dataDir = mkOption {
@@ -227,22 +189,19 @@ in
       }
     ];
 
-    # Vigil is two processes sharing one SQLite database (see
-    # vigil/core/main.py and vigil/core/web_engine.py for the split
-    # rationale): a collector that polls targets and owns the internal API,
-    # and a web process that serves the dashboard and proxies actions to the
-    # collector over loopback HTTP. Split into two systemd services so the
-    # web process's sandboxing doesn't need the SSH/ICMP capabilities the
-    # collector requires, and so either can restart independently.
-    systemd.services.vigil-collector = {
-      description = "Vigil Collector (target polling)";
+    # Vigil runs as a single process (see vigil/core/app/main.py): one
+    # asyncio event loop owns both the target-polling schedule and the
+    # NiceGUI web dashboard, sharing the SQLite database directly in-process
+    # rather than over a loopback API.
+    systemd.services.vigil = {
+      description = "Vigil (network/system monitor + dashboard)";
       wantedBy = [ "multi-user.target" ];
       after = [ "network.target" ];
 
       # ping (uptime plugin, run as a local subprocess) must be on PATH.
       # The system `ssh` client is NOT needed here — Vigil speaks SSH
-      # natively via asyncssh (see core/common/ssh_connector.py) rather than
-      # shelling out.
+      # natively via asyncssh (see core/connectors/ssh_connector.py) rather
+      # than shelling out.
       path = [
         pkgs.iputils
       ];
@@ -253,7 +212,7 @@ in
       environment.VIGIL_SSH_CONTROL_DIR = "/tmp/vigil-ssh";
 
       serviceConfig = {
-        ExecStart = "${cfg.package}/bin/vigil-collector --config ${configFile} --db ${cfg.dataDir}/vigil.db";
+        ExecStart = "${cfg.package}/bin/vigil --config ${configFile} --db ${cfg.dataDir}/vigil.db --port ${toString cfg.port}";
         User = cfg.user;
         Group = cfg.group;
         WorkingDirectory = cfg.dataDir;
@@ -271,48 +230,6 @@ in
         # (ambient so the unprivileged service process actually receives it).
         CapabilityBoundingSet = [ "CAP_NET_RAW" ];
         AmbientCapabilities = [ "CAP_NET_RAW" ];
-        LockPersonality = true;
-        RestrictNamespaces = true;
-        RestrictRealtime = true;
-        SystemCallFilter = [ "@system-service" ];
-      };
-    };
-
-    systemd.services.vigil-web = {
-      description = "Vigil Web Dashboard";
-      wantedBy = [ "multi-user.target" ];
-      # Not a hard dependency (After, not BindsTo/Requires): the dashboard
-      # can start and serve historical data — everything already in the
-      # database — even if the collector is mid-restart. Live actions just
-      # fail with "collector unreachable" until it's back (see
-      # CollectorClient's error handling), rather than the dashboard itself
-      # refusing to come up.
-      after = [
-        "network.target"
-        "vigil-collector.service"
-      ];
-
-      serviceConfig = {
-        ExecStart = "${cfg.package}/bin/vigil-web --config ${configFile} --db ${cfg.dataDir}/vigil.db --port ${toString cfg.port}";
-        User = cfg.user;
-        Group = cfg.group;
-        WorkingDirectory = cfg.dataDir;
-        StateDirectory = "vigil";
-        StateDirectoryMode = "0750";
-        Restart = "on-failure";
-        RestartSec = "5s";
-
-        PrivateTmp = true;
-        NoNewPrivileges = true;
-        ProtectSystem = "strict";
-        ProtectHome = true;
-        # Needs the dataDir too: it opens the same SQLite file for reads, and
-        # its own writer thread persists UI preferences (drawer width,
-        # sidebar tree expanded state) into the same database.
-        ReadWritePaths = [ cfg.dataDir ];
-        # No CAP_NET_RAW/openssh here — this process never touches a
-        # monitored host directly, only the collector's internal API over
-        # loopback TCP.
         LockPersonality = true;
         RestrictNamespaces = true;
         RestrictRealtime = true;

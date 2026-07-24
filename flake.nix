@@ -43,12 +43,9 @@
                     peewee
                     nicegui
                     dnspython
-                    # Async HTTP client the web process uses to reach the
-                    # collector's internal API (see vigil/web/remote_proxy.py).
-                    httpx
                     # Native async SSH transport (see
-                    # vigil/core/common/ssh_connector.py) — the collector
-                    # process's only way of talking to monitored hosts.
+                    # vigil/core/connectors/ssh_connector.py) — Vigil's only
+                    # way of talking to monitored hosts.
                     asyncssh
                 ];
 
@@ -64,12 +61,9 @@
                     pythonImportsCheck = [ "vigil" ];
                 };
 
-                # Vigil runs as two processes: a collector (polls targets, owns
-                # the internal API) and a web process (dashboard, proxies
-                # actions to the collector). This dev script starts both —
-                # collector in the background, web process in the foreground
-                # so Ctrl-C stops the whole thing (the collector is killed
-                # along with the shell's job group on script exit).
+                # Vigil runs as a single process (target polling and the web
+                # dashboard share one asyncio event loop — see
+                # vigil/core/app/main.py). This dev script just runs it.
                 vigil-run = pkgs.writeShellScriptBin "vigil-run" ''
                     set -e
                     # Find project root (where pyproject.toml is)
@@ -80,35 +74,16 @@
 
                     export PYTHONPATH="$VIGIL_ROOT:$PYTHONPATH"
 
-                    echo "Starting Vigil collector (internal API on http://127.0.0.1:8081)"
-                    python3 -m vigil.collector --config "$VIGIL_ROOT/config.yaml" &
-                    collector_pid=$!
-                    trap 'kill "$collector_pid" 2>/dev/null' EXIT
-
-                    echo "Starting Vigil web dashboard on http://localhost:8080"
-                    exec python3 -m vigil.web --config "$VIGIL_ROOT/config.yaml" --port 8080 "$@"
+                    echo "Starting Vigil on http://localhost:8080"
+                    exec python3 -m vigil.core.app.main --config "$VIGIL_ROOT/config.yaml" --port 8080 "$@"
                 '';
             in
             {
                 packages.default = vigil-pkg;
 
-                # Vigil is two binaries now (vigil-collector, vigil-web — see
-                # pyproject.toml's [project.scripts]); `nix run` has no single
-                # process to hand back, so apps.default runs both via the same
-                # dev script devShells.default exposes as `vigil-run`.
-                apps.vigil-collector = {
-                    type = "app";
-                    program = "${vigil-pkg}/bin/vigil-collector";
-                };
-
-                apps.vigil-web = {
-                    type = "app";
-                    program = "${vigil-pkg}/bin/vigil-web";
-                };
-
                 apps.default = {
                     type = "app";
-                    program = "${vigil-run}/bin/vigil-run";
+                    program = "${vigil-pkg}/bin/vigil";
                 };
 
                 devShells.default = pkgs.mkShell {
