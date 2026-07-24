@@ -2,7 +2,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.collector.ssh_runner import SSHCollector, SSHController
+from vigil.core.connectors.ssh_runner import SSHCollector, SSHController
 
 
 @pytest.fixture
@@ -36,7 +36,7 @@ class TestFetchOutput:
         assert "connection reset" in err
 
     async def test_passes_command_to_ssh_execute(self, mock_conn):
-        from vigil.collector.ssh_runner import TIMEOUT
+        from vigil.core.connectors.ssh_runner import TIMEOUT
         collector = SSHCollector(mock_conn)
         await collector.fetch_output("df -h")
         mock_conn.execute.assert_called_once_with("df -h", timeout=TIMEOUT)
@@ -75,7 +75,7 @@ class TestExecuteAction:
         assert "connection reset" in err
 
     async def test_default_timeout_is_longer_than_collector(self, mock_conn):
-        from vigil.collector.ssh_runner import COLLECT_TIMEOUT, CONTROL_TIMEOUT
+        from vigil.core.connectors.ssh_runner import COLLECT_TIMEOUT, CONTROL_TIMEOUT
         controller = SSHController(mock_conn)
         await controller.execute_action("df -h")
         mock_conn.execute.assert_called_once_with("df -h", timeout=CONTROL_TIMEOUT)

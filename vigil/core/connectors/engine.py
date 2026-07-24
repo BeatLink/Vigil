@@ -6,11 +6,11 @@ import random
 import sys
 import time
 from typing import List, Optional, Dict, Tuple
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.network_orchestrator import SSHConnectionPool
-from vigil.collector.orchestration.types import JobPlan
-from vigil.core.data.config_file import ConfigFileManager as VigilConfig
-from vigil.core.data.database import DatabaseManager as VigilDatabase
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.network_orchestrator import SSHConnectionPool
+from vigil.core.connectors.orchestration.types import JobPlan
+from vigil.core.database.config_file import ConfigFileManager as VigilConfig
+from vigil.core.database.database import DatabaseManager as VigilDatabase
 from peewee import OperationalError
 
 DEFAULT_INTERNAL_API_HOST = '127.0.0.1'
@@ -125,7 +125,7 @@ class VigilEngine:
         influx_cfg = exporters_cfg.get('influxdb')
         if influx_cfg and influx_cfg.get('url'):
             try:
-                from vigil.collector.exporters.influxdb import InfluxDBExporter
+                from vigil.core.connectors.exporters.influxdb import InfluxDBExporter
                 exporter = InfluxDBExporter(self.db, influx_cfg)
                 asyncio.create_task(exporter.run())
                 logging.info("InfluxDB exporter task started.")
@@ -171,7 +171,7 @@ class VigilEngine:
         .metadata dict when one was applied (e.g. carrying 'content' for
         read-style dialog actions), else None. Plain bool outcomes (the
         common write/dispatch case) return (bool, None)."""
-        from vigil.collector.orchestration.types import CollectResult, LocalActionPlan
+        from vigil.core.connectors.orchestration.types import CollectResult, LocalActionPlan
 
         plan = plugin.plan_action(action_id, **kwargs)
         if plan is None:
@@ -218,7 +218,7 @@ class VigilEngine:
     async def run(self):
         logging.info("Vigil Engine started...")
 
-        from vigil.core.data.events import bus
+        from vigil.core.database.events import bus
         bus.bind_loop(asyncio.get_running_loop())
 
         self.db.insert_event("INFO", "Vigil Engine started polling loop.", "vigil_core")
@@ -235,7 +235,7 @@ class VigilEngine:
         await self._prune_loop()
 
     async def _run_internal_api(self):
-        from vigil.collector.internal_api import run_internal_api
+        from vigil.core.connectors.internal_api import run_internal_api
         api_cfg = self.config_loader.data.get('internal_api', {}) or {}
         host = api_cfg.get('host', DEFAULT_INTERNAL_API_HOST)
         port = int(api_cfg.get('port', DEFAULT_INTERNAL_API_PORT))

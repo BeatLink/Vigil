@@ -1,8 +1,8 @@
 from typing import Dict, Any, List
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _UNHEALTHY = {'DEGRADED', 'FAULTED', 'OFFLINE', 'UNAVAIL', 'REMOVED'}
 
@@ -68,11 +68,11 @@ class ZFSHealthUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.web.ui.spec import register_color_rule
+from vigil.core.ui.ui.spec import register_color_rule
 
 
 @register_color_rule('zfs_health_always_online')

@@ -1,6 +1,6 @@
 from typing import Any, Dict, List
 
-from vigil.core.common.time_utils import parse_duration
+from vigil.plugins.base.time_utils import parse_duration
 
 
 class PluginConfigMixin:

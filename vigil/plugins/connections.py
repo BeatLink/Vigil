@@ -1,10 +1,10 @@
 from typing import Dict, Any, List
 from collections import Counter
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
-from vigil.core.common.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _TCP_STATES = {
     '01': 'ESTABLISHED',
@@ -79,7 +79,7 @@ class ConnectionsUIPlugin(UIPlugin):
         self.total_warning   = int(self.config.get('total_warning',   500))
         self.total_threshold = int(self.config.get('total_threshold', 1000))
 
-        from vigil.web.ui.spec import register_color_rule, threshold_color
+        from vigil.core.ui.ui.spec import register_color_rule, threshold_color
         self._total_color_name = f'connections_total_{self.id}'
         register_color_rule(self._total_color_name)(
             threshold_color(warning=self.total_warning, threshold=self.total_threshold))
@@ -103,5 +103,5 @@ class ConnectionsUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

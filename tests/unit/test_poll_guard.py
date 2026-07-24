@@ -2,8 +2,8 @@ import asyncio
 import pytest
 from typing import List
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
 
 
 class _Probe(CollectorPlugin):
@@ -29,10 +29,10 @@ def probe(make_plugin):
 @pytest.fixture
 def engine(tmp_path):
     from unittest.mock import patch
-    from vigil.collector.main import VigilEngine
+    from vigil.core.connectors.engine import VigilEngine
     cfg = tmp_path / "c.yaml"
     cfg.write_text("plugins: []\n")
-    with patch("vigil.collector.main.VigilEngine._connect", create=True):
+    with patch("vigil.core.connectors.engine.VigilEngine._connect", create=True):
         return VigilEngine(str(cfg), db_path_override=str(tmp_path / "e.db"))
 
 
@@ -67,7 +67,7 @@ class TestReturnValue:
 
 class TestTimeoutConfig:
     def test_defaults_to_framework_timeout(self, make_plugin):
-        from vigil.collector.ssh_runner import TIMEOUT
+        from vigil.core.connectors.ssh_runner import TIMEOUT
         p = make_plugin(_Probe, {})
         assert p.timeout == TIMEOUT
 

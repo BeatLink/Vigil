@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.trilium import TriliumCollectorPlugin, _age_hours, _parse_response
-from vigil.collector.orchestration.types import CmdResult
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.database.database import db, StatusHistory, Metric
 
 pytestmark = pytest.mark.asyncio
 

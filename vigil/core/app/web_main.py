@@ -1,7 +1,7 @@
 import argparse
 import logging
 
-from vigil.web.engine import VigilWebEngine
+from vigil.core.ui.engine import VigilWebEngine
 
 
 def main():
@@ -21,8 +21,8 @@ def main():
     if args.collector_url:
         collector_url = args.collector_url
     else:
-        from vigil.core.data.config_file import ConfigFileManager
-        from vigil.collector.main import DEFAULT_INTERNAL_API_HOST, DEFAULT_INTERNAL_API_PORT
+        from vigil.core.database.config_file import ConfigFileManager
+        from vigil.core.connectors.engine import DEFAULT_INTERNAL_API_HOST, DEFAULT_INTERNAL_API_PORT
         api_cfg = ConfigFileManager(args.config).data.get('internal_api', {}) or {}
         host = api_cfg.get('host', DEFAULT_INTERNAL_API_HOST)
         port = api_cfg.get('port', DEFAULT_INTERNAL_API_PORT)
@@ -30,10 +30,10 @@ def main():
 
     engine = VigilWebEngine(args.config, db_path_override=args.db, collector_url=collector_url)
 
-    import vigil.web.ui.theme as theme
+    import vigil.core.ui.ui.theme as theme
     theme.configure(engine.config_loader.theme_settings)
 
-    from vigil.web.ui.main_dashboard import init_gui
+    from vigil.core.ui.ui.main_dashboard import init_gui
     engine.setup_ui_modules()
 
     init_gui(engine=engine, port=args.port)

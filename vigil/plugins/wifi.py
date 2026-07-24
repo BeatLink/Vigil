@@ -1,8 +1,8 @@
 from typing import Dict, Any, List, Optional, Tuple
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 
 def _parse_wireless(stdout: str) -> Dict[str, Tuple[float, float]]:
@@ -86,7 +86,7 @@ class WifiUIPlugin(UIPlugin):
         self.quality_warning   = float(self.config.get('quality_warning',   40))
         self.quality_threshold = float(self.config.get('quality_threshold', 20))
 
-        from vigil.web.ui.spec import register_color_rule
+        from vigil.core.ui.ui.spec import register_color_rule
         self._quality_color_name = f'wifi_quality_{self.id}'
         register_color_rule(self._quality_color_name)(self._quality_color)
 
@@ -121,5 +121,5 @@ class WifiUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

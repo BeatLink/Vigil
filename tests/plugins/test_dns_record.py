@@ -8,7 +8,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.dns_record import DnsRecordCollectorPlugin
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 def _latest_status(pid):

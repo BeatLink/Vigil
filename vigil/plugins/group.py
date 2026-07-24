@@ -1,9 +1,9 @@
 import json
 from typing import Any, Callable, Dict, List, Optional
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 SEVERITY_ORDER = {
     'online': 0,
@@ -65,8 +65,8 @@ class GroupUIPlugin(UIPlugin):
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.web.ui.theme import STATUS_COLORS, TEXT, TEXT_MUTED
-        from vigil.web.ui.components import card
+        from vigil.core.ui.ui.theme import STATUS_COLORS, TEXT, TEXT_MUTED
+        from vigil.core.ui.ui.components import card
 
         min_card_width = self.config.get('grid_min_width', '320px')
         with ui.element('div').style(

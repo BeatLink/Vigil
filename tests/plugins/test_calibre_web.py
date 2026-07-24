@@ -1,8 +1,8 @@
 import pytest
 
 from vigil.plugins.calibre_web import CalibreWebCollectorPlugin, _SEP, _looks_like_opds, _parse_response
-from vigil.collector.orchestration.types import CmdResult
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {

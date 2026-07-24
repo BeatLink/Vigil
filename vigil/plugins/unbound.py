@@ -1,9 +1,9 @@
 import shlex
 from typing import Any, Dict, List, Tuple
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
 
@@ -150,7 +150,7 @@ class UnboundUIPlugin(UIPlugin):
         self.servfail_warning = float(self.config.get('servfail_warning', 5))
         self.servfail_threshold = float(self.config.get('servfail_threshold', 20))
 
-        from vigil.web.ui.spec import register_color_rule, threshold_color
+        from vigil.core.ui.ui.spec import register_color_rule, threshold_color
         self._color_rule_name = f'unbound_servfail_{self.id}'
         register_color_rule(self._color_rule_name)(
             threshold_color(warning=self.servfail_warning, threshold=self.servfail_threshold))
@@ -180,11 +180,11 @@ class UnboundUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.web.ui.spec import register_formatter, register_color_rule
+from vigil.core.ui.ui.spec import register_formatter, register_color_rule
 
 
 @register_formatter('unbound_resolution_text')

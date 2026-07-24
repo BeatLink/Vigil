@@ -1,6 +1,6 @@
 import logging
 from typing import Optional, Tuple
-from vigil.core.common.ssh_connector import SSHConnection
+from vigil.core.connectors.ssh_connector import SSHConnection
 
 COLLECT_TIMEOUT = 30.0
 CONTROL_TIMEOUT = 60.0

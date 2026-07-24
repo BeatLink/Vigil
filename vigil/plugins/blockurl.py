@@ -2,9 +2,9 @@ import json
 import shlex
 from typing import Any, Dict, List, Optional
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 
 def _build_fetch_script(api_url: str, timeout: int, api_key_command: Optional[str],
@@ -93,7 +93,7 @@ class BlockurlUIPlugin(UIPlugin):
         super().__init__(name, config, db, collector_client)
         self.min_domains = int(config.get('min_domains', 1))
 
-        from vigil.web.ui.spec import register_color_rule
+        from vigil.core.ui.ui.spec import register_color_rule
         self._color_rule_name = f'blockurl_min_domains_{self.id}'
 
         @register_color_rule(self._color_rule_name)
@@ -118,5 +118,5 @@ class BlockurlUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

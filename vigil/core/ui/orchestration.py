@@ -26,7 +26,7 @@ class WebStorageOrchestrator:
 
 class UIOrchestrator:
     def __init__(self, plugin: Any):
-        from vigil.web.ui.components import (render_host_card, render_status_card,
+        from vigil.core.ui.ui.components import (render_host_card, render_status_card,
                                              metric_table, log_table, event_table,
                                              open_dialog_impl)
 
@@ -39,5 +39,5 @@ class UIOrchestrator:
         self.open_dialog = partial(open_dialog_impl, plugin)
 
     def page(self, metric_names: List[str] = (), interval: float = 1.0) -> "PluginPage":
-        from vigil.web.ui.model import PluginPage
+        from vigil.core.ui.ui.model import PluginPage
         return PluginPage(self._plugin, metric_names=metric_names, interval=interval)

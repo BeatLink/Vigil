@@ -6,8 +6,8 @@ import pytest
 from unittest.mock import AsyncMock
 
 from vigil.plugins.borg import BorgCollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, JobPlan
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult, JobPlan
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {
@@ -270,7 +270,7 @@ class TestCommand:
         assert "BORG_RSH=" not in make_plugin(BorgCollectorPlugin, BASE_CFG)._list_command()
 
     def test_borg_defaults_to_a_longer_timeout(self, make_plugin):
-        from vigil.collector.ssh_runner import TIMEOUT
+        from vigil.core.connectors.ssh_runner import TIMEOUT
         p = make_plugin(BorgCollectorPlugin, BASE_CFG)
         assert p.timeout == BorgCollectorPlugin.DEFAULT_TIMEOUT
         assert p.timeout > TIMEOUT
@@ -542,7 +542,7 @@ class TestBackupExecution:
         await _run_backup(backup_plugin, None)
         db_manager.flush()
 
-        from vigil.core.data.database import Event
+        from vigil.core.database.database import Event
         with db.connection_context():
             events = [e.message for e in Event.select().where(Event.message.contains("file changed"))]
         assert events
@@ -620,7 +620,7 @@ class TestRepoStats:
 
 class TestEventLogging:
     async def test_messages_land_where_the_ui_reads_them(self, plugin, run_cycle, db_manager):
-        from vigil.core.data.database import Event, LogLine
+        from vigil.core.database.database import Event, LogLine
         _collect(plugin, run_cycle, CmdResult(0, _list_json(int(time.time()) - 60), ""))
         db_manager.flush()
 

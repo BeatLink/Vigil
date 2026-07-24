@@ -3,7 +3,7 @@ import logging
 import time
 from typing import Any, Callable, Optional, Tuple
 
-from vigil.core.common.ssh_connector import SSHConnection
+from vigil.core.connectors.ssh_connector import SSHConnection
 
 FLUSH_INTERVAL = 0.5
 

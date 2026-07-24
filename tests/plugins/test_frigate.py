@@ -4,8 +4,8 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.frigate import FrigateCollectorPlugin, _build_fetch_script, _parse_response
-from vigil.collector.orchestration.types import CmdResult
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {

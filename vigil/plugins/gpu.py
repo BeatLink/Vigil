@@ -1,9 +1,9 @@
 from typing import Any, Dict, List
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
-from vigil.core.common.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _COLLECT_CMD = (
     "nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total,temperature.gpu "
@@ -105,7 +105,7 @@ class GpuUIPlugin(UIPlugin):
         self.temp_warning   = int(config.get('temp_warning',   80))
         self.temp_threshold = int(config.get('temp_threshold', 90))
 
-        from vigil.web.ui.spec import register_item_color_rule, register_color_rule, threshold_color
+        from vigil.core.ui.ui.spec import register_item_color_rule, register_color_rule, threshold_color
         self._util_color_rule_name = f'gpu_util_{self.id}'
         register_item_color_rule(self._util_color_rule_name)(
             lambda item: _level_for(item.get('value') or 0.0, self.util_warning, self.util_threshold))
@@ -148,5 +148,5 @@ class GpuUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

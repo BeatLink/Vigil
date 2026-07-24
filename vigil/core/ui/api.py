@@ -2,7 +2,7 @@ from typing import Any, Optional
 
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from vigil.collector.exporters import prometheus
+from vigil.core.connectors.exporters import prometheus
 
 
 def _flatten(plugins):

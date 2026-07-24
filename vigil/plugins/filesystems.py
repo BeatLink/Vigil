@@ -1,8 +1,8 @@
 from typing import Dict, Any, List
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
-from vigil.core.common.plugin_helpers import format_bytes as _format_gb
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.plugins.base.plugin_helpers import format_bytes as _format_gb
 
 _EXCLUDE_TYPES = ['tmpfs', 'devtmpfs', 'squashfs', 'overlay', 'proc', 'sysfs',
                   'cgroup', 'cgroup2', 'devpts', 'mqueue', 'debugfs',
@@ -188,7 +188,7 @@ class FilesystemsUIPlugin(UIPlugin):
         self.inode_warning   = int(config.get('inode_warning',   85))
         self.inode_threshold = int(config.get('inode_threshold', 95))
 
-        from vigil.web.ui.spec import register_item_color_rule, register_item_formatter
+        from vigil.core.ui.ui.spec import register_item_color_rule, register_item_formatter
         self._color_rule_name = f'filesystems_level_{self.id}'
         register_item_color_rule(self._color_rule_name)(self._item_color)
         self._format_fn_name = f'filesystems_text_{self.id}'
@@ -257,9 +257,9 @@ class FilesystemsUIPlugin(UIPlugin):
 
     @property
     def _filesystem_count(self) -> str:
-        from vigil.web.ui.components import _scan_metric_family
+        from vigil.core.ui.ui.components import _scan_metric_family
         return str(len(_scan_metric_family(self, 'fs_', '_used_pct', set(), 200)))
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

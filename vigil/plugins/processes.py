@@ -1,9 +1,9 @@
 from typing import Dict, Any, List, Optional, Union
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
-from vigil.core.common.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _SEVERITY = {'online': 0, 'warning': 1, 'failed': 2}
 
@@ -110,7 +110,7 @@ class ProcessesUIPlugin(UIPlugin):
         self.cpu_threshold = float(config['cpu_threshold']) if 'cpu_threshold' in config else None
 
         if self.cpu_warning is not None and self.cpu_threshold is not None:
-            from vigil.web.ui.spec import register_item_color_rule, register_color_rule, threshold_color
+            from vigil.core.ui.ui.spec import register_item_color_rule, register_color_rule, threshold_color
             self._cpu_color_rule_name = f'processes_cpu_{self.id}'
             register_item_color_rule(self._cpu_color_rule_name)(
                 lambda row: _level_for(row['cpu'], self.cpu_warning, self.cpu_threshold)
@@ -158,5 +158,5 @@ class ProcessesUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

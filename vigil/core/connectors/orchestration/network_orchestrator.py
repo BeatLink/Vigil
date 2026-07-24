@@ -1,10 +1,10 @@
 import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
-from vigil.core.common.ssh_connector import SSHConnection
-from vigil.collector.ssh_runner import SSHCollector, SSHController
-from vigil.collector.controllers.job_controller import JobController
-from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, JobPlan
+from vigil.core.connectors.ssh_connector import SSHConnection
+from vigil.core.connectors.ssh_runner import SSHCollector, SSHController
+from vigil.core.connectors.job_controller import JobController
+from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, JobPlan
 
 _PoolKey = Tuple[str, int, Optional[str], Optional[str]]
 

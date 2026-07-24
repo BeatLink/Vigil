@@ -3,9 +3,9 @@ import shlex
 import time
 from typing import Any, Dict, List, Optional
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 
 def _build_fetch_script(api_url: str, timeout: int, username: str,
@@ -151,7 +151,7 @@ class FreshrssUIPlugin(UIPlugin):
         super().__init__(name, config, db, collector_client)
         self.refresh_stale_warning = float(config.get('refresh_stale_warning', 6))
 
-        from vigil.web.ui.spec import register_color_rule
+        from vigil.core.ui.ui.spec import register_color_rule
         self._color_rule_name = f'freshrss_refresh_stale_{self.id}'
 
         @register_color_rule(self._color_rule_name)
@@ -180,11 +180,11 @@ class FreshrssUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.web.ui.spec import register_formatter
+from vigil.core.ui.ui.spec import register_formatter
 
 
 @register_formatter('freshrss_age')

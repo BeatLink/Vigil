@@ -1,9 +1,9 @@
 import json
 from typing import Any, Dict, List, Optional
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _QUALITY_ORDER = {'unusable': 0, 'poor': 1, 'fair': 2, 'excellent': 3}
 
@@ -127,7 +127,7 @@ class FrigateCollectorPlugin(CollectorPlugin):
         )
 
 
-from vigil.web.ui.spec import generic_render, register_formatter, register_color_rule
+from vigil.core.ui.ui.spec import generic_render, register_formatter, register_color_rule
 
 _RANK_TO_LABEL = {0: 'UNUSABLE', 1: 'POOR', 2: 'FAIR', 3: 'EXCELLENT'}
 

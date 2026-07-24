@@ -2,8 +2,8 @@ import asyncio
 import pytest
 import yaml
 from unittest.mock import MagicMock, AsyncMock, patch
-from vigil.collector.main import VigilEngine
-from vigil.core.data.database import db
+from vigil.core.connectors.engine import VigilEngine
+from vigil.core.database.database import db
 
 
 def _write_config(tmp_path, content: dict) -> str:
@@ -26,21 +26,21 @@ class TestEngineInitialization:
             "database": {"path": db_path},
             "plugins": [],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path)
         assert engine.db is not None
 
     def test_db_path_taken_from_config(self, tmp_path):
         db_path = str(tmp_path / "custom.db")
         cfg_path = _write_config(tmp_path, {"database": {"path": db_path}, "plugins": []})
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path)
         assert engine.db_path == db_path
 
     def test_db_path_override_takes_precedence(self, tmp_path):
         cfg_path = _write_config(tmp_path, {"database": {"path": "original.db"}, "plugins": []})
         override = str(tmp_path / "override.db")
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path, db_path_override=override)
         assert engine.db_path == override
 
@@ -57,7 +57,7 @@ class TestPluginLoading:
                 "target_host": "127.0.0.1",
             }],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         assert len(engine.plugins) == 1
@@ -69,7 +69,7 @@ class TestPluginLoading:
             "database": {"path": db_path},
             "plugins": [{"name": "Bad", "type": "does_not_exist"}],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         assert len(engine.plugins) == 0
@@ -86,7 +86,7 @@ class TestPluginLoading:
                 ],
             }],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         assert len(engine.plugins) == 1
@@ -103,7 +103,7 @@ class TestPluginLoading:
                 {"name": "Good", "id": "good", "type": "uptime", "target_host": "127.0.0.1"},
             ],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         assert len(engine.plugins) == 1
@@ -121,7 +121,7 @@ class TestSSHDefaultsMerge:
                 "ssh_config": {"host": "server.technet"},
             }],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection") as mock_ssh:
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection") as mock_ssh:
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         passed_cfg = mock_ssh.from_config.call_args[0][0]
@@ -141,7 +141,7 @@ class TestSSHDefaultsMerge:
                 "ssh_config": {"host": "server.technet", "username": "root"},
             }],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection") as mock_ssh:
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection") as mock_ssh:
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         passed_cfg = mock_ssh.from_config.call_args[0][0]
@@ -157,7 +157,7 @@ class TestSSHDefaultsMerge:
                 "target_host": "127.0.0.1",
             }],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection") as mock_ssh:
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection") as mock_ssh:
             engine = VigilEngine(cfg_path)
             engine.setup_modules()
         passed_cfg = mock_ssh.from_config.call_args[0][0]
@@ -171,7 +171,7 @@ class TestLogRetention:
             "logging": {"retention_days": 14},
             "plugins": [],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path)
         assert engine.log_retention_days == 14
 
@@ -181,7 +181,7 @@ class TestLogRetention:
             "logging": {"retention_days": 30},
             "plugins": [],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path)
         engine.db = MagicMock()
         engine._maybe_prune_logs()
@@ -195,7 +195,7 @@ class TestLogRetention:
             "logging": {"retention_days": 0},
             "plugins": [],
         })
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path)
         engine.db = MagicMock()
         engine._maybe_prune_logs()
@@ -229,7 +229,7 @@ class TestPerMonitorScheduling:
         engine._collecting = {}
         engine._last_collected = {}
         engine.run_cycle_now = AsyncMock(return_value=True)
-        with patch("vigil.collector.main.asyncio.sleep", side_effect=fake_sleep):
+        with patch("vigil.core.connectors.engine.asyncio.sleep", side_effect=fake_sleep):
             with pytest.raises(asyncio.CancelledError):
                 await engine._monitor_loop(plugin)
 
@@ -250,7 +250,7 @@ class TestPerMonitorScheduling:
         engine._collecting = {}
         engine._last_collected = {}
         engine.run_cycle_now = AsyncMock(side_effect=RuntimeError("boom"))
-        with patch("vigil.collector.main.asyncio.sleep", side_effect=fake_sleep):
+        with patch("vigil.core.connectors.engine.asyncio.sleep", side_effect=fake_sleep):
             with pytest.raises(asyncio.CancelledError):
                 await engine._monitor_loop(plugin)
 
@@ -262,7 +262,7 @@ class TestPerMonitorScheduling:
         with open(cfg_path, "w") as fh:
             yaml.dump({"database": {"path": str(tmp_path / "t.db")}, "plugins": []}, fh)
 
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection"):
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection"):
             engine = VigilEngine(cfg_path)
 
         leaf = MagicMock(id="leaf", children=[], interval=60)
@@ -278,7 +278,7 @@ class TestPerMonitorScheduling:
             coro.close()
             return MagicMock()
 
-        with patch("vigil.collector.main.asyncio.create_task", side_effect=spy_create_task):
+        with patch("vigil.core.connectors.engine.asyncio.create_task", side_effect=spy_create_task):
             with patch.object(engine, "_prune_loop", AsyncMock()):
                 await engine.run()
 

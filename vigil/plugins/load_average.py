@@ -1,9 +1,9 @@
 from typing import Any, Dict, List
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
-from vigil.core.common.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _COLLECT_CMD = 'echo "LOAD:$(cat /proc/loadavg)"; echo "CPUS:$(nproc)"'
 
@@ -76,7 +76,7 @@ class LoadAverageUIPlugin(UIPlugin):
 
         self._color_rule_name = None
         if self.load_warning is not None and self.load_threshold is not None:
-            from vigil.web.ui.spec import register_color_rule, threshold_color
+            from vigil.core.ui.ui.spec import register_color_rule, threshold_color
             self._color_rule_name = f'load_average_threshold_{self.id}'
             register_color_rule(self._color_rule_name)(
                 threshold_color(warning=self.load_warning, threshold=self.load_threshold))
@@ -98,5 +98,5 @@ class LoadAverageUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

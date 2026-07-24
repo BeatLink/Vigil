@@ -1,10 +1,10 @@
 import time
 from typing import Any, Dict, List, Optional
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
-from vigil.core.common.time_utils import format_age, format_duration
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.plugins.base.time_utils import format_age, format_duration
 
 _DEFAULT_LAYOUT = [
     ['status_card', 'lastbeat_card', 'maxage_card'],
@@ -97,5 +97,5 @@ class PushUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

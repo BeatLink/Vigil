@@ -101,8 +101,8 @@ def create_internal_app(engine: Any) -> FastAPI:
 
     @app.post('/internal/job/{monitor_id}/start')
     async def job_start(monitor_id: str, req: JobStartRequest):
-        from vigil.collector.controllers.job_controller import JobRejected
-        from vigil.collector.orchestration.types import JobPlan
+        from vigil.core.connectors.job_controller import JobRejected
+        from vigil.core.connectors.orchestration.types import JobPlan
         plugin = _find(monitor_id)
         if plugin is None:
             return JSONResponse({'error': 'not found'}, status_code=404)

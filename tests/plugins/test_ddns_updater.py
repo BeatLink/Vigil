@@ -4,8 +4,8 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.ddns_updater import DdnsUpdaterCollectorPlugin
-from vigil.collector.orchestration.types import LocalActionPlan
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import LocalActionPlan
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 def _latest_status(pid):

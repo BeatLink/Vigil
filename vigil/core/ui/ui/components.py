@@ -1,7 +1,7 @@
 import asyncio
 from typing import Optional
 from nicegui import ui
-from vigil.core.data.events import bus
+from vigil.core.database.events import bus
 from .theme import TEXT, TEXT_MUTED, PRIMARY, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
 
 
@@ -284,7 +284,7 @@ def _resolve_repeat_items(plugin, repeat_spec: dict) -> list:
 
 def _scan_metric_family(plugin, prefix: str, suffix: str, exclude: set, limit: int) -> dict:
     """Returns {stripped_key: latest_value} for metric names matching prefix/suffix."""
-    from vigil.core.data.database import Metric
+    from vigil.core.database.database import Metric
 
     query = Metric.select().where(Metric.collector == plugin.id)
     if prefix:
@@ -345,8 +345,8 @@ _LABEL_TRANSFORMS = {
 
 
 def render_repeat_card(plugin, page, repeat_spec: dict):
-    from vigil.web.ui.spec import FORMATTERS, ITEM_COLOR_RULES, ITEM_FORMATTERS
-    from vigil.web.ui.theme import STATUS_COLORS
+    from vigil.core.ui.ui.spec import FORMATTERS, ITEM_COLOR_RULES, ITEM_FORMATTERS
+    from vigil.core.ui.ui.theme import STATUS_COLORS
 
     source = repeat_spec.get('source', 'snapshot')
     container_kind = repeat_spec.get('container', 'chips')
@@ -401,7 +401,7 @@ def render_repeat_card(plugin, page, repeat_spec: dict):
 
 
 def render_buttons(plugin, button_specs: list):
-    from vigil.web.ui.spec import ENABLED_PREDICATES
+    from vigil.core.ui.ui.spec import ENABLED_PREDICATES
 
     with ui.row().classes('gap-2 items-center'):
         for spec in button_specs:
@@ -438,7 +438,7 @@ def _substitute(template: str, row: Optional[dict], plugin) -> str:
 
 
 async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None):
-    from vigil.web.ui.spec import _dialog_spec_for
+    from vigil.core.ui.ui.spec import _dialog_spec_for
     spec = _dialog_spec_for(plugin, dialog_name)
     if spec is None:
         ui.notify(f'Unknown dialog {dialog_name!r}', type='negative')
@@ -493,8 +493,8 @@ async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None)
 
 
 def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optional[dict] = None):
-    from vigil.web.ui.spec import ENABLED_PREDICATES, FORMATTERS, ITEM_COLOR_RULES
-    from vigil.web.ui.theme import STATUS_COLORS
+    from vigil.core.ui.ui.spec import ENABLED_PREDICATES, FORMATTERS, ITEM_COLOR_RULES
+    from vigil.core.ui.ui.theme import STATUS_COLORS
 
     row_key = table_spec.get('row_key', 'id')
     columns = list(table_spec.get('columns', []))
@@ -602,9 +602,9 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
 
 
 def render_job_panel(plugin, spec: dict):
-    from vigil.web.ui.spec import ENABLED_PREDICATES
-    from vigil.web.ui.theme import PRIMARY, STATUS_COLORS
-    from vigil.core.common.time_utils import format_duration
+    from vigil.core.ui.ui.spec import ENABLED_PREDICATES
+    from vigil.core.ui.ui.theme import PRIMARY, STATUS_COLORS
+    from vigil.plugins.base.time_utils import format_duration
 
     history_limit = spec.get('history_limit', 10)
     enabled_name = spec.get('enabled_if')

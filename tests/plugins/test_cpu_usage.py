@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.cpu_usage import CpuUsageCollectorPlugin, _parse_cpu_line, _cpu_pct, _level_for
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {
@@ -104,7 +104,7 @@ class TestLevelFor:
 
 
 def _result(exit_code, stdout, stderr=""):
-    from vigil.collector.orchestration.types import CmdResult
+    from vigil.core.connectors.orchestration.types import CmdResult
     return CmdResult(exit_code, stdout, stderr)
 
 

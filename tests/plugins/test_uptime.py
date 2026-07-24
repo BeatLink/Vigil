@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.uptime import UptimeCollectorPlugin
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 UPTIME_CFG = {

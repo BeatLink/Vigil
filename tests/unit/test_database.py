@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 import pytest
-from vigil.core.data.database import (
+from vigil.core.database.database import (
     DatabaseManager, Metric, Event, Setting, StatusHistory, LogLine, PluginSnapshot, db,
 )
 

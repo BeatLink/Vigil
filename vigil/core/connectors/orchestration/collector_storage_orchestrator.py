@@ -1,6 +1,6 @@
 from typing import Any, Optional
 
-from vigil.collector.orchestration.types import CollectResult
+from vigil.core.connectors.orchestration.types import CollectResult
 
 
 class StorageOrchestrator:
@@ -24,7 +24,7 @@ class StorageOrchestrator:
             self._db.set_setting(key, value)
 
     def latest_metric(self, metric_name: str):
-        from vigil.core.data.database import Metric
+        from vigil.core.database.database import Metric
         return (
             Metric.select()
             .where((Metric.collector == self._plugin_id) & (Metric.metric_name == metric_name))

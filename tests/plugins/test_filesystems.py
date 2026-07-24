@@ -4,8 +4,8 @@ pytestmark = pytest.mark.asyncio
 from vigil.plugins.filesystems import (
     FilesystemsCollectorPlugin, _sanitize, _parse_inodes, _parse_readonly, _SNAP,
 )
-from vigil.collector.orchestration.types import CmdResult
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {"name": "test-fs", "id": "test-fs", "warning": 80, "threshold": 90,

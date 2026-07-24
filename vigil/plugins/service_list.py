@@ -2,9 +2,9 @@ import os
 import shlex
 from typing import Any, Dict, List, Optional, Union
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'count_card', 'reload_card'],
@@ -181,7 +181,7 @@ class ServiceListUIPlugin(UIPlugin):
         super().__init__(name, config, db, collector_client)
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
 
-        from vigil.web.ui.spec import register_enabled_predicate
+        from vigil.core.ui.ui.spec import register_enabled_predicate
         self._edit_predicate_name = f'service_list_edit_{self.id}'
         register_enabled_predicate(self._edit_predicate_name)(lambda p: p.allow_unit_file_edit)
 
@@ -265,5 +265,5 @@ class ServiceListUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

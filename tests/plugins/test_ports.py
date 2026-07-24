@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.ports import PortsCollectorPlugin, _parse_results, _safe_metric_name, _build_probe_script
-from vigil.collector.orchestration.types import CmdResult
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {

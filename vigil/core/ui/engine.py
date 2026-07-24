@@ -3,10 +3,10 @@ import inspect
 import logging
 from typing import Dict, List, Optional
 
-from vigil.web.web_plugin_base import UIPlugin
-from vigil.core.data.config_file import ConfigFileManager as VigilConfig
-from vigil.core.data.database import DatabaseManager as VigilDatabase
-from vigil.web.remote_proxy import CollectorClient
+from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.core.database.config_file import ConfigFileManager as VigilConfig
+from vigil.core.database.database import DatabaseManager as VigilDatabase
+from vigil.core.connectors.remote_proxy import CollectorClient
 from peewee import OperationalError
 
 

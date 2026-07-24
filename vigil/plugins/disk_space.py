@@ -1,9 +1,9 @@
 from typing import Dict, Any, List
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
-from vigil.core.common.plugin_helpers import format_bytes as _format_gb
+from vigil.plugins.base.plugin_helpers import format_bytes as _format_gb
 
 
 _DEFAULT_LAYOUT = [
@@ -67,7 +67,7 @@ class DiskSpaceUIPlugin(UIPlugin):
         self.path = config.get('path', '/')
         self.threshold = int(config.get('threshold', 90))
 
-        from vigil.web.ui.spec import register_color_rule, threshold_color
+        from vigil.core.ui.ui.spec import register_color_rule, threshold_color
         self._color_rule_name = f'disk_space_threshold_{self.id}'
         register_color_rule(self._color_rule_name)(
             threshold_color(warning=self.threshold, threshold=self.threshold))
@@ -91,5 +91,5 @@ class DiskSpaceUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

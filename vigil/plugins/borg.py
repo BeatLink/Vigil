@@ -5,10 +5,10 @@ import time
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Union
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult, JobPlan
-from vigil.web.web_plugin_base import UIPlugin
-from vigil.core.common.time_utils import parse_duration, format_duration, format_age
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult, JobPlan
+from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.plugins.base.time_utils import parse_duration, format_duration, format_age
 
 
 _DEFAULT_LAYOUT = [
@@ -550,7 +550,7 @@ class BorgUIPlugin(UIPlugin):
         self.max_age = parse_duration(config.get('max_age', '1d'))
         self.source_paths = _as_list(config.get('source_paths'))
 
-        from vigil.web.ui.spec import register_enabled_predicate
+        from vigil.core.ui.ui.spec import register_enabled_predicate
         self._has_sources_name = f'borg_has_sources_{self.id}'
         register_enabled_predicate(self._has_sources_name)(lambda p: bool(p.source_paths))
 
@@ -672,5 +672,5 @@ class BorgUIPlugin(UIPlugin):
         ]
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

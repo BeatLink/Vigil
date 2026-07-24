@@ -9,7 +9,7 @@ from vigil.plugins.vigil_self import (
     _read_rss_mb,
     _read_cpu_seconds,
 )
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {

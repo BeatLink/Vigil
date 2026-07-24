@@ -3,10 +3,10 @@ import shlex
 import time
 from typing import Any, Dict, List, Optional, Union
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
-from vigil.core.common.time_utils import parse_duration, format_duration, format_age
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.plugins.base.time_utils import parse_duration, format_duration, format_age
 
 _DEFAULT_UNIT_FILE_WRITE_PATHS = (
     '/etc/systemd/system',
@@ -242,7 +242,7 @@ class SystemdUIPlugin(UIPlugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
 
-        from vigil.web.ui.spec import register_enabled_predicate
+        from vigil.core.ui.ui.spec import register_enabled_predicate
         self._edit_predicate_name = f'systemd_edit_{self.id}'
         register_enabled_predicate(self._edit_predicate_name)(lambda p: p.allow_unit_file_edit)
 
@@ -275,7 +275,7 @@ class SystemdUIPlugin(UIPlugin):
 
     def _render_unit_file_controls(self):
         from nicegui import ui
-        from vigil.web.ui.components import render_buttons
+        from vigil.core.ui.ui.components import render_buttons
 
         with ui.card().classes('p-4 h-full'):
             ui.label('Unit File').classes('font-bold mb-2')
@@ -288,9 +288,9 @@ class SystemdUIPlugin(UIPlugin):
             self._render_continuous_ui(context)
 
     def _render_continuous_ui(self, context: str = 'page'):
-        from vigil.core.data.database import StatusHistory
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
+        from vigil.core.database.database import StatusHistory
+        from vigil.core.ui.ui.layout import PluginLayout, make_inline_layout
+        from vigil.core.ui.ui.components import info_card
 
         layout = PluginLayout(self.config, _CONTINUOUS_LAYOUT if context == 'page' else make_inline_layout(_CONTINUOUS_LAYOUT))
         page = self.ui.page()
@@ -326,9 +326,9 @@ class SystemdUIPlugin(UIPlugin):
 
     def _render_oneshot_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.web.ui.theme import STATUS_COLORS
-        from vigil.web.ui.layout import PluginLayout, make_inline_layout
-        from vigil.web.ui.components import info_card
+        from vigil.core.ui.ui.theme import STATUS_COLORS
+        from vigil.core.ui.ui.layout import PluginLayout, make_inline_layout
+        from vigil.core.ui.ui.components import info_card
 
         layout = PluginLayout(self.config, _ONESHOT_LAYOUT if context == 'page' else make_inline_layout(_ONESHOT_LAYOUT))
         page = self.ui.page(metric_names=['is_running', 'last_run_epoch', 'last_run_success'])

@@ -2,8 +2,8 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.folders import FoldersCollectorPlugin, _sanitize
-from vigil.collector.orchestration.types import CmdResult
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.database.database import db, StatusHistory, Metric
 
 _GB = 1024 ** 3
 

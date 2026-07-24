@@ -2,8 +2,8 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.network_usage import NetworkUsageCollectorPlugin, _parse_net_dev, _auto_detect_interface, _format_rate
-from vigil.collector.orchestration.types import CmdResult
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 NET_DEV_HEADER = (

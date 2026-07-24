@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.cloud import CloudCollectorPlugin, _parse_kv
-from vigil.collector.orchestration.types import CmdResult
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 def _latest_status(pid="test-cloud"):

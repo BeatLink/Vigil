@@ -72,7 +72,7 @@ def _temp_c1(v):
 
 @register_formatter('bytes_gb')
 def _bytes_gb(v):
-    from vigil.core.common.plugin_helpers import format_bytes
+    from vigil.plugins.base.plugin_helpers import format_bytes
     return '--' if v is None else format_bytes(v)
 
 @register_formatter('kbps_rate')
@@ -156,7 +156,7 @@ def threshold_color(warning: float, threshold: float):
     def rule(v):
         if v is None:
             return None
-        from vigil.core.common.plugin_helpers import level_for
+        from vigil.plugins.base.plugin_helpers import level_for
         level = level_for(v, warning, threshold)
         return {'online': 'online', 'warning': 'warning', 'failed': 'failed'}[level]
     return rule
@@ -170,12 +170,12 @@ def _dialog_spec_for(plugin: Any, dialog_name: str) -> Optional[Dict[str, Any]]:
 def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, Any]] = None,
                    page=None, start: bool = True):
     from nicegui import ui
-    from vigil.web.ui.layout import PluginLayout, make_inline_layout
-    from vigil.web.ui.components import (
+    from vigil.core.ui.ui.layout import PluginLayout, make_inline_layout
+    from vigil.core.ui.ui.components import (
         info_card, history_chart, render_repeat_card, render_table_with_actions,
         render_buttons, render_job_panel,
     )
-    from vigil.web.ui.theme import STATUS_COLORS
+    from vigil.core.ui.ui.theme import STATUS_COLORS
 
     spec = spec if spec is not None else getattr(plugin, 'UI_SPEC', None)
     if spec is None:

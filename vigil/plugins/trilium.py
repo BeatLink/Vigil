@@ -3,9 +3,9 @@ import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 
 def _build_fetch_script(api_url: str, timeout: int, token_command: Optional[str],
@@ -128,7 +128,7 @@ class TriliumUIPlugin(UIPlugin):
         super().__init__(*args, **kwargs)
         self.stale_warning = float(self.config.get('stale_warning', 72))
 
-        from vigil.web.ui.spec import register_color_rule
+        from vigil.core.ui.ui.spec import register_color_rule
         self._color_rule_name = f'trilium_stale_{self.id}'
 
         @register_color_rule(self._color_rule_name)
@@ -153,11 +153,11 @@ class TriliumUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.web.ui.spec import register_formatter
+from vigil.core.ui.ui.spec import register_formatter
 
 
 @register_formatter('trilium_age_ago')

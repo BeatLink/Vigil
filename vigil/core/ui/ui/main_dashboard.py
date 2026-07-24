@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 from nicegui import app, ui
-from vigil.core.data.database import Setting
+from vigil.core.database.database import Setting
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
 from .components import action_chip, card, section_title, on_data_event, offload, refresh_rows
 
@@ -20,16 +20,16 @@ def navigate_to(plugin_instance: Any):
 
 
 def init_gui(engine: Any, port: int = 8080):
-    from vigil.core.data.events import bus
+    from vigil.core.database.events import bus
     bus.polling_mode = True
 
     app.add_static_file(local_file=_ICON, url_path='/icon.svg')
 
-    from vigil.web.auth import register_auth
+    from vigil.core.ui.auth import register_auth
     register_auth(app, engine.config_loader.auth_settings)
 
     try:
-        from vigil.web.api import register_api
+        from vigil.core.ui.api import register_api
         register_api(app, engine)
     except Exception as e:
         logging.error(f"Failed to register REST API: {e}")

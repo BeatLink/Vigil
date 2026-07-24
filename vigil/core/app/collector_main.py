@@ -2,7 +2,7 @@ import argparse
 import asyncio
 import logging
 
-from vigil.collector.main import VigilEngine
+from vigil.core.connectors.engine import VigilEngine
 
 
 def main():

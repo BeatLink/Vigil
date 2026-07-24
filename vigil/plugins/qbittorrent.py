@@ -2,9 +2,9 @@ import json
 import shlex
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
 
@@ -355,7 +355,7 @@ class QbittorrentUIPlugin(UIPlugin):
         self.stalled_warning = int(self.config.get('stalled_warning', 3))
         self.stalled_threshold = int(self.config.get('stalled_threshold', 10))
 
-        from vigil.web.ui.spec import register_formatter, register_color_rule, register_item_formatter
+        from vigil.core.ui.ui.spec import register_formatter, register_color_rule, register_item_formatter
         self._connection_format_name = f'qbittorrent_connection_{self.id}'
         register_formatter(self._connection_format_name)(
             lambda v: '--' if v is None else ('CONNECTED' if v >= 1.0 else 'DISCONNECTED'))
@@ -423,5 +423,5 @@ class QbittorrentUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

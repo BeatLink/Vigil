@@ -1,8 +1,8 @@
 from typing import Dict, Any, List
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
-from vigil.core.common.plugin_helpers import format_bytes as _format_gb
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
+from vigil.plugins.base.plugin_helpers import format_bytes as _format_gb
 
 
 def _sanitize(path: str) -> str:
@@ -102,7 +102,7 @@ class FoldersUIPlugin(UIPlugin):
         super().__init__(name, config, db, collector_client)
         self.folders = config.get('folders', []) or []
 
-        from vigil.web.ui.spec import register_item_color_rule
+        from vigil.core.ui.ui.spec import register_item_color_rule
         self._by_key = {_sanitize(f.get('path', '')): f for f in self.folders if f.get('path')}
         self._color_rule_name = f'folders_threshold_{self.id}'
         register_item_color_rule(self._color_rule_name)(self._item_color)
@@ -142,5 +142,5 @@ class FoldersUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.diskio import DiskIoCollectorPlugin, _parse_diskstats, _is_physical, _auto_detect_device, _format_rate
-from vigil.collector.orchestration.types import CmdResult
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {

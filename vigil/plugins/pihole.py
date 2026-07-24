@@ -2,10 +2,10 @@ import json
 import shlex
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from vigil.core.common.time_utils import parse_duration
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.time_utils import parse_duration
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _SEP = "@@VIGIL_SPLIT@@"
 
@@ -282,7 +282,7 @@ class PiholeUIPlugin(UIPlugin):
         self.block_rate_threshold = float(config.get('block_rate_threshold', 1))
         self.gravity_max_age = parse_duration(config.get('gravity_max_age', '8d'))
 
-        from vigil.web.ui.spec import register_color_rule, register_item_formatter, register_formatter
+        from vigil.core.ui.ui.spec import register_color_rule, register_item_formatter, register_formatter
         self._block_rate_rule_name = f'pihole_block_rate_{self.id}'
         register_color_rule(self._block_rate_rule_name)(self._block_rate_color)
 
@@ -342,5 +342,5 @@ class PiholeUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

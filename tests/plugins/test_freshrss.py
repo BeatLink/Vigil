@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.freshrss import FreshrssCollectorPlugin, _parse_response, _build_fetch_script
-from vigil.collector.orchestration.types import CmdResult
-from vigil.core.data.database import db, StatusHistory, Metric
+from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {

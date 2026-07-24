@@ -1,6 +1,6 @@
 import pytest
 import yaml
-from vigil.core.data.config_file import ConfigFileManager
+from vigil.core.database.config_file import ConfigFileManager
 
 
 @pytest.fixture

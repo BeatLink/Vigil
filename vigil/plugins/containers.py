@@ -1,8 +1,8 @@
 from typing import Dict, Any, List, Optional, Union
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _PS_FMT = "ps -a --format '{{.Names}}\t{{.State}}'"
 
@@ -129,11 +129,11 @@ class ContainersUIPlugin(UIPlugin):
     }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)
 
 
-from vigil.web.ui.spec import register_color_rule
+from vigil.core.ui.ui.spec import register_color_rule
 
 
 @register_color_rule('containers_always_online')

@@ -3,9 +3,9 @@ import shlex
 import time
 from typing import Any, Dict, List, Optional
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _MARK = "@@VIGIL_FOLDER@@"
 
@@ -207,7 +207,7 @@ class SyncthingUIPlugin(UIPlugin):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        from vigil.web.ui.spec import register_color_rule, register_item_formatter
+        from vigil.core.ui.ui.spec import register_color_rule, register_item_formatter
         self._devices_format_name = f'syncthing_devices_{self.id}'
         register_item_formatter(self._devices_format_name)(self._devices_text)
         self._need_format_name = f'syncthing_need_{self.id}'
@@ -257,5 +257,5 @@ class SyncthingUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 @pytest.fixture(autouse=True)
 def _synchronous_db_writes():
-    from vigil.core.data.database import _writer
+    from vigil.core.database.database import _writer
     prev = _writer.synchronous
     _writer.synchronous = True
     yield
@@ -13,7 +13,7 @@ def _synchronous_db_writes():
 
 @pytest.fixture
 def db_manager(tmp_path):
-    from vigil.core.data.database import DatabaseManager, db
+    from vigil.core.database.database import DatabaseManager, db
     if not db.is_closed():
         db.close()
     manager = DatabaseManager(str(tmp_path / "test.db"))
@@ -25,7 +25,7 @@ def db_manager(tmp_path):
 @pytest.fixture
 def make_plugin(db_manager):
     def factory(cls, extra_config=None):
-        from vigil.collector.orchestration.network_orchestrator import SSHConnectionPool
+        from vigil.core.connectors.orchestration.network_orchestrator import SSHConnectionPool
 
         cfg = {
             "name": "test-plugin",
@@ -36,9 +36,9 @@ def make_plugin(db_manager):
         if extra_config:
             cfg.update(extra_config)
 
-        with patch("vigil.collector.orchestration.network_orchestrator.SSHConnection") as MockSSH, \
-             patch("vigil.collector.orchestration.network_orchestrator.SSHCollector") as MockCollector, \
-             patch("vigil.collector.orchestration.network_orchestrator.SSHController") as MockController:
+        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection") as MockSSH, \
+             patch("vigil.core.connectors.orchestration.network_orchestrator.SSHCollector") as MockCollector, \
+             patch("vigil.core.connectors.orchestration.network_orchestrator.SSHController") as MockController:
 
             mock_conn = MagicMock()
             mock_conn.host = cfg.get("ssh_config", {}).get("host", "test.host")
@@ -58,7 +58,7 @@ def make_plugin(db_manager):
         plugin.network._controller = MagicMock(
             execute_action=AsyncMock(return_value=(0, "", ""))
         )
-        from vigil.collector.controllers.job_controller import JobController
+        from vigil.core.connectors.job_controller import JobController
         mock_ssh = MagicMock()
         mock_ssh.execute_streaming = AsyncMock(return_value=(0, ""))
         plugin.network._job = JobController(
@@ -76,7 +76,7 @@ def run_cycle():
     VigilEngine._run_cycle without needing a real NetworkOrchestrator/event
     loop scheduler. commands()/parse() are pure/synchronous, so no awaiting
     is needed here. `fake_run` maps Command -> CmdResult; defaults to (0, "", "")."""
-    from vigil.collector.orchestration.types import CmdResult
+    from vigil.core.connectors.orchestration.types import CmdResult
 
     def factory(plugin, fake_run=None):
         commands = plugin.commands()

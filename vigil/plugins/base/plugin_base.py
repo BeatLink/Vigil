@@ -12,7 +12,9 @@ from vigil.core.connectors.orchestration.types import (
 )
 
 
-class CollectorPlugin(PluginConfigMixin, ABC):
+class Plugin(PluginConfigMixin, ABC):
+    engine: Any = None
+
     def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: SSHConnectionPool):
         self._init_config(name, config)
         self.db = db
@@ -22,6 +24,9 @@ class CollectorPlugin(PluginConfigMixin, ABC):
         self.target = self.network.target
         self.storage = StorageOrchestrator(db, self.target, self.name, self.id)
         self.local_io = LocalIOOrchestrator()
+
+        from vigil.core.ui.orchestration import UIOrchestrator
+        self.ui = UIOrchestrator(self)
 
     @abstractmethod
     def commands(self) -> List[Command]:
@@ -85,9 +90,24 @@ class CollectorPlugin(PluginConfigMixin, ABC):
         CollectResult (with .success set). Default: exit_code == 0."""
         return exit_code == 0
 
-    def present(self) -> Dict[str, Any]:
+    async def on_action(self, action_id: str, **kwargs) -> bool:
+        success, _ = await self.engine.dispatch_action(self, action_id, **kwargs)
+        return success
+
+    async def action_with_output(self, action_id: str, **kwargs) -> tuple:
+        success, metadata = await self.engine.dispatch_action(self, action_id, **kwargs)
+        return success, str((metadata or {}).get('content') or '')
+
+    async def run_cycle(self) -> bool:
+        return await self.engine.run_cycle_now(self)
+
+    async def present(self) -> Dict[str, Any]:
         return {
             "name": self.name,
             "target": self.target,
-            "actions": self.get_actions()
+            "actions": self.get_actions(),
         }
+
+    @abstractmethod
+    def render_ui(self, context: str = 'page'):
+        pass

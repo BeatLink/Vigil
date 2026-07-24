@@ -3,9 +3,9 @@ from typing import Any, Callable, Dict, List, Optional
 import dns.exception
 import dns.resolver
 
-from vigil.collector.collector_plugin_base import CollectorPlugin
-from vigil.collector.orchestration.types import CmdResult, Command, CollectResult
-from vigil.web.web_plugin_base import UIPlugin
+from vigil.plugins.base.collector_plugin_base import CollectorPlugin
+from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.web_plugin_base import UIPlugin
 
 _DEFAULT_LAYOUT = [
     ['status_card', 'type_card', 'ttl_card'],
@@ -146,7 +146,7 @@ class DnsRecordUIPlugin(UIPlugin):
             [str(v).rstrip('.') for v in expected] if expected else None
         )
 
-        from vigil.web.ui.spec import register_item_color_rule
+        from vigil.core.ui.ui.spec import register_item_color_rule
         self._color_rule_name = f'dns_record_expected_{self.id}'
         register_item_color_rule(self._color_rule_name)(self._item_color)
 
@@ -179,5 +179,5 @@ class DnsRecordUIPlugin(UIPlugin):
         }
 
     def render_ui(self, context: str = 'page'):
-        from vigil.web.ui.spec import generic_render
+        from vigil.core.ui.ui.spec import generic_render
         generic_render(self, context)

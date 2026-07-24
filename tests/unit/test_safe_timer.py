@@ -2,7 +2,7 @@ import asyncio
 import pytest
 from nicegui import ui, Client
 
-from vigil.web.ui.components import safe_timer, _SafeTimer
+from vigil.core.ui.ui.components import safe_timer, _SafeTimer
 
 
 def _run(coro):
