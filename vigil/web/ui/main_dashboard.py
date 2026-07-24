@@ -163,7 +163,7 @@ def init_gui(engine: Any, port: int = 8080):
           tree.update()
           tree.on('update:expanded', _save_expanded)
 
-      main_container = ui.column().classes('w-full p-6 bg-transparent')
+      main_container = ui.column().classes('w-full p-6 bg-transparent').style('min-width: 0; flex: 1 1 0;')
 
       def render_main():
           try:
@@ -259,7 +259,7 @@ def init_gui(engine: Any, port: int = 8080):
           filter_state = {'field': None, 'value': None}
 
           with ui.row().classes('w-full gap-4 mb-6'):
-              with card('flex-1 h-80'):
+              with card('flex-1 h-80 min-w-[320px]'):
                   ui.label('MONITORS BY STATUS').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
                   status_chart = ui.echart({
                       'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
@@ -275,7 +275,7 @@ def init_gui(engine: Any, port: int = 8080):
                       }]
                   }).classes('w-full h-64')
 
-              with card('flex-1 h-80'):
+              with card('flex-1 h-80 min-w-[320px]'):
                   ui.label('MONITORS BY TYPE').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
                   type_chart = ui.echart({
                       'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
@@ -421,7 +421,7 @@ def init_gui(engine: Any, port: int = 8080):
           on_data_event('status', status_chart, update_charts, run_now=False)
 
           with ui.row().classes('w-full gap-4'):
-              with card('flex-1'):
+              with card('flex-1 min-w-[320px]'):
                   ui.label('Recent System Metrics').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
                   metric_columns = [
                       {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
@@ -436,7 +436,7 @@ def init_gui(engine: Any, port: int = 8080):
                       refresh_rows(m_table, await offload(engine.db.recent_metrics_raw_cached)(limit=20))
                   on_data_event('metric', m_table, update_m)
 
-              with card('flex-1'):
+              with card('flex-1 min-w-[320px]'):
                   ui.label('Recent Events').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
                   event_columns = [
                       {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
@@ -451,11 +451,11 @@ def init_gui(engine: Any, port: int = 8080):
                   on_data_event('event', e_table, update_e)
 
       def render_plugin_detail(plugin: Any):
-          header = ui.row().classes('w-full items-center justify-between mb-6')
+          header = ui.row().classes('w-full items-center justify-between gap-4 mb-6').style('flex-wrap: wrap;')
           with header:
-              with ui.column():
-                  ui.label(plugin.name).classes('text-3xl font-bold').style(f'color: {TEXT}')
-              actions_row = ui.row().classes('gap-2 items-center')
+              with ui.column().classes('min-w-0'):
+                  ui.label(plugin.name).classes('text-3xl font-bold break-words').style(f'color: {TEXT}')
+              actions_row = ui.row().classes('gap-2 items-center').style('flex-wrap: wrap;')
 
           async def render_actions():
               with actions_row:

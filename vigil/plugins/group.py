@@ -45,7 +45,6 @@ class GroupUIPlugin(UIPlugin):
     def __init__(self, name: str, config: Dict[str, Any], db: Any, collector_client: Any):
         super().__init__(name, config, db, collector_client)
         self._expanded: Dict[str, bool] = self._load_expanded()
-        self.grid_columns: int = int(config.get('grid_columns', 1))
 
 
     def _setting_key(self) -> str:
@@ -69,31 +68,26 @@ class GroupUIPlugin(UIPlugin):
         from vigil.web.ui.theme import STATUS_COLORS, TEXT, TEXT_MUTED
         from vigil.web.ui.components import card
 
-        grid_cls = f'group-grid-{self.id}'
-        ui.add_css(f'''
-            .{grid_cls} {{
-                display: grid;
-                grid-template-columns: repeat(2, 1fr);
-                gap: 0.75rem;
-                width: 100%;
-            }}
-        ''')
-        statuses = self.db.latest_statuses()
-        with ui.element('div').classes(grid_cls):
+        min_card_width = self.config.get('grid_min_width', '320px')
+        with ui.element('div').style(
+            f'display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.75rem; width: 100%;'
+        ):
+            statuses = self.db.latest_statuses()
             for child in self.children:
                 child_status = statuses.get(child.id, 'offline')
                 child_color = STATUS_COLORS.get(child_status, STATUS_COLORS['offline'])
                 col_span = int(child.config.get('grid_col_span', 1))
                 child_height = child.config.get('grid_height', None)
+                child_min_width = child.config.get('grid_min_width', min_card_width)
 
-                cell_style = f'grid-column: span {col_span};'
+                cell_style = f'flex: {col_span} 1 calc({col_span} * {child_min_width}); min-width: {child_min_width};'
                 if child_height:
                     cell_style += f' height: {child_height}; overflow-y: auto;'
 
                 is_open = self._expanded.get(child.id, False)
 
                 with ui.element('div').style(cell_style):
-                    with card('w-full overflow-hidden', padding=False):
+                    with card('w-full h-full overflow-hidden', padding=False):
                         with ui.row().classes(
                             'w-full items-center gap-3 px-4 py-3 cursor-pointer select-none'
                         ) as header_row:
@@ -107,7 +101,7 @@ class GroupUIPlugin(UIPlugin):
                                 + ('transform: rotate(180deg)' if is_open else 'transform: rotate(0deg)')
                             )
 
-                        body = ui.column().classes('w-full p-4 border-t border-gray-100')
+                        body = ui.column().classes('w-full p-4 border-t border-gray-100').style('min-width: 0')
                         body.set_visibility(is_open)
                         rendered = False
                         if is_open:

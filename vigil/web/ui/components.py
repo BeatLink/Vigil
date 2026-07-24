@@ -104,8 +104,8 @@ def card(classes: str = '', padding: bool = True):
     p = 'p-4' if padding else 'p-0'
     return ui.card().classes(f'{p} shadow-sm {classes}')
 
-def info_card(title: str, value: str = '--', value_classes: str = VALUE_CLASS, card_classes: str = 'flex-1'):
-    with card(f'min-w-36 h-28 overflow-hidden items-center justify-center {card_classes}'):
+def info_card(title: str, value: str = '--', value_classes: str = VALUE_CLASS, card_classes: str = 'flex-1 min-w-[9rem]'):
+    with card(f'h-28 overflow-hidden items-center justify-center {card_classes}'):
         ui.label(title.upper()).classes(LABEL_CLASS).style(f'color: {TEXT_MUTED}')
         return ui.label(value).classes(f'{value_classes} w-full text-center break-words').style(f'color: {PRIMARY}')
 

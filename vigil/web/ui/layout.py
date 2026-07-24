@@ -53,9 +53,10 @@ class PluginLayout:
                     base_cfg = {k: v for k, v in item.items() if k != 'widget'}
                 override = widget_overrides.get(name, {})
                 cfg = {
-                    'flex':    int(base_cfg.get('flex',    override.get('flex',    1))),
-                    'visible': bool(base_cfg.get('visible', override.get('visible', True))),
-                    'height':  base_cfg.get('height') or override.get('height'),
+                    'flex':      int(base_cfg.get('flex',      override.get('flex',      1))),
+                    'visible':   bool(base_cfg.get('visible',   override.get('visible',   True))),
+                    'height':    base_cfg.get('height') or override.get('height'),
+                    'min_width': base_cfg.get('min_width') or override.get('min_width') or '280px',
                 }
                 self._widget_cfg[name] = cfg
                 items.append((name, cfg))
@@ -64,7 +65,7 @@ class PluginLayout:
             row_style = (
                 'display: none'
                 if all_hidden else
-                'display: flex; gap: 1rem; width: 100%; align-items: stretch'
+                'display: flex; flex-wrap: wrap; gap: 1rem; width: 100%; align-items: stretch'
             )
             with outer:
                 row_div = ui.element('div').style(row_style)
@@ -75,12 +76,13 @@ class PluginLayout:
     def cell(self, widget_name: str):
         from nicegui import ui
 
-        cfg     = self._widget_cfg.get(widget_name, {})
-        flex    = int(cfg.get('flex', 1))
-        visible = bool(cfg.get('visible', True))
-        height  = cfg.get('height')
+        cfg       = self._widget_cfg.get(widget_name, {})
+        flex      = int(cfg.get('flex', 1))
+        visible   = bool(cfg.get('visible', True))
+        height    = cfg.get('height')
+        min_width = cfg.get('min_width', '280px')
 
-        parts = [f'flex: {flex}; min-width: 0']
+        parts = [f'flex: {flex} 1 {min_width}; min-width: 0']
         if height:
             parts.append(f'height: {height}; overflow-y: auto')
         if not visible:
