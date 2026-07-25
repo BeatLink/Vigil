@@ -6,13 +6,13 @@ import inspect
 import random
 import sys
 import time
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict
 
 from peewee import OperationalError
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.orchestration.network_orchestrator import SSHConnectionPool
-from vigil.core.connectors.orchestration.types import JobPlan
+from vigil.core.connectors.orchestration.types import DispatchResult, JobPlan
 from vigil.core.database.config_file import ConfigFileManager as VigilConfig
 from vigil.core.database.database import DatabaseManager as VigilDatabase
 
@@ -167,7 +167,7 @@ class VigilEngine:
             self._last_collected[plugin.id] = time.monotonic()
             self._collecting[plugin.id] = False
 
-    async def dispatch_action(self, plugin: Plugin, action_id: str, **kwargs) -> Tuple[bool, Optional[Dict[str, str]]]:
+    async def dispatch_action(self, plugin: Plugin, action_id: str, **kwargs) -> DispatchResult:
         """Returns (success, metadata). metadata is the applied CollectResult's
         .metadata dict when one was applied (e.g. carrying 'content' for
         read-style dialog actions), else None. Plain bool outcomes (the

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional
 
 from vigil.plugins.base.plugin_helpers import PluginConfigMixin, parse_duration
 from vigil.core.connectors.ssh import COLLECT_TIMEOUT as SSH_TIMEOUT
@@ -68,7 +68,7 @@ class Plugin(PluginConfigMixin, ABC):
     def get_actions(self) -> List[ActionButtonSpec]:
         return []
 
-    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, JobPlan, LocalActionPlan, CollectResult]]:
+    def plan_action(self, action_id: str, **kwargs) -> ActionPlanResult:
         """Pure: decide what command an action requires. Return an
         ActionPlan/JobPlan to run an SSH command, a LocalActionPlan to run
         local blocking IO (no SSH), a CollectResult to apply a write with
@@ -76,13 +76,13 @@ class Plugin(PluginConfigMixin, ABC):
         unhandled action_id."""
         return None
 
-    def interpret_action(self, action_id: str, result: CmdResult, **kwargs) -> Union[bool, CollectResult]:
+    def interpret_action(self, action_id: str, result: CmdResult, **kwargs) -> ActionOutcome:
         """Pure: given the SSH command's result, return success/failure, or
         a CollectResult (with .success set) to also apply a write, e.g.
         logging a failure message alongside the outcome."""
         return result.exit_code == 0
 
-    def interpret_local_action(self, action_id: str, result: Any, **kwargs) -> Union[bool, CollectResult]:
+    def interpret_local_action(self, action_id: str, result: Any, **kwargs) -> ActionOutcome:
         """Pure: given a LocalActionPlan's call() return value, return
         success/failure, or a CollectResult (with .success set)."""
         return bool(result)
@@ -94,7 +94,7 @@ class Plugin(PluginConfigMixin, ABC):
         (the default) if the action has no per-line handling."""
         return None
 
-    def interpret_job(self, action_id: str, exit_code: int, **kwargs) -> Union[bool, CollectResult]:
+    def interpret_job(self, action_id: str, exit_code: int, **kwargs) -> ActionOutcome:
         """Pure: given a JobPlan's exit code, return success/failure, or a
         CollectResult (with .success set). Default: exit_code == 0."""
         return exit_code == 0
