@@ -146,7 +146,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
                   tree._props['nodes'] = new_nodes
                   tree.update()
 
-          on_data_event('status', tree, refresh_tree, run_now=False)
+          on_data_event(refresh_tree, run_now=False)
 
           def _load_expanded() -> list:
               with Setting._meta.database.connection_context():
@@ -243,7 +243,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
           target_in.on_value_change(_on_target)
           search_in.on_value_change(_on_search)
 
-          on_data_event('event', events_table, refresh_events, run_now=False)
+          on_data_event(refresh_events, run_now=False)
 
       def render_overview():
           section_title('Monitors', 'mb-6 font-light')
@@ -418,7 +418,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
               monitor_table.rows = _build_table_rows(statuses)
               monitor_table.update()
 
-          on_data_event('status', status_chart, update_charts, run_now=False)
+          on_data_event(update_charts, run_now=False)
 
           with ui.row().classes('w-full gap-4'):
               with card('flex-1 min-w-[320px]'):
@@ -434,7 +434,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
 
                   async def update_m():
                       refresh_rows(m_table, await offload(engine.db.recent_metrics_raw_cached)(limit=20))
-                  on_data_event('metric', m_table, update_m)
+                  on_data_event(update_m)
 
               with card('flex-1 min-w-[320px]'):
                   ui.label('Recent Events').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
@@ -448,7 +448,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
 
                   async def update_e():
                       refresh_rows(e_table, await offload(engine.db.recent_events_raw_cached)(limit=20))
-                  on_data_event('event', e_table, update_e)
+                  on_data_event(update_e)
 
       def render_plugin_detail(plugin: Any):
           header = ui.row().classes('w-full items-center justify-between gap-4 mb-6').style('flex-wrap: wrap;')

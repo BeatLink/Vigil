@@ -43,7 +43,7 @@ def _reader():
 
 class _AsyncWriter:
     def __init__(self, batch_window: float = 1.0):
-        self._q: "queue.Queue[Optional[tuple]]" = queue.Queue()
+        self._q: "queue.Queue[Optional[Callable[[], None]]]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
         self.batch_window = batch_window
         self.synchronous = False
@@ -54,25 +54,24 @@ class _AsyncWriter:
         self._thread = threading.Thread(target=self._run, name="vigil-db-writer", daemon=True)
         self._thread.start()
 
-    def submit(self, fn: Callable[[], None], event: Optional[str] = None):
+    def submit(self, fn: Callable[[], None]):
         if self.synchronous:
             with db.connection_context():
                 fn()
             return
-        self._q.put((fn, event))
+        self._q.put(fn)
 
     def flush(self, timeout: Optional[float] = None):
         self._q.join()
 
     def _run(self):
         while True:
-            item = self._q.get()
-            if item is None:
+            fn = self._q.get()
+            if fn is None:
                 self._q.task_done()
                 break
-            fn, event = item
 
-            batch = [(fn, event)]
+            batch = [fn]
             deadline = time.monotonic() + self.batch_window
             stop = False
             while not stop:
@@ -92,15 +91,11 @@ class _AsyncWriter:
             try:
                 with db.connection_context():
                     with db.atomic():
-                        for item_fn, _ in batch:
+                        for item_fn in batch:
                             try:
                                 item_fn()
                             except Exception as e:
                                 logging.error(f"DB write failed: {e}")
-                # The UI polls the Database Engine on a shared timer rather than
-                # subscribing to post-commit notifications, so the writer no
-                # longer fans out events. The per-write `event` tag is retained
-                # in the queue as a harmless label.
             finally:
                 for _ in batch:
                     self._q.task_done()
@@ -202,13 +197,24 @@ class DatabaseManager:
                 db.execute_sql(ddl)
                 logging.info(f"Migrated: added job.{col}")
 
+        # Composite index for the hot metric read path (collector + metric_name
+        # filter, timestamp ordering). create_tables() adds it on fresh DBs; this
+        # backfills it on databases created before the index existed. The name
+        # matches peewee's generated name so the two paths converge on one index.
+        metric_indexes = {idx.name for idx in db.get_indexes('metric')}
+        if 'metric_collector_metric_name_timestamp' not in metric_indexes:
+            db.execute_sql(
+                'CREATE INDEX IF NOT EXISTS metric_collector_metric_name_timestamp '
+                'ON metric (collector, metric_name, timestamp)')
+            logging.info("Migrated: added composite index on metric "
+                         "(collector, metric_name, timestamp)")
+
     def insert_metric(self, target: str, collector: str, metric_name: str, value: float, metadata: Optional[str] = None):
         _writer.submit(lambda: Metric.create(
-            target=target, collector=collector, metric_name=metric_name, value=value, metadata=metadata),
-            event='metric')
+            target=target, collector=collector, metric_name=metric_name, value=value, metadata=metadata))
 
     def insert_status(self, collector_id: str, state: str):
-        _writer.submit(lambda: StatusHistory.create(collector_id=collector_id, state=state), event='status')
+        _writer.submit(lambda: StatusHistory.create(collector_id=collector_id, state=state))
 
     def flush(self, timeout: Optional[float] = None):
         _writer.flush(timeout)
@@ -363,7 +369,7 @@ class DatabaseManager:
     def insert_event(self, level: str, message: str, target: Optional[str] = None,
                      source_id: Optional[str] = None):
         _writer.submit(lambda: Event.create(level=level, message=message, target=target,
-                                            source_id=source_id), event='event')
+                                            source_id=source_id))
 
     def recent_events(self, limit: int = 200, level: Optional[str] = None,
                       target: Optional[str] = None, search: Optional[str] = None) -> List[EventDict]:
@@ -394,7 +400,7 @@ class DatabaseManager:
             .insert(target=target, source=source, level=level,
                     message=message, dedup_hash=dedup_hash)
             .on_conflict_ignore()
-            .execute()), event='log_line')
+            .execute()))
 
     def prune_logs(self, retention_days: int) -> int:
         if retention_days is None or retention_days <= 0:
@@ -575,16 +581,13 @@ class DatabaseManager:
                 return default
 
     def set_setting(self, key: str, value: str):
-        _writer.submit(lambda: Setting.insert(key=key, value=value).on_conflict_replace().execute(),
-                       event='setting')
+        _writer.submit(lambda: Setting.insert(key=key, value=value).on_conflict_replace().execute())
 
     def set_snapshot(self, plugin_id: str, data: str):
         _writer.submit(
             lambda: PluginSnapshot.insert(
                 plugin_id=plugin_id, data=data, updated=datetime.now()
-            ).on_conflict_replace().execute(),
-            event='snapshot',
-        )
+            ).on_conflict_replace().execute())
 
     def get_snapshot(self, plugin_id: str) -> Optional[str]:
         with _reader():

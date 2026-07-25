@@ -19,12 +19,6 @@ from typing import (
 # on_data_event.
 RefreshCallback = Callable[[], Union[None, Awaitable[None]]]
 
-# Names the data type a polling refresh callback reads (status/metric/event/
-# log_line/setting/snapshot). Advisory now that the UI polls the Database
-# Engine rather than subscribing to write notifications — kept so on_data_event
-# call sites still document which data a callback depends on.
-EventName = str
-
 
 @runtime_checkable
 class MetricsSource(Protocol):

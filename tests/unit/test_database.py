@@ -26,6 +26,31 @@ class TestDatabaseManagerInit:
             assert LogLine.table_exists()
             assert PluginSnapshot.table_exists()
 
+    def test_fresh_db_has_single_composite_metric_index(self, mgr):
+        with db.connection_context():
+            names = [i.name for i in db.get_indexes('metric')]
+        assert names.count('metric_collector_metric_name_timestamp') == 1
+
+    def test_migration_adds_composite_index_to_existing_db(self, tmp_path):
+        import sqlite3
+        path = str(tmp_path / "legacy.db")
+        # A pre-index metric table, as created before the composite index existed.
+        con = sqlite3.connect(path)
+        con.execute("CREATE TABLE metric (id INTEGER PRIMARY KEY, timestamp DATETIME, "
+                    "target VARCHAR, collector VARCHAR, metric_name VARCHAR, "
+                    "value REAL, metadata TEXT)")
+        con.commit()
+        con.close()
+
+        if not db.is_closed():
+            db.close()
+        DatabaseManager(path)  # runs _migrate()
+        with db.connection_context():
+            names = [i.name for i in db.get_indexes('metric')]
+        if not db.is_closed():
+            db.close()
+        assert 'metric_collector_metric_name_timestamp' in names
+
 
 class TestMetrics:
     def test_insert_and_retrieve(self, mgr):

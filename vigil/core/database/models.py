@@ -27,6 +27,15 @@ class Metric(BaseModel):
     value = DoubleField()
     metadata = TextField(null=True)
 
+    class Meta:
+        # The hot read path filters on (collector, metric_name) and orders by
+        # timestamp DESC (latest_metric_cached / metric_history_cached), and
+        # collector_metrics_cached filters on collector alone — both served by
+        # this composite (the leading `collector` also covers the
+        # collector-only prefix). Without it those queries scan the ever-growing
+        # Metric table. See database._migrate() for the same index on existing DBs.
+        indexes = ((('collector', 'metric_name', 'timestamp'), False),)
+
 
 class Event(BaseModel):
     timestamp = DateTimeField(default=datetime.now, index=True)

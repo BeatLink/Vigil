@@ -11,31 +11,64 @@ _schedulers: Dict[str, "_PageScheduler"] = {}
 
 
 class _PageScheduler:
+    """One timer per browser client, ticking every registered *tickable* — a
+    PluginPage or a bare callback (via _CallbackTick). A tickable is anything
+    with ``_tick()`` (async) and ``_detached()``. Coordinating every card,
+    chart, table and overview refresh for a client onto a single timer avoids
+    the fan of independent per-widget timers the UI used to spin up."""
+
     def __init__(self, client_id: str, interval: float):
         self._client_id = client_id
         self._interval = interval
-        self._pages: List["PluginPage"] = []
+        self._tickables: List[Any] = []
         self._timer = None
 
-    def add(self, page: "PluginPage") -> None:
-        self._pages.append(page)
+    def add(self, tickable: Any) -> None:
+        self._tickables.append(tickable)
         if self._timer is None:
             self._timer = safe_timer(self._interval, self._tick, defer_first=True)
-        elif self._interval > page._interval:
-            self._interval = page._interval
+        elif self._interval > tickable._interval:
+            self._interval = tickable._interval
             self._timer.cancel()
             self._timer = safe_timer(self._interval, self._tick, defer_first=True)
-        asyncio.create_task(page._tick())
+        asyncio.create_task(tickable._tick())
 
     async def _tick(self) -> None:
-        live = [p for p in self._pages if not p._detached()]
-        self._pages = live
+        live = [t for t in self._tickables if not t._detached()]
+        self._tickables = live
         if not live:
             if self._timer is not None:
                 self._timer.cancel()
             _schedulers.pop(self._client_id, None)
             return
-        await asyncio.gather(*(p._tick() for p in live))
+        await asyncio.gather(*(t._tick() for t in live))
+
+
+class _CallbackTick:
+    """Adapts a bare refresh callback to the scheduler's tickable protocol so
+    overview-page refreshes (on_data_event) share the client's single timer
+    instead of each owning an independent safe_timer. Detachment is tied to the
+    client the callback was registered under — same lifetime as a PluginPage."""
+
+    def __init__(self, callback: RefreshCallback, interval: float, run_now: bool):
+        self._callback = callback
+        self._interval = interval
+        self._client = context.client
+        self._ran_once = False
+        self._run_now = run_now
+
+    def _detached(self) -> bool:
+        return self._client is None or self._client.id not in Client.instances
+
+    async def _tick(self) -> None:
+        # Honour run_now=False by skipping the very first (inline) tick.
+        if not self._ran_once and not self._run_now:
+            self._ran_once = True
+            return
+        self._ran_once = True
+        result = self._callback()
+        if helpers.should_await(result):
+            await result
 
 
 def _scheduler_for_current_client(interval: float) -> _PageScheduler:
@@ -45,6 +78,15 @@ def _scheduler_for_current_client(interval: float) -> _PageScheduler:
         sched = _PageScheduler(client.id, interval)
         _schedulers[client.id] = sched
     return sched
+
+
+def schedule_callback(callback: RefreshCallback, interval: float = 1.0,
+                      run_now: bool = True) -> None:
+    """Register a plain refresh callback on the current client's shared
+    scheduler. The single entry point the overview page's on_data_event uses so
+    its refreshes ride the same timer as everything else on the page."""
+    _scheduler_for_current_client(interval).add(
+        _CallbackTick(callback, interval, run_now))
 
 
 @binding.bindable_dataclass

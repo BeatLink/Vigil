@@ -1,7 +1,7 @@
 import asyncio
-from typing import Optional, Union
+from typing import Optional
 from nicegui import ui
-from vigil.core.contracts import EventName, RefreshCallback
+from vigil.core.contracts import RefreshCallback
 from .theme import TEXT, TEXT_MUTED, PRIMARY, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
 
 
@@ -54,15 +54,15 @@ def safe_timer(interval: float, callback: RefreshCallback, defer_first: bool = F
 POLL_FALLBACK_SECONDS = 1.0
 
 
-def on_data_event(event: Union[EventName, list], element, callback: RefreshCallback, run_now: bool = True):
-    """Refresh `element` by polling: run `callback` on a shared-cadence
-    safe_timer. The `event` argument is advisory (it names which data type the
-    callback reads) and no longer drives push notifications — the Database
-    Engine is polled, not subscribed to. `element` is accepted for call-site
-    symmetry; the timer's own detachment check (see _SafeTimer) handles
-    teardown. `run_now=False` defers the first tick to the next event-loop
-    iteration instead of firing inline during construction."""
-    safe_timer(POLL_FALLBACK_SECONDS, callback, defer_first=not run_now)
+def on_data_event(callback: RefreshCallback, run_now: bool = True):
+    """Refresh by polling: register `callback` on the current client's shared
+    scheduler so overview-page refreshes ride the same timer as every card,
+    chart and table on the page (rather than each owning an independent
+    timer). The Database Engine is polled, not subscribed to. `run_now=False`
+    defers the first tick to the next scheduler tick instead of firing inline
+    during construction."""
+    from vigil.core.ui.model import schedule_callback
+    schedule_callback(callback, interval=POLL_FALLBACK_SECONDS, run_now=run_now)
 
 
 LABEL_CLASS = 'text-xs font-bold'
