@@ -4,7 +4,20 @@ Architectural decisions and non-obvious rationale for Vigil, organized by topic.
 
 ## Single process
 
-Vigil runs as one OS process. `main()` (`vigil/__main__.py`) builds one `VigilEngine`, calls `setup_modules()` to load plugins, then calls `init_gui()` (`core/ui/main_dashboard.py`) — the per-monitor polling loop and the NiceGUI web dashboard share the same asyncio event loop and read/write the same `Plugin` instances directly, with no IPC between "collecting" and "displaying". A plugin's `render_ui()` can call `self.network`/`self.storage` directly because it's the same live object the polling loop just updated, not a proxy.
+Vigil runs as one OS process. `main()` (`vigil/__main__.py`) builds one `VigilEngine` (the Coordination Engine, `core/coordination/engine.py`), calls `setup_modules()` to load plugins, then calls `init_gui()` (`core/ui/main_dashboard.py`) — the per-monitor polling loop and the NiceGUI web dashboard share the same asyncio event loop and read/write the same `Plugin` instances directly, with no IPC between "collecting" and "displaying". A plugin's `render_ui()` reads through `self.data` (its read-only `PluginDataView`) because it's the same live projection of the Database Engine the polling loop just wrote to, not a stale copy.
+
+## Engine model
+
+`core/` is organized as named engines the Coordination Engine (`VigilEngine`) owns:
+- **Settings Engine** (`core/settings/`) — `ConfigFileManager` loads `config.yaml`.
+- **Database Engine** (`core/database/`) — `DatabaseManager` reads/writes SQLite; `StorageOrchestrator` is its per-plugin write façade.
+- **UI Engine** (`core/ui/`) — NiceGUI dashboard; reads only through `plugin.data` / the Database Engine, never through a plugin's IO objects.
+- **Connector Engine** (`core/connectors/`) — all IO, split into named sub-engines: `ssh/` (asyncssh) and `http/` (HTTP + DNS + ICMP). `ConnectorEngine.run()` routes a plugin's heterogeneous request list (`Command`/`HttpRequest`/`DnsQuery`/`PingRequest`) to the right sub-connector.
+- **Exporter Engine** (`core/exporters/`) — Prometheus pull render + InfluxDB push task.
+
+### Pure plugins
+
+Plugins expose **only pure functions and data dicts** — no IO, no persistence handles. A `Plugin` is constructed with just `(name, config)`; the Coordination Engine's `_wire_plugin()` builds the plugin's `NetworkOrchestrator` and `StorageOrchestrator` (keyed by id, engine-owned) and injects a read-only `PluginDataView` as `plugin.data`. Collection is `requests() -> parse_results()` (declarative, the 99% path) or the `io_call()` escape hatch for genuinely sequential/conditional local IO (ddns_updater, vigil_self). All writes and IO scheduling happen in the engine; the rare out-of-cycle write (push heartbeat, borg streaming, group expand state) routes back through `engine.apply` / `engine.set_job_progress` / `engine.set_setting`. `EngineLike` (`core/contracts.py`) is the narrow engine surface plugins and the UI call.
 
 ## Interface contracts
 
@@ -23,7 +36,7 @@ Most seams in this codebase were duck-typed: a caller and callee agreed on a dic
 
 `core/database/rowtypes.py` types `DatabaseManager`'s dict-returning read methods. Two distinct dict shapes exist there: hand-built dicts with an exact, deliberate key set (`JobDict`, `EventDict`, `PluginEventDict`, `MetricRowDict`), and raw peewee `Model.__data__` dumps (`MetricModelDict`, `LogLineModelDict`, `EventModelDict`) that include every column on the backing table, not just the ones any caller currently reads.
 
-`orchestration/types.py` names the `plan_action()`/`dispatch_action()` discriminated union that `VigilEngine.dispatch_action` walks with `isinstance` (`ActionPlanResult` for what a plugin can return, `ActionOutcome` for what `interpret_*` can return, `DispatchResult` for what dispatch itself returns) — the dispatch logic and its `isinstance` chain were already correct; only the union itself lacked a shared name before individual plugin overrides could narrow it meaningfully in their own signatures.
+`connectors/types.py` names the `plan_action()`/`dispatch_action()` discriminated union that `VigilEngine.dispatch_action` walks with `isinstance` (`ActionPlanResult` for what a plugin can return, `ActionOutcome` for what `interpret_*` can return, `DispatchResult` for what dispatch itself returns) — the dispatch logic and its `isinstance` chain were already correct; only the union itself lacked a shared name before individual plugin overrides could narrow it meaningfully in their own signatures.
 
 `ui/layout.py`'s `PluginLayout` documents (via a class docstring, since the polymorphism is a runtime `isinstance` branch on plain YAML-sourced data, not something a type checker can discriminate) that `config.yaml`'s `layout` key is either a full `List[LayoutRow]` replacing the default row structure, or a `Dict[str, dict]` of per-widget overrides merged onto it — the same list-or-dict pattern `UI_SPEC['events']`/`['logs']` (`bool | dict`) also uses.
 
