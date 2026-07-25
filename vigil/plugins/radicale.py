@@ -1,52 +1,15 @@
-import shlex
-import time as _time
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import (
+    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+)
+from vigil.plugins.base.plugin_helpers import resolve_secret
 
 _PROPFIND_BODY = (
     '<?xml version="1.0"?>'
     '<propfind xmlns="DAV:"><prop><current-user-principal/></prop></propfind>'
 )
-
-_SEP = "@@VIGIL_SPLIT@@"
-
-
-def _build_probe_script(url: str, timeout: int, username: Optional[str],
-                        password_command: Optional[str], password: Optional[str]) -> str:
-    base = url.rstrip('/')
-    lines = ["set -e"]
-
-    auth = ''
-    if username:
-        if password_command:
-            lines.append(f"__pw=$({password_command})")
-            auth = f'-u {shlex.quote(username)}:"$__pw"'
-        elif password:
-            auth = f'-u {shlex.quote(username + ":" + password)}'
-        else:
-            auth = f'-u {shlex.quote(username)}'
-
-    lines.append(
-        f'curl -s -m {timeout} -X PROPFIND {auth} '
-        f'-H "Depth: 0" -H "Content-Type: application/xml" '
-        f'--data {shlex.quote(_PROPFIND_BODY)} '
-        f'-w "\\n{_SEP}%{{http_code}}" '
-        f'{shlex.quote(base + "/")}'
-    )
-    return '\n'.join(lines)
-
-
-def _parse_response(stdout: str) -> tuple:
-    if _SEP not in stdout:
-        raise ValueError(f"unexpected response: {stdout[:200]!r}")
-    body, _, code = stdout.rpartition(_SEP)
-    try:
-        status = int(code.strip())
-    except ValueError as e:
-        raise ValueError(f"non-numeric status code {code.strip()!r}") from e
-    return body.strip(), status
 
 
 _DEFAULT_LAYOUT = [
@@ -59,40 +22,46 @@ _DEFAULT_LAYOUT = [
 class Radicale(Plugin):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        self.url = config.get('url', 'http://127.0.0.1:5232')
+        # Vigil fetches this URL directly; it must be Vigil-reachable, no default.
+        self.url = config.get('url')
         self.username = config.get('username', 'vigil')
-        self.password = config.get('password')
-        self.password_command = config.get('password_command')
+        # Resolve the secret once, on the Vigil host, so requests() stays pure.
+        self.password = resolve_secret(config.get('password'),
+                                       config.get('password_command'))
         self.request_timeout = int(config.get('request_timeout', 10))
-        self._started: Optional[float] = None
 
     def commands(self) -> List[Command]:
-        script = _build_probe_script(
-            self.url, self.request_timeout, self.username,
-            self.password_command, self.password,
-        )
-        self._started = _time.monotonic()
-        return [Command(script)]
+        return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        elapsed_ms = (_time.monotonic() - self._started) * 1000.0 if self._started else 0.0
-        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
+        return CollectResult()
 
-        if ret != 0:
+    def requests(self) -> List[Request]:
+        if not self.url:
+            return []
+        base = self.url.rstrip('/')
+        auth = (self.username, self.password or '') if self.username else None
+        return [HttpRequest(
+            url=f"{base}/", method="PROPFIND", timeout=self.request_timeout,
+            headers={"Depth": "0", "Content-Type": "application/xml"},
+            body=_PROPFIND_BODY, auth=auth,
+        )]
+
+    def parse_results(self, results: List[Result]) -> CollectResult:
+        if not results:
+            return CollectResult.failed("No 'url' configured")
+
+        result: HttpResult = results[0]
+        if result.error is not None:
             return CollectResult(
                 metrics={'propfind_ok': 0.0},
-                logs=[(f"Failed to run PROPFIND probe: {stderr.strip()}", "ERROR")],
+                logs=[(f"Failed to run PROPFIND probe: {result.error}", "ERROR")],
                 status='failed',
             )
 
-        try:
-            body, status = _parse_response(stdout)
-        except ValueError as e:
-            return CollectResult(
-                metrics={'propfind_ok': 0.0},
-                logs=[(str(e), "ERROR")],
-                status='failed',
-            )
+        body = result.text
+        status = result.status_code or 0
+        elapsed_ms = result.elapsed_ms
 
         metrics = {'propfind_status': float(status), 'propfind_latency_ms': elapsed_ms}
 

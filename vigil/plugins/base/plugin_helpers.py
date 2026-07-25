@@ -1,7 +1,33 @@
 import re
-from typing import Any, Dict, List
+import subprocess
+from typing import Any, Dict, List, Optional
 
 from vigil.core.settings.config_schema import PluginConfig
+
+
+def resolve_secret(password: Optional[str],
+                   password_command: Optional[str]) -> Optional[str]:
+    """Resolve a plugin secret from either a literal value or a command run on
+    the Vigil host. Used by HTTP plugins whose auth password can come from a
+    `password_command` (e.g. a `pass`/`cat` invocation).
+
+    Called at plugin construction (config-processing time on the Vigil host),
+    which keeps the per-cycle `requests()` pure. HTTP plugins now fetch from
+    Vigil's perspective, so a `password_command` runs here, not on the target.
+    A rotated command output is picked up on restart. Returns None if neither
+    is set, or if the command fails (the caller reports the auth failure)."""
+    if password is not None:
+        return password
+    if not password_command:
+        return None
+    try:
+        out = subprocess.run(password_command, shell=True, capture_output=True,
+                             text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    return out.stdout.rstrip("\n")
 
 
 class PluginConfigMixin:

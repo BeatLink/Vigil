@@ -293,6 +293,15 @@ class VigilEngine:
         no writer of its own; the engine owns the write path."""
         self._apply(plugin, result)
 
+    async def http_fetch(self, request):
+        """Run one HttpRequest through the shared HttpConnector. For the rare
+        plugin whose HTTP is genuinely sequential/dependent (a login POST for a
+        session token, then a data GET using it) — expressed as an async
+        io_call() closure that awaits this. The flat requests() list can't
+        express request-to-request dependencies; this keeps that IO on the
+        engine-owned connector instead of a plugin opening its own session."""
+        return await self.connectors.http.fetch(request)
+
     # --- Job persistence, called by a plugin from its poll (parse_results) to
     # advance its detached job's Job/JobOutput rows through the engine. ---
     def create_job(self, plugin: Plugin, kind: str, command: str, workdir: str) -> int:

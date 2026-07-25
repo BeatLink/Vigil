@@ -3,14 +3,15 @@ import json
 import pytest
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.frigate import Frigate, _build_fetch_script, _parse_response
-from vigil.core.connectors.types import CmdResult
+from vigil.plugins.frigate import Frigate, _parse_response
+from vigil.core.connectors.types import HttpRequest, HttpResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {
     "name": "test-frigate",
     "id":   "test-frigate",
+    "api_url": "http://frigate.test:5000",
     "ssh_config": {"host": "test.host"},
 }
 
@@ -36,7 +37,8 @@ def plugin(make_plugin):
 
 
 def _result(stats=None):
-    return CmdResult(0, json.dumps(stats if stats is not None else _stats()), "")
+    return HttpResult(status_code=200,
+                      text=json.dumps(stats if stats is not None else _stats()))
 
 
 def _latest_status(plugin_id: str = "test-frigate") -> str | None:
@@ -55,10 +57,17 @@ def _latest_metric(metric: str, name: str = "test-frigate") -> float | None:
     return row.value if row else None
 
 
-class TestBuildFetchScript:
-    def test_targets_stats_endpoint(self):
-        script = _build_fetch_script("http://127.0.0.1:5000", 10)
-        assert "/api/stats" in script
+class TestRequests:
+    def test_targets_stats_endpoint(self, plugin):
+        reqs = plugin.requests()
+        assert len(reqs) == 1
+        assert isinstance(reqs[0], HttpRequest)
+        assert reqs[0].url == "http://frigate.test:5000/api/stats"
+
+    def test_no_url_yields_no_requests(self, make_plugin):
+        p = make_plugin(Frigate, {"name": "f", "id": "f",
+                                  "ssh_config": {"host": "h"}})
+        assert p.requests() == []
 
 
 class TestParseResponse:
@@ -76,26 +85,26 @@ class TestParseResponse:
 
 
 class TestFrigateCollection:
-    async def test_excellent_quality_sets_online(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: _result())
+    async def test_excellent_quality_sets_online(self, plugin, run_requests):
+        run_requests(plugin, lambda r: _result())
         assert _latest_status() == "online"
 
-    async def test_unusable_quality_sets_failed(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: _result(_stats(cameras={
+    async def test_unusable_quality_sets_failed(self, plugin, run_requests):
+        run_requests(plugin, lambda r: _result(_stats(cameras={
             "front_door": {"camera_fps": 0.0, "connection_quality": "unusable",
                            "stalls_last_hour": 5, "reconnects_last_hour": 12}
         })))
         assert _latest_status() == "failed"
 
-    async def test_poor_quality_sets_warning(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: _result(_stats(cameras={
+    async def test_poor_quality_sets_warning(self, plugin, run_requests):
+        run_requests(plugin, lambda r: _result(_stats(cameras={
             "front_door": {"camera_fps": 1.0, "connection_quality": "poor",
                            "stalls_last_hour": 2, "reconnects_last_hour": 1}
         })))
         assert _latest_status() == "warning"
 
-    async def test_worst_camera_wins(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: _result(_stats(cameras={
+    async def test_worst_camera_wins(self, plugin, run_requests):
+        run_requests(plugin, lambda r: _result(_stats(cameras={
             "good_cam": {"camera_fps": 5.0, "connection_quality": "excellent",
                         "stalls_last_hour": 0, "reconnects_last_hour": 0},
             "bad_cam": {"camera_fps": 0.0, "connection_quality": "unusable",
@@ -103,13 +112,24 @@ class TestFrigateCollection:
         })))
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
+    async def test_http_error_sets_failed(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(
+            status_code=None, text="", error="connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_camera_filter_excludes_others(self, make_plugin, run_cycle):
+    async def test_non_200_sets_failed(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(status_code=502, text=""))
+        assert _latest_status() == "failed"
+
+    async def test_missing_url_sets_failed(self, make_plugin, run_requests):
+        p = make_plugin(Frigate, {"name": "f", "id": "f",
+                                  "ssh_config": {"host": "h"}})
+        run_requests(p, lambda r: _result())
+        assert _latest_status("f") == "failed"
+
+    async def test_camera_filter_excludes_others(self, make_plugin, run_requests):
         p = make_plugin(Frigate, {**BASE_CFG, "cameras": ["only_this"]})
-        run_cycle(p, lambda c: _result(_stats(cameras={
+        run_requests(p, lambda r: _result(_stats(cameras={
             "only_this": {"camera_fps": 5.0, "connection_quality": "excellent",
                          "stalls_last_hour": 0, "reconnects_last_hour": 0},
             "ignored": {"camera_fps": 0.0, "connection_quality": "unusable",
@@ -117,9 +137,9 @@ class TestFrigateCollection:
         })))
         assert _latest_status("test-frigate") == "online"
 
-    async def test_no_matching_cameras_sets_warning(self, make_plugin, run_cycle):
+    async def test_no_matching_cameras_sets_warning(self, make_plugin, run_requests):
         p = make_plugin(Frigate, {**BASE_CFG, "cameras": ["nonexistent"]})
-        run_cycle(p, lambda c: _result())
+        run_requests(p, lambda r: _result())
         assert _latest_status("test-frigate") == "warning"
 
 

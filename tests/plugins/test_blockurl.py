@@ -3,13 +3,14 @@ import json
 import pytest
 
 from vigil.plugins.blockurl import Blockurl, _parse_response
-from vigil.core.connectors.types import CmdResult
+from vigil.core.connectors.types import HttpRequest, HttpResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {
     "name": "test-blockurl",
     "id":   "test-blockurl",
+    "api_url": "http://blockurl.test:9001",
     "api_key": "testkey",
     "min_domains": 1,
     "ssh_config": {"host": "test.host"},
@@ -24,7 +25,8 @@ def plugin(make_plugin):
 
 
 def _result(domains=None):
-    return CmdResult(0, json.dumps(domains if domains is not None else _DOMAINS), "")
+    return HttpResult(status_code=200,
+                      text=json.dumps(domains if domains is not None else _DOMAINS))
 
 
 def _latest_status(plugin_id: str = "test-blockurl") -> str | None:
@@ -57,25 +59,44 @@ class TestParseResponse:
             _parse_response("not json")
 
 
+class TestRequests:
+    def test_targets_domains_with_api_key_header(self, plugin):
+        reqs = plugin.requests()
+        assert len(reqs) == 1
+        assert isinstance(reqs[0], HttpRequest)
+        assert reqs[0].url == "http://blockurl.test:9001/urls/domains"
+        assert reqs[0].headers == {"X-API-Key": "testkey"}
+
+    def test_no_url_yields_no_requests(self, make_plugin):
+        p = make_plugin(Blockurl, {"name": "b", "id": "b",
+                                   "ssh_config": {"host": "h"}})
+        assert p.requests() == []
+
+
 class TestBlockurlCollection:
-    async def test_populated_list_sets_online(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: _result())
+    async def test_populated_list_sets_online(self, plugin, run_requests):
+        run_requests(plugin, lambda r: _result())
         assert _latest_status() == "online"
 
-    async def test_empty_list_sets_warning(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: _result(domains=[]))
+    async def test_empty_list_sets_warning(self, plugin, run_requests):
+        run_requests(plugin, lambda r: _result(domains=[]))
         assert _latest_status() == "warning"
 
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
+    async def test_http_error_sets_failed(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(
+            status_code=None, text="", error="connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_records_url_total(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: _result())
+    async def test_401_sets_failed(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(status_code=401, text=""))
+        assert _latest_status() == "failed"
+
+    async def test_records_url_total(self, plugin, run_requests):
+        run_requests(plugin, lambda r: _result())
         assert _latest_metric("urls_total") == 8.0
 
-    async def test_records_domain_total(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: _result())
+    async def test_records_domain_total(self, plugin, run_requests):
+        run_requests(plugin, lambda r: _result())
         assert _latest_metric("domains_total") == 2.0
 
 

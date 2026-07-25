@@ -4,8 +4,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from vigil.plugins.traccar import Traccar, _age_hours, _AUTH_FAILED
-from vigil.core.connectors.types import CmdResult
+from vigil.plugins.traccar import Traccar, _age_hours
+from vigil.core.connectors.types import HttpRequest, HttpResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 pytestmark = pytest.mark.asyncio
@@ -14,6 +14,7 @@ pytestmark = pytest.mark.asyncio
 BASE_CFG = {
     "name": "test-traccar",
     "id":   "test-traccar",
+    "api_url": "http://traccar.test:8082",
     "username": "vigil",
     "password": "hunter2",
     "stale_warning": 24,
@@ -36,9 +37,9 @@ def plugin(make_plugin):
     return make_plugin(Traccar, BASE_CFG)
 
 
-def _run(plugin, run_cycle, devices=None):
+def _run(plugin, run_requests, devices=None):
     payload = json.dumps(devices if devices is not None else [_device()])
-    run_cycle(plugin, lambda c: CmdResult(0, payload, ""))
+    run_requests(plugin, lambda r: HttpResult(status_code=200, text=payload))
 
 
 def _latest_status(plugin_id: str = "test-traccar") -> str | None:
@@ -69,45 +70,65 @@ class TestAgeHours:
         assert _age_hours("not-a-date") is None
 
 
-class TestTraccarCollection:
-    async def test_fresh_device_sets_online(self, plugin, run_cycle):
-        _run(plugin, run_cycle, [_device(hours_ago=1.0)])
-        assert _latest_status() == "online"
+class TestRequests:
+    def test_targets_devices_with_basic_auth(self, plugin):
+        reqs = plugin.requests()
+        assert len(reqs) == 1
+        assert isinstance(reqs[0], HttpRequest)
+        assert reqs[0].url == "http://traccar.test:8082/api/devices"
+        assert reqs[0].auth == ("vigil", "hunter2")
 
-    async def test_stale_device_sets_warning(self, plugin, run_cycle):
-        _run(plugin, run_cycle, [_device(hours_ago=30.0)])
-        assert _latest_status() == "warning"
+    def test_no_url_yields_no_requests(self, make_plugin):
+        p = make_plugin(Traccar, {"name": "t", "id": "t", "username": "vigil",
+                                  "ssh_config": {"host": "h"}})
+        assert p.requests() == []
 
-    async def test_very_stale_device_sets_failed(self, plugin, run_cycle):
-        _run(plugin, run_cycle, [_device(hours_ago=100.0)])
-        assert _latest_status() == "failed"
-
-    async def test_disabled_devices_excluded(self, plugin, run_cycle):
-        _run(plugin, run_cycle, [_device(hours_ago=200.0, disabled=True)])
-        assert _latest_status() == "warning"
-
-    async def test_auth_failure_sets_failed(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: CmdResult(1, "", _AUTH_FAILED))
-        assert _latest_status() == "failed"
-
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
-        assert _latest_status() == "failed"
-
-    async def test_missing_username_sets_failed(self, make_plugin, run_cycle):
+    def test_no_username_yields_no_requests(self, make_plugin):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "username"}
         p = make_plugin(Traccar, cfg)
-        run_cycle(p, lambda c: CmdResult(0, "", ""))
-        assert _latest_status("test-traccar") == "failed"
+        assert p.requests() == []
 
-    async def test_never_reported_counts_as_stale(self, plugin, run_cycle):
-        _run(plugin, run_cycle, [{"name": "NoFix", "disabled": False, "lastUpdate": None}])
+
+class TestTraccarCollection:
+    async def test_fresh_device_sets_online(self, plugin, run_requests):
+        _run(plugin, run_requests, [_device(hours_ago=1.0)])
+        assert _latest_status() == "online"
+
+    async def test_stale_device_sets_warning(self, plugin, run_requests):
+        _run(plugin, run_requests, [_device(hours_ago=30.0)])
+        assert _latest_status() == "warning"
+
+    async def test_very_stale_device_sets_failed(self, plugin, run_requests):
+        _run(plugin, run_requests, [_device(hours_ago=100.0)])
         assert _latest_status() == "failed"
 
-    async def test_device_filter_excludes_others(self, make_plugin, run_cycle):
+    async def test_disabled_devices_excluded(self, plugin, run_requests):
+        _run(plugin, run_requests, [_device(hours_ago=200.0, disabled=True)])
+        assert _latest_status() == "warning"
+
+    async def test_auth_failure_sets_failed(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(status_code=401, text=""))
+        assert _latest_status() == "failed"
+
+    async def test_http_error_sets_failed(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(
+            status_code=None, text="", error="connection refused"))
+        assert _latest_status() == "failed"
+
+    async def test_missing_username_sets_failed(self, make_plugin, run_requests):
+        cfg = {k: v for k, v in BASE_CFG.items() if k != "username"}
+        p = make_plugin(Traccar, cfg)
+        run_requests(p, lambda r: HttpResult(status_code=200, text="[]"))
+        assert _latest_status("test-traccar") == "failed"
+
+    async def test_never_reported_counts_as_stale(self, plugin, run_requests):
+        _run(plugin, run_requests, [{"name": "NoFix", "disabled": False, "lastUpdate": None}])
+        assert _latest_status() == "failed"
+
+    async def test_device_filter_excludes_others(self, make_plugin, run_requests):
         p = make_plugin(Traccar, {**BASE_CFG, "devices": ["Phone"]})
-        _run(p, run_cycle, [_device(name="Phone", hours_ago=1.0),
-                            _device(name="OldTablet", hours_ago=500.0)])
+        _run(p, run_requests, [_device(name="Phone", hours_ago=1.0),
+                               _device(name="OldTablet", hours_ago=500.0)])
         assert _latest_status("test-traccar") == "online"
 
 

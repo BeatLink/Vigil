@@ -65,9 +65,19 @@ class _FakeEngine:
         self.plugins = [plugin]
         self._last_collected = {}
         self.connectors = connectors
+        # Tests set http_fetch_handler(request)->HttpResult to drive io_call()
+        # closures that issue HTTP through engine.http_fetch (login-then-fetch).
+        self.http_fetch_handler = None
 
     def apply(self, plugin, result):
         self.db.apply_result(plugin.target, plugin.id, plugin.name, result)
+
+    async def http_fetch(self, request):
+        if self.http_fetch_handler is None:
+            raise AssertionError(
+                "engine.http_fetch called but no http_fetch_handler set on the "
+                "fake engine — set plugin.engine.http_fetch_handler in the test")
+        return self.http_fetch_handler(request)
 
     def set_setting(self, key, value):
         self.db.set_setting(key, value)
@@ -208,11 +218,32 @@ def run_io_cycle():
     (sequential local IO) — invokes io_call()'s closure directly and applies
     the CollectResult from parse_results([result]), mirroring the engine.
     `fake_result`, if given, replaces the closure's return value so a test can
-    inject a fabricated sample without running real IO."""
+    inject a fabricated sample without running real IO. For a plugin whose
+    io_call() closure is async (e.g. HTTP login-then-fetch), use
+    run_io_cycle_async instead."""
 
     def factory(plugin, fake_result=_UNSET):
         if fake_result is _UNSET:
             io_result = plugin.io_call()()
+        else:
+            io_result = fake_result
+        result = plugin.parse_results([io_result])
+        plugin.storage.apply(result)
+        return result
+
+    return factory
+
+
+@pytest.fixture
+def run_io_cycle_async():
+    """run_io_cycle for plugins whose io_call() closure is async — awaits the
+    coroutine (mirroring the engine's _run_io, which awaits a coroutine
+    function). Used by login-then-fetch HTTP plugins that issue dependent
+    requests through engine.http_fetch."""
+
+    async def factory(plugin, fake_result=_UNSET):
+        if fake_result is _UNSET:
+            io_result = await plugin.io_call()()
         else:
             io_result = fake_result
         result = plugin.parse_results([io_result])

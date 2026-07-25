@@ -36,6 +36,8 @@ class HttpRequest:
     headers: Optional[Dict[str, str]] = None
     body: Optional[str] = None
     timeout: Optional[float] = None
+    auth: Optional[Tuple[str, str]] = None
+    """Optional HTTP Basic Auth (username, password), applied by the connector."""
     ok_prefixes: Tuple[str, ...] = ()
     """Optional case-insensitive body-prefix success check (e.g. DDNS
     providers answer 'good'/'nochg'); empty means status_code alone decides."""
@@ -46,6 +48,9 @@ class HttpResult:
     status_code: Optional[int]
     text: str
     error: Optional[str] = None
+    elapsed_ms: float = 0.0
+    """Wall-clock time the request took, measured by the connector. 0.0 on a
+    transport error (nothing completed)."""
 
 
 @dataclass(frozen=True)

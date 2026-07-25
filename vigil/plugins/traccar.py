@@ -1,32 +1,12 @@
 import json
-import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
-
-_AUTH_FAILED = "VIGIL_AUTH_FAILED"
-
-
-def _build_fetch_script(api_url: str, timeout: int, username: str,
-                        password_command: Optional[str], password: Optional[str]) -> str:
-    base = api_url.rstrip('/')
-    lines = ["set -e"]
-
-    if password_command:
-        lines.append(f"__pw=$({password_command})")
-        auth = f'-u {shlex.quote(username)}:"$__pw"'
-    else:
-        auth = f'-u {shlex.quote(username + ":" + (password or ""))}'
-
-    lines.append(
-        f'__code=$(curl -s -m {timeout} {auth} -o /tmp/.vigil-traccar-$$  '
-        f'-w "%{{http_code}}" {shlex.quote(base + "/api/devices")}); '
-        f'if [ "$__code" = "401" ]; then echo "{_AUTH_FAILED}" >&2; rm -f /tmp/.vigil-traccar-$$; exit 1; fi; '
-        f'cat /tmp/.vigil-traccar-$$; rm -f /tmp/.vigil-traccar-$$'
-    )
-    return '\n'.join(lines)
+from vigil.core.connectors.types import (
+    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+)
+from vigil.plugins.base.plugin_helpers import resolve_secret
 
 
 def _parse_response(stdout: str) -> List[Dict[str, Any]]:
@@ -61,40 +41,53 @@ _DEFAULT_LAYOUT = [
 class Traccar(Plugin):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        self.api_url = config.get('api_url', 'http://127.0.0.1:8082')
+        # Vigil fetches this URL directly; it must be Vigil-reachable, no default.
+        self.api_url = config.get('api_url')
         self.username = config.get('username')
-        self.password = config.get('password')
-        self.password_command = config.get('password_command')
+        # Resolve the secret once, on the Vigil host, so requests() stays pure.
+        self.password = resolve_secret(config.get('password'),
+                                       config.get('password_command'))
         self.stale_warning = float(config.get('stale_warning', 24))
         self.stale_threshold = float(config.get('stale_threshold', 72))
         self.devices: Optional[List[str]] = config.get('devices') or None
         self.api_timeout = int(config.get('api_timeout', 10))
 
     def commands(self) -> List[Command]:
-        if not self.username:
-            return []
-        script = _build_fetch_script(
-            self.api_url, self.api_timeout, self.username,
-            self.password_command, self.password,
-        )
-        return [Command(script)]
+        return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        return CollectResult()
+
+    def requests(self) -> List[Request]:
+        if not self.api_url or not self.username:
+            return []
+        base = self.api_url.rstrip('/')
+        return [HttpRequest(
+            url=f"{base}/api/devices", timeout=self.api_timeout,
+            auth=(self.username, self.password or ''),
+        )]
+
+    def parse_results(self, results: List[Result]) -> CollectResult:
+        if not self.api_url:
+            return CollectResult.failed("No 'api_url' configured")
         if not self.username:
             return CollectResult.failed(
                 "No username configured — set username/password_command "
                 "for the dedicated Traccar vigil account")
 
-        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
-        if ret != 0:
-            if _AUTH_FAILED in stderr:
-                return CollectResult.failed(
-                    "Traccar rejected the configured credentials "
-                    "(check username / password_command)")
-            return CollectResult.failed(f"Failed to query Traccar API: {stderr.strip()}")
+        result: HttpResult = results[0]
+        if result.error is not None:
+            return CollectResult.failed(f"Failed to query Traccar API: {result.error}")
+        if result.status_code == 401:
+            return CollectResult.failed(
+                "Traccar rejected the configured credentials "
+                "(check username / password_command)")
+        if result.status_code != 200:
+            return CollectResult.failed(
+                f"Traccar API returned HTTP {result.status_code}")
 
         try:
-            devices = _parse_response(stdout)
+            devices = _parse_response(result.text)
         except ValueError as e:
             return CollectResult.failed(str(e))
 

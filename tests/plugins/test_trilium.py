@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.trilium import Trilium, _age_hours, _parse_response
-from vigil.core.connectors.types import CmdResult
+from vigil.core.connectors.types import HttpRequest, HttpResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 pytestmark = pytest.mark.asyncio
@@ -14,6 +14,7 @@ pytestmark = pytest.mark.asyncio
 BASE_CFG = {
     "name": "test-trilium",
     "id":   "test-trilium",
+    "api_url": "http://trilium.test:8080",
     "token": "abc123",
     "stale_warning": 72,
     "ssh_config": {"host": "test.host"},
@@ -38,9 +39,9 @@ def plugin(make_plugin):
     return make_plugin(Trilium, BASE_CFG)
 
 
-def _run(plugin, run_cycle, hours_ago=1.0, total_notes=5000):
+def _run(plugin, run_requests, hours_ago=1.0, total_notes=5000):
     payload = _response(hours_ago, total_notes)
-    run_cycle(plugin, lambda c: CmdResult(0, payload, ""))
+    run_requests(plugin, lambda r: HttpResult(status_code=200, text=payload))
 
 
 def _latest_status(plugin_id: str = "test-trilium") -> str | None:
@@ -77,25 +78,45 @@ class TestParseResponse:
             _parse_response('{"foo": "bar"}')
 
 
+class TestRequests:
+    def test_targets_metrics_with_auth_header(self, plugin):
+        reqs = plugin.requests()
+        assert len(reqs) == 1
+        assert isinstance(reqs[0], HttpRequest)
+        assert reqs[0].url == "http://trilium.test:8080/etapi/metrics?format=json"
+        assert reqs[0].headers == {"Authorization": "abc123"}
+
+    def test_no_url_yields_no_requests(self, make_plugin):
+        p = make_plugin(Trilium, {"name": "t", "id": "t",
+                                  "ssh_config": {"host": "h"}})
+        assert p.requests() == []
+
+    def test_token_command_resolved_at_construction(self, make_plugin):
+        p = make_plugin(Trilium, {**BASE_CFG, "token": None,
+                                  "token_command": "printf tok-xyz"})
+        assert p.requests()[0].headers == {"Authorization": "tok-xyz"}
+
+
 class TestTriliumCollection:
-    async def test_recent_modification_sets_online(self, plugin, run_cycle):
-        _run(plugin, run_cycle, hours_ago=1.0)
+    async def test_recent_modification_sets_online(self, plugin, run_requests):
+        _run(plugin, run_requests, hours_ago=1.0)
         assert _latest_status() == "online"
 
-    async def test_stale_modification_sets_warning(self, plugin, run_cycle):
-        _run(plugin, run_cycle, hours_ago=100.0)
+    async def test_stale_modification_sets_warning(self, plugin, run_requests):
+        _run(plugin, run_requests, hours_ago=100.0)
         assert _latest_status() == "warning"
 
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
+    async def test_http_error_sets_failed(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(
+            status_code=None, text="", error="connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_bad_token_sets_failed(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: CmdResult(0, '{"error": "unauthorized"}', ""))
+    async def test_401_sets_failed(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(status_code=401, text=""))
         assert _latest_status() == "failed"
 
-    async def test_records_note_count(self, plugin, run_cycle):
-        _run(plugin, run_cycle, total_notes=1234)
+    async def test_records_note_count(self, plugin, run_requests):
+        _run(plugin, run_requests, total_notes=1234)
         assert _latest_metric("notes_total") == 1234
 
 

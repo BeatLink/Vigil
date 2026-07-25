@@ -1,29 +1,20 @@
+import hashlib
 import json
-import shlex
 import time
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import (
+    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+)
+from vigil.plugins.base.plugin_helpers import resolve_secret
 
 
-def _build_fetch_script(api_url: str, timeout: int, username: str,
-                        api_password_command: Optional[str],
-                        api_password: Optional[str]) -> str:
-    base = api_url.rstrip('/')
-    lines = ["set -e"]
-
-    if api_password_command:
-        lines.append(f"__pw=$({api_password_command})")
-    else:
-        lines.append(f"__pw={shlex.quote(api_password or '')}")
-
-    lines.append(f'__token=$(printf "%s:%s" {shlex.quote(username)} "$__pw" | md5sum | cut -d" " -f1)')
-    lines.append(
-        f'curl -s -m {timeout} -F "api_key=$__token" '
-        f'{shlex.quote(base + "/api/fever.php?api&feeds")}'
-    )
-    return '\n'.join(lines)
+def _fever_api_key(username: str, password: str) -> str:
+    """The Fever API authenticates with an md5 hash of 'username:password',
+    sent as a form field. (This is the Fever protocol's own scheme, not a
+    security choice by Vigil.)"""
+    return hashlib.md5(f"{username}:{password}".encode()).hexdigest()
 
 
 def _parse_response(stdout: str) -> Dict[str, Any]:
@@ -58,10 +49,12 @@ _DEFAULT_LAYOUT = [
 class Freshrss(Plugin):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        self.api_url = config.get('api_url', 'http://127.0.0.1:80')
+        # Vigil fetches this URL directly; it must be Vigil-reachable, no default.
+        self.api_url = config.get('api_url')
         self.username = config.get('username')
-        self.api_password = config.get('api_password')
-        self.api_password_command = config.get('api_password_command')
+        # Resolve the API password once, on the Vigil host, so requests() stays pure.
+        self.api_password = resolve_secret(config.get('api_password'),
+                                           config.get('api_password_command'))
         self.feed_stale_warning = float(config.get('feed_stale_warning', 48))
         self.feed_stale_threshold = float(config.get('feed_stale_threshold', 168))
         self.refresh_stale_warning = float(config.get('refresh_stale_warning', 6))
@@ -77,25 +70,38 @@ class Freshrss(Plugin):
             return 'warning' if v >= _warning else 'online'
 
     def commands(self) -> List[Command]:
-        if not self.username:
-            return []
-        script = _build_fetch_script(
-            self.api_url, self.api_timeout, self.username,
-            self.api_password_command, self.api_password,
-        )
-        return [Command(script)]
+        return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        return CollectResult()
+
+    def requests(self) -> List[Request]:
+        if not self.api_url or not self.username:
+            return []
+        base = self.api_url.rstrip('/')
+        token = _fever_api_key(self.username, self.api_password or '')
+        return [HttpRequest(
+            url=f"{base}/api/fever.php?api&feeds", method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            body=f"api_key={token}", timeout=self.api_timeout,
+        )]
+
+    def parse_results(self, results: List[Result]) -> CollectResult:
+        if not self.api_url:
+            return CollectResult.failed("No 'api_url' configured")
         if not self.username:
             return CollectResult.failed(
                 "No username configured — set username/api_password_command")
 
-        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
-        if ret != 0:
-            return CollectResult.failed(f"Failed to query Fever API: {stderr.strip()}")
+        result: HttpResult = results[0]
+        if result.error is not None:
+            return CollectResult.failed(f"Failed to query Fever API: {result.error}")
+        if result.status_code != 200:
+            return CollectResult.failed(
+                f"Fever API returned HTTP {result.status_code}")
 
         try:
-            data = _parse_response(stdout)
+            data = _parse_response(result.text)
         except ValueError as e:
             return CollectResult.failed(str(e))
 

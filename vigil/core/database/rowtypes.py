@@ -17,26 +17,28 @@ from typing import Any, List, Optional, Tuple, TypedDict
 
 class JobDict(TypedDict):
     """Returned by DatabaseManager.get_job/recent_jobs/running_jobs."""
+
     id: int
     plugin_id: str
     target: str
     kind: str
     state: str
     command: str
-    started: str            # isoformat(sep=' ', timespec='seconds')
+    started: str  # isoformat(sep=' ', timespec='seconds')
     finished: Optional[str]
-    duration: int            # seconds; computed against now() while running
+    duration: int  # seconds; computed against now() while running
     exit_code: Optional[int]
     progress: Optional[str]
     error: Optional[str]
     running: bool
-    pid: Optional[int]              # remote PID of the detached job
-    workdir: Optional[str]          # per-job dir on the target
-    output_seq: int                 # bytes/lines of the output file consumed so far
+    pid: Optional[int]  # remote PID of the detached job
+    workdir: Optional[str]  # per-job dir on the target
+    output_seq: int  # bytes/lines of the output file consumed so far
 
 
 class JobOutputDict(TypedDict):
     """Returned by DatabaseManager.job_output."""
+
     seq: int
     timestamp: str
     stream: str
@@ -45,6 +47,7 @@ class JobOutputDict(TypedDict):
 
 class EventDict(TypedDict):
     """Returned by DatabaseManager.recent_events/recent_events_cached."""
+
     timestamp: str
     level: str
     target: str
@@ -55,6 +58,7 @@ class PluginEventDict(TypedDict):
     """Returned by DatabaseManager.plugin_events_cached — a narrower shape
     than EventDict (no `target`; `message` has the plugin-name prefix
     stripped)."""
+
     timestamp: str
     level: str
     message: str
@@ -63,6 +67,7 @@ class PluginEventDict(TypedDict):
 class MetricRowDict(TypedDict):
     """Returned by DatabaseManager.latest_metrics — hand-built, not a
     peewee __data__ dump, so its keys are exact."""
+
     target: str
     collector: str
     metric_name: str
@@ -74,8 +79,9 @@ class MetricModelDict(TypedDict):
     """peewee Metric.__data__ as returned by collector_metrics_cached/
     recent_metrics_raw_cached — includes every Metric column, unlike
     MetricRowDict's hand-picked subset."""
+
     id: int
-    timestamp: Any           # datetime, not yet isoformat()'d
+    timestamp: Any  # datetime, not yet isoformat()'d
     target: str
     collector: str
     metric_name: str
@@ -85,6 +91,7 @@ class MetricModelDict(TypedDict):
 
 class LogLineModelDict(TypedDict):
     """peewee LogLine.__data__ as returned by log_lines_cached."""
+
     id: int
     timestamp: Any
     target: str
@@ -96,6 +103,7 @@ class LogLineModelDict(TypedDict):
 
 class EventModelDict(TypedDict):
     """peewee Event.__data__ as returned by recent_events_raw_cached."""
+
     id: int
     timestamp: Any
     level: str

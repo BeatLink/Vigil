@@ -1,25 +1,11 @@
 import json
-import shlex
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
-
-
-def _build_fetch_script(
-    api_url: str, timeout: int, api_key_command: Optional[str], api_key: Optional[str]
-) -> str:
-    base = api_url.rstrip("/")
-    lines = ["set -e"]
-
-    if api_key_command:
-        lines.append(f"__key=$({api_key_command})")
-        header = '-H "X-API-Key: $__key"'
-    else:
-        header = f'-H {shlex.quote("X-API-Key: " + (api_key or ""))}'
-
-    lines.append(f'curl -s -m {timeout} {header} {shlex.quote(base + "/urls/domains")}')
-    return "\n".join(lines)
+from vigil.core.connectors.types import (
+    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+)
+from vigil.plugins.base.plugin_helpers import resolve_secret
 
 
 def _parse_response(stdout: str) -> list:
@@ -44,10 +30,12 @@ _DEFAULT_LAYOUT = [
 class Blockurl(Plugin):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        self.api_url = config.get("api_url", "http://127.0.0.1:9001")
-        self.api_key = config.get("api_key")
-        self.api_key_command = config.get(
-            "api_key_command", "cut -d= -f2- /run/secrets/blockurl_api_key"
+        # Vigil fetches this URL directly; it must be Vigil-reachable, no default.
+        self.api_url = config.get("api_url")
+        # Resolve the API key once, on the Vigil host, so requests() stays pure.
+        self.api_key = resolve_secret(
+            config.get("api_key"),
+            config.get("api_key_command", "cut -d= -f2- /run/secrets/blockurl_api_key"),
         )
         self.min_domains = int(config.get("min_domains", 1))
         self.api_timeout = int(config.get("api_timeout", 10))
@@ -62,20 +50,36 @@ class Blockurl(Plugin):
             return "warning" if v < _min_domains else "online"
 
     def commands(self) -> List[Command]:
-        script = _build_fetch_script(
-            self.api_url, self.api_timeout, self.api_key_command, self.api_key
-        )
-        return [Command(script)]
+        return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
-        if ret != 0:
+        return CollectResult()
+
+    def requests(self) -> List[Request]:
+        if not self.api_url:
+            return []
+        base = self.api_url.rstrip("/")
+        return [HttpRequest(
+            url=f"{base}/urls/domains", timeout=self.api_timeout,
+            headers={"X-API-Key": self.api_key or ""},
+        )]
+
+    def parse_results(self, results: List[Result]) -> CollectResult:
+        if not results:
+            return CollectResult.failed("No 'api_url' configured")
+
+        result: HttpResult = results[0]
+        if result.error is not None:
             return CollectResult.failed(
-                f"Failed to query BlockURL API: {stderr.strip()}"
+                f"Failed to query BlockURL API: {result.error}"
+            )
+        if result.status_code != 200:
+            return CollectResult.failed(
+                f"BlockURL API returned HTTP {result.status_code}"
             )
 
         try:
-            data = _parse_response(stdout)
+            data = _parse_response(result.text)
         except ValueError as e:
             return CollectResult.failed(str(e))
 

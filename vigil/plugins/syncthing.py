@@ -1,39 +1,12 @@
 import json
-import shlex
 import time
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
-
-_MARK = "@@VIGIL_FOLDER@@"
-
-
-def _auth_header(timeout: int, api_key_command: Optional[str], api_key: Optional[str]) -> str:
-    if api_key_command:
-        return '-H "X-API-Key: $(' + api_key_command + ')"'
-    return f'-H {shlex.quote("X-API-Key: " + (api_key or ""))}'
-
-
-def _config_script(api_url: str, timeout: int, api_key_command: Optional[str],
-                   api_key: Optional[str]) -> str:
-    header = _auth_header(timeout, api_key_command, api_key)
-    base = api_url.rstrip('/')
-    return f'curl -s -m {timeout} {header} {shlex.quote(base + "/rest/system/config")}'
-
-
-def _connections_script(api_url: str, timeout: int, api_key_command: Optional[str],
-                        api_key: Optional[str]) -> str:
-    header = _auth_header(timeout, api_key_command, api_key)
-    base = api_url.rstrip('/')
-    return f'curl -s -m {timeout} {header} {shlex.quote(base + "/rest/system/connections")}'
-
-
-def _folder_status_script(api_url: str, timeout: int, api_key_command: Optional[str],
-                          api_key: Optional[str], folder_id: str) -> str:
-    base = api_url.rstrip('/')
-    header = _auth_header(timeout, api_key_command, api_key)
-    return f'curl -s -m {timeout} {header} {shlex.quote(base + "/rest/db/status?folder=" + folder_id)}'
+from vigil.core.connectors.types import (
+    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+)
+from vigil.plugins.base.plugin_helpers import resolve_secret
 
 
 _DEFAULT_LAYOUT = [
@@ -47,10 +20,13 @@ _DEFAULT_LAYOUT = [
 class Syncthing(Plugin):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        self.api_url = config.get('api_url', 'http://127.0.0.1:8384')
-        self.api_key = config.get('api_key')
-        self.api_key_command = config.get(
-            'api_key_command', 'cat /Storage/Services/Syncthing/Config/vigil-api-key')
+        # Vigil fetches this URL directly; it must be Vigil-reachable, no default.
+        self.api_url = config.get('api_url')
+        # Resolve the API key once, on the Vigil host, so requests() stays pure.
+        self.api_key = resolve_secret(
+            config.get('api_key'),
+            config.get('api_key_command',
+                       'cat /Storage/Services/Syncthing/Config/vigil-api-key'))
         self.folders: Optional[List[str]] = config.get('folders') or None
         self.devices: Optional[List[str]] = config.get('devices') or None
         self.stall_warning_secs = float(config.get('stall_warning', 60)) * 60
@@ -76,26 +52,43 @@ class Syncthing(Plugin):
             lambda stalled: None if stalled is None else ('warning' if stalled else 'online'))
 
     def commands(self) -> List[Command]:
-        cmds = [
-            Command(_config_script(self.api_url, self.api_timeout, self.api_key_command, self.api_key)),
-            Command(_connections_script(self.api_url, self.api_timeout, self.api_key_command, self.api_key)),
-        ]
-        cmds += [
-            Command(_folder_status_script(
-                self.api_url, self.api_timeout, self.api_key_command, self.api_key, folder_id))
-            for folder_id in self._cached_folder_ids
-        ]
-        return cmds
+        return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        return CollectResult()
+
+    def _get(self, path: str) -> HttpRequest:
+        base = self.api_url.rstrip('/')
+        return HttpRequest(url=f"{base}{path}", timeout=self.api_timeout,
+                           headers={"X-API-Key": self.api_key or ""})
+
+    def requests(self) -> List[Request]:
+        if not self.api_url:
+            return []
+        reqs = [
+            self._get("/rest/system/config"),
+            self._get("/rest/system/connections"),
+        ]
+        reqs += [self._get(f"/rest/db/status?folder={folder_id}")
+                 for folder_id in self._cached_folder_ids]
+        return reqs
+
+    def parse_results(self, results: List[Result]) -> CollectResult:
+        if not results:
+            return CollectResult.failed("No 'api_url' configured")
+
         config_result, connections_result = results[0], results[1]
         folder_results = results[2:]
 
-        if config_result.exit_code != 0:
+        if config_result.error is not None:
             return CollectResult.failed(
-                f"Failed to query Syncthing config: {config_result.stderr.strip()}")
+                f"Failed to query Syncthing config: {config_result.error}")
+        if config_result.status_code != 200:
+            return CollectResult.failed(
+                f"Syncthing config returned HTTP {config_result.status_code} "
+                f"(check the API key)")
         try:
-            cfg = json.loads(config_result.stdout)
+            cfg = json.loads(config_result.text)
         except json.JSONDecodeError as e:
             return CollectResult.failed(f"Config response was not JSON ({e})")
 
@@ -118,17 +111,19 @@ class Syncthing(Plugin):
 
         folder_states: Dict[str, Dict[str, Any]] = {}
         for folder_id, result in zip(watched_ids, folder_results):
-            if result.exit_code != 0:
-                return CollectResult.failed(f"Failed to query folder {folder_id!r}: {result.stderr.strip()}")
+            if result.error is not None or result.status_code != 200:
+                detail = result.error or f"HTTP {result.status_code}"
+                return CollectResult.failed(f"Failed to query folder {folder_id!r}: {detail}")
             try:
-                folder_states[folder_id] = json.loads(result.stdout)
+                folder_states[folder_id] = json.loads(result.text)
             except json.JSONDecodeError as e:
                 return CollectResult.failed(f"Folder {folder_id!r} status was not JSON ({e})")
 
-        if connections_result.exit_code != 0:
-            return CollectResult.failed(f"Failed to query connections: {connections_result.stderr.strip()}")
+        if connections_result.error is not None or connections_result.status_code != 200:
+            detail = connections_result.error or f"HTTP {connections_result.status_code}"
+            return CollectResult.failed(f"Failed to query connections: {detail}")
         try:
-            connections = json.loads(connections_result.stdout).get('connections', {})
+            connections = json.loads(connections_result.text).get('connections', {})
         except json.JSONDecodeError as e:
             return CollectResult.failed(f"Connections response was not JSON ({e})")
 

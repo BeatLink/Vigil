@@ -7,8 +7,14 @@ read/write logic in `database.py`. `database.py` re-exports these names, so
 
 from datetime import datetime
 from peewee import (
-    CharField, DateTimeField, DoubleField, ForeignKeyField, IntegerField,
-    Model, SqliteDatabase, TextField,
+    CharField,
+    DateTimeField,
+    DoubleField,
+    ForeignKeyField,
+    IntegerField,
+    Model,
+    SqliteDatabase,
+    TextField,
 )
 
 db = SqliteDatabase(None)
@@ -34,7 +40,7 @@ class Metric(BaseModel):
         # this composite (the leading `collector` also covers the
         # collector-only prefix). Without it those queries scan the ever-growing
         # Metric table. See database._migrate() for the same index on existing DBs.
-        indexes = ((('collector', 'metric_name', 'timestamp'), False),)
+        indexes = ((("collector", "metric_name", "timestamp"), False),)
 
 
 class Event(BaseModel):
@@ -60,7 +66,7 @@ class Job(BaseModel):
     plugin_id = CharField(index=True)
     target = CharField(index=True)
     kind = CharField(index=True)
-    state = CharField(index=True, default='running')
+    state = CharField(index=True, default="running")
     command = TextField()
     started = DateTimeField(default=datetime.now, index=True)
     finished = DateTimeField(null=True)
@@ -76,14 +82,14 @@ class Job(BaseModel):
 
 
 class JobOutput(BaseModel):
-    job = ForeignKeyField(Job, backref='output', on_delete='CASCADE', index=True)
+    job = ForeignKeyField(Job, backref="output", on_delete="CASCADE", index=True)
     seq = IntegerField()
     timestamp = DateTimeField(default=datetime.now)
-    stream = CharField(default='stdout')
+    stream = CharField(default="stdout")
     message = TextField()
 
     class Meta:
-        indexes = ((('job', 'seq'), True),)
+        indexes = ((("job", "seq"), True),)
 
 
 class PluginSnapshot(BaseModel):
@@ -102,5 +108,12 @@ class LogLine(BaseModel):
 
 
 ALL_MODELS = [
-    Metric, Event, Setting, StatusHistory, Job, JobOutput, PluginSnapshot, LogLine,
+    Metric,
+    Event,
+    Setting,
+    StatusHistory,
+    Job,
+    JobOutput,
+    PluginSnapshot,
+    LogLine,
 ]

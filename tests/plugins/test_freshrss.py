@@ -4,14 +4,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from vigil.plugins.freshrss import Freshrss, _parse_response, _build_fetch_script
-from vigil.core.connectors.types import CmdResult
+from vigil.plugins.freshrss import Freshrss, _parse_response, _fever_api_key
+from vigil.core.connectors.types import HttpRequest, HttpResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 
 BASE_CFG = {
     "name": "test-freshrss",
     "id":   "test-freshrss",
+    "api_url": "http://freshrss.test:80",
     "username": "beatlink",
     "api_password": "apipw",
     "feed_stale_warning": 48,
@@ -39,8 +40,9 @@ def plugin(make_plugin):
     return make_plugin(Freshrss, BASE_CFG)
 
 
-def _respond(plugin, run_cycle, feeds=None, refresh_hours_ago=1.0, auth=1):
-    run_cycle(plugin, lambda c: CmdResult(0, _response(feeds, refresh_hours_ago, auth), ""))
+def _respond(plugin, run_requests, feeds=None, refresh_hours_ago=1.0, auth=1):
+    run_requests(plugin, lambda r: HttpResult(
+        status_code=200, text=_response(feeds, refresh_hours_ago, auth)))
 
 
 def _latest_status(plugin_id: str = "test-freshrss") -> str | None:
@@ -59,15 +61,34 @@ def _latest_metric(metric: str, name: str = "test-freshrss") -> float | None:
     return row.value if row else None
 
 
-class TestBuildFetchScript:
-    def test_computes_md5_token(self):
-        script = _build_fetch_script("http://127.0.0.1", 10, "user", None, "pw")
-        assert "md5sum" in script
+class TestRequests:
+    def test_posts_md5_token_as_form_body(self, plugin):
+        import hashlib
+        reqs = plugin.requests()
+        assert len(reqs) == 1
+        req = reqs[0]
+        assert isinstance(req, HttpRequest)
+        assert req.method == "POST"
+        assert req.url == "http://freshrss.test:80/api/fever.php?api&feeds"
+        expected = hashlib.md5(b"beatlink:apipw").hexdigest()
+        assert req.body == f"api_key={expected}"
+        assert req.headers == {"Content-Type": "application/x-www-form-urlencoded"}
 
-    def test_password_command_runs_on_remote_host(self):
-        script = _build_fetch_script(
-            "http://127.0.0.1", 10, "user", "cat /run/secrets/freshrss_api_password", None)
-        assert "cat /run/secrets/freshrss_api_password" in script
+    def test_fever_api_key_matches_protocol(self):
+        import hashlib
+        assert _fever_api_key("u", "p") == hashlib.md5(b"u:p").hexdigest()
+
+    def test_no_url_yields_no_requests(self, make_plugin):
+        p = make_plugin(Freshrss, {"name": "f", "id": "f", "username": "u",
+                                   "ssh_config": {"host": "h"}})
+        assert p.requests() == []
+
+    def test_password_command_resolved_at_construction(self, make_plugin):
+        import hashlib
+        p = make_plugin(Freshrss, {**BASE_CFG, "api_password": None,
+                                   "api_password_command": "printf remotepw"})
+        expected = hashlib.md5(b"beatlink:remotepw").hexdigest()
+        assert p.requests()[0].body == f"api_key={expected}"
 
 
 class TestParseResponse:
@@ -85,34 +106,35 @@ class TestParseResponse:
 
 
 class TestFreshrssCollection:
-    async def test_fresh_feeds_set_online(self, plugin, run_cycle):
-        _respond(plugin, run_cycle, feeds=[_feed(hours_ago=1.0)], refresh_hours_ago=1.0)
+    async def test_fresh_feeds_set_online(self, plugin, run_requests):
+        _respond(plugin, run_requests, feeds=[_feed(hours_ago=1.0)], refresh_hours_ago=1.0)
         assert _latest_status() == "online"
 
-    async def test_stale_feed_sets_warning(self, plugin, run_cycle):
-        _respond(plugin, run_cycle, feeds=[_feed(hours_ago=60.0)])
+    async def test_stale_feed_sets_warning(self, plugin, run_requests):
+        _respond(plugin, run_requests, feeds=[_feed(hours_ago=60.0)])
         assert _latest_status() == "warning"
 
-    async def test_very_stale_feed_sets_failed(self, plugin, run_cycle):
-        _respond(plugin, run_cycle, feeds=[_feed(hours_ago=200.0)])
+    async def test_very_stale_feed_sets_failed(self, plugin, run_requests):
+        _respond(plugin, run_requests, feeds=[_feed(hours_ago=200.0)])
         assert _latest_status() == "failed"
 
-    async def test_stale_refresh_cycle_sets_warning(self, plugin, run_cycle):
-        _respond(plugin, run_cycle, refresh_hours_ago=10.0)
+    async def test_stale_refresh_cycle_sets_warning(self, plugin, run_requests):
+        _respond(plugin, run_requests, refresh_hours_ago=10.0)
         assert _latest_status() == "warning"
 
-    async def test_auth_failure_sets_failed(self, plugin, run_cycle):
-        _respond(plugin, run_cycle, auth=0)
+    async def test_auth_failure_sets_failed(self, plugin, run_requests):
+        _respond(plugin, run_requests, auth=0)
         assert _latest_status() == "failed"
 
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
+    async def test_http_error_sets_failed(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(
+            status_code=None, text="", error="connection refused"))
         assert _latest_status() == "failed"
 
-    async def test_missing_username_sets_failed(self, make_plugin, run_cycle):
+    async def test_missing_username_sets_failed(self, make_plugin, run_requests):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "username"}
         p = make_plugin(Freshrss, cfg)
-        run_cycle(p)
+        run_requests(p, lambda r: HttpResult(status_code=200, text="{}"))
         assert _latest_status("test-freshrss") == "failed"
 
 

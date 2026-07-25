@@ -1,28 +1,12 @@
 import json
-import shlex
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
-
-
-def _build_fetch_script(api_url: str, timeout: int, token_command: Optional[str],
-                        token: Optional[str]) -> str:
-    base = api_url.rstrip('/')
-    lines = ["set -e"]
-
-    if token_command:
-        lines.append(f"__token=$({token_command})")
-        auth = '-H "Authorization: $__token"'
-    else:
-        auth = f'-H {shlex.quote("Authorization: " + (token or ""))}'
-
-    lines.append(
-        f'curl -s -m {timeout} {auth} '
-        f'{shlex.quote(base + "/etapi/metrics?format=json")}'
-    )
-    return '\n'.join(lines)
+from vigil.core.connectors.types import (
+    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+)
+from vigil.plugins.base.plugin_helpers import resolve_secret
 
 
 def _parse_response(stdout: str) -> Dict[str, Any]:
@@ -65,9 +49,10 @@ _DEFAULT_LAYOUT = [
 class Trilium(Plugin):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        self.api_url = config.get('api_url', 'http://127.0.0.1:8080')
-        self.token = config.get('token')
-        self.token_command = config.get('token_command')
+        # Vigil fetches this URL directly; it must be Vigil-reachable, no default.
+        self.api_url = config.get('api_url')
+        # Resolve the ETAPI token once, on the Vigil host, so requests() stays pure.
+        self.token = resolve_secret(config.get('token'), config.get('token_command'))
         self.stale_warning = float(config.get('stale_warning', 72))
         self.api_timeout = int(config.get('api_timeout', 10))
 
@@ -81,17 +66,34 @@ class Trilium(Plugin):
             return 'warning' if v >= _stale_warning else 'online'
 
     def commands(self) -> List[Command]:
-        script = _build_fetch_script(
-            self.api_url, self.api_timeout, self.token_command, self.token)
-        return [Command(script)]
+        return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
-        if ret != 0:
-            return CollectResult.failed(f"Failed to query Trilium ETAPI: {stderr.strip()}")
+        return CollectResult()
+
+    def requests(self) -> List[Request]:
+        if not self.api_url:
+            return []
+        base = self.api_url.rstrip('/')
+        return [HttpRequest(
+            url=f"{base}/etapi/metrics?format=json", timeout=self.api_timeout,
+            headers={"Authorization": self.token or ""},
+        )]
+
+    def parse_results(self, results: List[Result]) -> CollectResult:
+        if not results:
+            return CollectResult.failed("No 'api_url' configured")
+
+        result: HttpResult = results[0]
+        if result.error is not None:
+            return CollectResult.failed(f"Failed to query Trilium ETAPI: {result.error}")
+        if result.status_code != 200:
+            return CollectResult.failed(
+                f"Trilium ETAPI returned HTTP {result.status_code} "
+                f"(check the ETAPI token)")
 
         try:
-            data = _parse_response(stdout)
+            data = _parse_response(result.text)
         except ValueError as e:
             return CollectResult.failed(str(e))
 

@@ -2,14 +2,11 @@ import json
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import (
+    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+)
 
 _QUALITY_ORDER = {'unusable': 0, 'poor': 1, 'fair': 2, 'excellent': 3}
-
-
-def _build_fetch_script(api_url: str, timeout: int) -> str:
-    base = api_url.rstrip('/')
-    return f'curl -s -m {timeout} "{base}/api/stats"'
 
 
 def _parse_response(stdout: str) -> Dict[str, Any]:
@@ -33,20 +30,37 @@ _DEFAULT_LAYOUT = [
 class Frigate(Plugin):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        self.api_url = config.get('api_url', 'http://127.0.0.1:5000')
+        # Vigil fetches this URL directly (from Vigil's perspective), so it must
+        # be an address Vigil can reach — no default; a missing url fails loudly.
+        self.api_url = config.get('api_url')
         self.cameras: Optional[List[str]] = config.get('cameras') or None
         self.api_timeout = int(config.get('api_timeout', 10))
 
     def commands(self) -> List[Command]:
-        return [Command(_build_fetch_script(self.api_url, self.api_timeout))]
+        return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
-        if ret != 0:
-            return CollectResult.failed(f"Failed to query Frigate API: {stderr.strip()}")
+        return CollectResult()
+
+    def requests(self) -> List[Request]:
+        if not self.api_url:
+            return []
+        base = self.api_url.rstrip('/')
+        return [HttpRequest(url=f"{base}/api/stats", timeout=self.api_timeout)]
+
+    def parse_results(self, results: List[Result]) -> CollectResult:
+        if not results:
+            return CollectResult.failed("No 'api_url' configured")
+
+        result: HttpResult = results[0]
+        if result.error is not None:
+            return CollectResult.failed(f"Failed to query Frigate API: {result.error}")
+        if result.status_code != 200:
+            return CollectResult.failed(
+                f"Frigate API returned HTTP {result.status_code}")
 
         try:
-            stats = _parse_response(stdout)
+            stats = _parse_response(result.text)
         except ValueError as e:
             return CollectResult.failed(str(e))
 

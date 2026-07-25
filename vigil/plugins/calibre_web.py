@@ -1,50 +1,10 @@
-import shlex
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
-
-_SEP = "@@VIGIL_SPLIT@@"
-
-
-def _build_probe_script(url: str, timeout: int, username: Optional[str],
-                        password_command: Optional[str], password: Optional[str]) -> str:
-    base = url.rstrip('/')
-    lines = ["set -e"]
-
-    auth = ''
-    if username:
-        if password_command:
-            lines.append(f"__pw=$({password_command})")
-            auth = f'-u {shlex.quote(username)}:"$__pw"'
-        elif password:
-            auth = f'-u {shlex.quote(username + ":" + password)}'
-        else:
-            auth = f'-u {shlex.quote(username)}'
-
-    lines.append(
-        f'curl -s -m {timeout} {auth} -w "\\n{_SEP}%{{http_code}} %{{time_total}}" '
-        f'{shlex.quote(base + "/opds")}'
-    )
-    return '\n'.join(lines)
-
-
-def _parse_response(stdout: str) -> tuple:
-    if _SEP not in stdout:
-        raise ValueError(f"unexpected response: {stdout[:200]!r}")
-    body, _, tail = stdout.rpartition(_SEP)
-    parts = tail.strip().split()
-    code = parts[0] if parts else ''
-    time_total = parts[1] if len(parts) > 1 else '0'
-    try:
-        status = int(code.strip())
-    except ValueError as e:
-        raise ValueError(f"non-numeric status code {code.strip()!r}") from e
-    try:
-        elapsed_ms = float(time_total) * 1000.0
-    except ValueError:
-        elapsed_ms = 0.0
-    return body.strip(), status, elapsed_ms
+from vigil.core.connectors.types import (
+    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+)
+from vigil.plugins.base.plugin_helpers import resolve_secret
 
 
 def _looks_like_opds(body: str) -> bool:
@@ -75,37 +35,42 @@ class CalibreWeb(Plugin):
 
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        self.url = config.get('url', 'http://127.0.0.1:8083')
+        # Vigil fetches this URL directly; it must be Vigil-reachable, no default.
+        self.url = config.get('url')
         self.username = config.get('username', 'vigil')
-        self.password = config.get('password')
-        self.password_command = config.get('password_command')
+        # Resolve the secret once, on the Vigil host, so requests() stays pure.
+        self.password = resolve_secret(config.get('password'),
+                                       config.get('password_command'))
         self.request_timeout = int(config.get('request_timeout', 10))
 
     def commands(self) -> List[Command]:
-        script = _build_probe_script(
-            self.url, self.request_timeout, self.username,
-            self.password_command, self.password,
-        )
-        return [Command(script)]
+        return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
+        return CollectResult()
 
-        if ret != 0:
+    def requests(self) -> List[Request]:
+        if not self.url:
+            return []
+        base = self.url.rstrip('/')
+        auth = (self.username, self.password or '') if self.username else None
+        return [HttpRequest(url=f"{base}/opds", timeout=self.request_timeout, auth=auth)]
+
+    def parse_results(self, results: List[Result]) -> CollectResult:
+        if not results:
+            return CollectResult.failed("No 'url' configured")
+
+        result: HttpResult = results[0]
+        if result.error is not None:
             return CollectResult(
                 metrics={'feed_ok': 0.0},
-                logs=[(f"Failed to fetch OPDS feed: {stderr.strip()}", "ERROR")],
+                logs=[(f"Failed to fetch OPDS feed: {result.error}", "ERROR")],
                 status='failed',
             )
 
-        try:
-            body, status, elapsed_ms = _parse_response(stdout)
-        except ValueError as e:
-            return CollectResult(
-                metrics={'feed_ok': 0.0},
-                logs=[(str(e), "ERROR")],
-                status='failed',
-            )
+        body = result.text
+        status = result.status_code or 0
+        elapsed_ms = result.elapsed_ms
 
         metrics = {'feed_status': float(status), 'feed_latency_ms': elapsed_ms}
 

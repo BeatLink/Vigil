@@ -131,6 +131,31 @@ class TestHttpConnector:
             result = await conn.fetch(HttpRequest('https://x/'))
         assert result.status_code is None
         assert 'no route' in (result.error or '')
+        assert result.elapsed_ms == 0.0
+
+    async def test_basic_auth_and_method_body_headers_forwarded(self):
+        from vigil.core.connectors.http_connector import HttpConnector
+
+        conn = HttpConnector()
+        resp = MagicMock(status_code=207, text='<multistatus/>')
+        with patch.object(conn._session, 'request', return_value=resp) as req:
+            await conn.fetch(HttpRequest(
+                'https://dav/', method='PROPFIND',
+                headers={'Depth': '0'}, body='<propfind/>',
+                auth=('user', 'pw'), timeout=4))
+        _, kwargs = req.call_args
+        assert kwargs['auth'] == ('user', 'pw')
+        assert kwargs['headers'] == {'Depth': '0'}
+        assert kwargs['data'] == '<propfind/>'
+
+    async def test_elapsed_ms_measured_on_success(self):
+        from vigil.core.connectors.http_connector import HttpConnector
+
+        conn = HttpConnector()
+        resp = MagicMock(status_code=200, text='ok')
+        with patch.object(conn._session, 'request', return_value=resp):
+            result = await conn.fetch(HttpRequest('https://x/'))
+        assert result.elapsed_ms >= 0.0
 
 
 class TestIcmpConnector:

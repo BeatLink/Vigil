@@ -8,7 +8,7 @@ Unlike most network and system monitors, Vigil is designed to be highly extensib
 
 ## Features
 
-- **Pull-Based & Agentless**: Uses a pull-based design over SSH and ICMP to collect events, logs, and metrics — no software needed on target nodes.
+- **Pull-Based & Agentless**: Uses a pull-based design over SSH, HTTP, DNS, and ICMP to collect events, logs, and metrics — no software needed on target nodes.
 - **Web Dashboard**: Real-time interactive visualizations built with NiceGUI and ECharts, featuring latency history, status distribution, and log views.
 - **Alerting & Notifications**: Sends alerts to various channels when events or metric thresholds are detected. *(WIP)*
 - **Target Control**: Trigger actions on monitored targets (e.g. restarting systemd services) directly from the UI.
@@ -21,48 +21,55 @@ Unlike most network and system monitors, Vigil is designed to be highly extensib
 
 ## Architecture
 
-Vigil is organized around a **CPAC** model — each plugin is responsible for its own implementation of these four functions:
+Vigil is built around **pure plugins and a Coordination Engine that owns all IO and persistence**. A plugin is constructed with only its `(name, config)`; it declares *what* to collect and *how to interpret* the results as pure functions, and the engine performs every side effect — SSH, HTTP/DNS/ICMP, database writes, thread offloading. This keeps plugins small, side-effect-free, and testable without mocks.
 
-- **Collection**: Gathering events, metrics, and logs from specific targets via SSH, ICMP, HTTP, etc.
-- **Presentation**: Rendering collected data on the web dashboard via each plugin's `render_ui()` method.
-- **Alerting**: Monitoring configured thresholds and sending notifications through channels (Email, Slack, Webhooks) when criteria are met.
-- **Control**: Sending remediation commands back to targets (e.g. restarting services) directly from the platform.
+A plugin's contract is:
+
+- **Declare** — `requests()` returns a list of connector requests (`Command` / `HttpRequest` / `DnsQuery` / `PingRequest`); an SSH-only plugin overrides the `commands()` shorthand instead. Both are pure.
+- **Interpret** — `parse_results()` (or `parse()` for the SSH shorthand) turns the connector results into a single `CollectResult` describing everything to persist (metrics, logs, status, an optional snapshot). Pure — no IO.
+- **Act** (optional) — `plan_action()` / `interpret_action()` describe control actions (restart a service, force a backup) the same declarative way.
+- **Present** (optional) — a declarative `UI_SPEC` dict renders the plugin's dashboard page; only genuinely bespoke plugins hand-write `render_ui()`.
+
+The engine executes the declared IO, persists the returned `CollectResult`, and drives one independent polling loop per monitor.
 
 ### Data Flow
 
-1. **Initialization**: `main.py` loads config definitions and recursively instantiates plugins. `GroupPlugin` instances act as containers for nested monitors.
-2. **Polling Loop**: The engine runs an async loop, calling `run_cycle()` on all non-group plugin instances.
-3. **Collection & Processing**: Plugins use collectors in `core/modules/collectors` to gather data from targets.
-4. **Persistence**: Results are stored in the SQLite database via the persistence layer in `core/data`.
-5. **Visualization**: The dashboard renders a recursive sidebar; each plugin renders its own detail view.
-6. **Alerting & Control**: On failure detection, plugins trigger alerts or execute remediation via controllers.
+1. **Initialization**: `vigil/__main__.py` builds one `VigilEngine` (`core/coordination/engine.py`), which loads `config.yaml` and instantiates plugins (`setup_modules`). Group plugins act as containers for nested monitors.
+2. **Wiring**: for each plugin the engine builds its engine-owned SSH handle and injects a read-only `PluginDataView` as `plugin.data`. The plugin holds no database or connection object.
+3. **Polling**: each monitor runs its own async loop at its own `interval`. Per cycle the engine runs the plugin's declared requests through the **Connector Engine**, then calls the plugin's pure `parse_results()`.
+4. **Persistence**: the engine writes the resulting `CollectResult` via `db.apply_result(...)` into SQLite (Peewee ORM). A background writer thread batches commits off the event loop.
+5. **Visualization**: the NiceGUI dashboard polls the database on one shared per-client timer and renders the sidebar tree plus each plugin's detail page. It reads only through `plugin.data` / the database — never through a plugin's IO.
+6. **Export**: metrics are exposed to Prometheus (pull, `/metrics`) and optionally pushed to InfluxDB.
 
 ### Project Structure
 
 ```
 vigil/
+├── __main__.py              # Entry point: build engine, load plugins, start GUI
 ├── core/
-│   ├── main.py          # Main engine orchestrator and plugin loader
-│   ├── data/            # SQLite persistence layer (Peewee ORM) and config parsing
-│   ├── common/          # Base classes (BasePlugin), shared utilities (SSH, etc.)
-│   ├── modules/
-│   │   ├── collectors/  # Abstractions for data gathering (SSH, HTTP, etc.)
-│   │   ├── controllers/ # Logic for sending control/remediation commands
-│   │   └── alerting/    # Notification modules (Email, Slack, Webhooks)
-│   └── ui/              # NiceGUI-based dashboard logic
-└── plugins/             # Domain-specific monitoring implementations (Uptime, Systemd, etc.)
+│   ├── coordination/        # VigilEngine (Coordination Engine) + PluginDataView
+│   ├── connectors/          # All IO: SSH + HTTP/DNS/ICMP sub-connectors, request types
+│   ├── database/            # DatabaseManager (SQLite/Peewee), models, read-result types
+│   ├── settings/            # config.yaml loader + typed schema
+│   ├── exporters/           # Prometheus pull + InfluxDB push
+│   └── ui/                  # NiceGUI dashboard, declarative UI_SPEC renderer
+└── plugins/
+    ├── base/                # Plugin ABC + shared config/helper mixins
+    └── *.py                 # One module per monitor type (uptime, systemd_service, …)
 ```
+
+See [DEVELOP.md](DEVELOP.md) for the architectural rationale — the pure-plugin contract, the collection lifecycle, the SQLite writer/reader model, and the declarative UI spec.
 
 ### Technical Stack
 
 | Concern        | Technology                          |
 |----------------|--------------------------------------|
 | Language       | Python 3.9+                          |
-| Connectivity   | AsyncSSH (SSH), Requests/Httpx (HTTP)|
+| Connectivity   | AsyncSSH (SSH), `requests` (HTTP), dnspython (DNS) |
 | Configuration  | YAML                                 |
 | Concurrency    | `asyncio`                            |
 | Storage        | SQLite via Peewee ORM                |
-| Frontend       | NiceGUI                              |
+| Frontend       | NiceGUI + ECharts                    |
 
 ---
 
@@ -1157,7 +1164,7 @@ exporters:
 
 1. **Simplicity First**: Configuration should be intuitive.
 2. **No Remote Agent**: All logic stays on the Vigil server; remote hosts only need SSH.
-3. **Domain Encapsulation**: Each plugin handles its own collection, alerting, and control logic.
+3. **Pure Plugins**: Each plugin owns its domain logic (what to collect, how to interpret it, what actions it offers) as pure functions; the engine owns all IO and persistence.
 4. **Hierarchical Organization**: Supports nested groups for organizing monitors by location, service, or environment.
 5. **Fail-Safe Control**: Control actions must be logged and confirmable.
 6. **Standard-Aware**: Aims for OpenTelemetry compatibility in data naming and export capability.
