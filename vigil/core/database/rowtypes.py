@@ -105,7 +105,7 @@ class EventModelDict(TypedDict):
 # (exit_code, output) command-result shapes are already-adequate plain
 # tuples, not dicts — no TypedDict needed there. Kept here only as a
 # pointer for anyone looking for "the rest of the DB-adjacent row types":
-# CmdResult (orchestration/types.py) is the typed equivalent for command
+# CmdResult (connectors/types.py) is the typed equivalent for command
 # results; nothing analogous wraps these SSH-layer tuples since they never
 # cross a module boundary un-parsed.
 CmdResultTuple = Tuple[int, str, str]

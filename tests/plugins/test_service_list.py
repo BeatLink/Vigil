@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock
 from vigil.plugins.service_list import ServiceList
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric, flush_writes
 
 CFG = {

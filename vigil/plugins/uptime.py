@@ -1,11 +1,11 @@
-import asyncio
-import platform
 import re
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import (
+    CmdResult, Command, CollectResult, PingRequest, PingResult, Request, Result,
+)
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'status_card', 'latency_card'],
@@ -15,53 +15,30 @@ _DEFAULT_LAYOUT = [
 
 
 class Uptime(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
-
     def commands(self) -> List[Command]:
         return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         return CollectResult()
 
-    def local_call(self) -> Optional[Callable[[], Any]]:
+    def requests(self) -> List[Request]:
+        return [PingRequest(self.target)]
+
+    def parse_results(self, results: List[Result]) -> CollectResult:
         host = self.target
+        result: PingResult = results[0]
 
-        async def _ping():
-            is_windows = platform.system().lower() == 'windows'
-            cmd = ['ping', '-n' if is_windows else '-c', '1', '-W', '2', host]
-            try:
-                process = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE
-                )
-                stdout, stderr = await process.communicate()
-                return {
-                    'exception': None,
-                    'returncode': process.returncode,
-                    'stdout': stdout.decode(),
-                    'stderr': stderr.decode(),
-                }
-            except Exception as e:
-                return {'exception': str(e), 'returncode': None, 'stdout': '', 'stderr': ''}
-
-        return _ping
-
-    def parse_local(self, result: Any) -> CollectResult:
-        host = self.target
-
-        if result['exception'] is not None:
-            logging.error(f"Uptime plugin error for {host}: {result['exception']}")
+        if result.exception is not None:
+            logging.error(f"Uptime plugin error for {host}: {result.exception}")
             return CollectResult(
                 metrics={'up': 0.0},
-                logs=[(f"Ping execution failed: {result['exception']}", "ERROR")],
+                logs=[(f"Ping execution failed: {result.exception}", "ERROR")],
                 status='failed',
             )
 
-        if result['returncode'] == 0:
+        if result.returncode == 0:
             metrics = {'up': 1.0}
-            latency_match = re.search(r'time=([\d.]+)\s*ms', result['stdout'])
+            latency_match = re.search(r'time=([\d.]+)\s*ms', result.stdout)
             if latency_match:
                 metrics['latency_ms'] = float(latency_match.group(1))
             return CollectResult(
@@ -70,7 +47,7 @@ class Uptime(Plugin):
                 status='online',
             )
 
-        err_msg = result['stderr'].strip() or "Request timed out"
+        err_msg = result.stderr.strip() or "Request timed out"
         return CollectResult(
             metrics={'up': 0.0},
             logs=[(f"Host {host} is unreachable: {err_msg}", "ERROR")],

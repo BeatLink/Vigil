@@ -3,7 +3,7 @@ import json
 import pytest
 
 from vigil.plugins.syncthing import Syncthing
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

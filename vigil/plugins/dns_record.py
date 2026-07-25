@@ -1,10 +1,9 @@
-from typing import Any, Callable, Dict, List, Optional
-
-import dns.exception
-import dns.resolver
+from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import (
+    CmdResult, Command, CollectResult, DnsQuery, DnsResult, Request, Result,
+)
 
 _DEFAULT_LAYOUT = [
     ['status_card', 'type_card', 'ttl_card'],
@@ -46,38 +45,24 @@ class DnsRecord(Plugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         return CollectResult()
 
-    def _make_resolver(self) -> "dns.resolver.Resolver":
-        resolver = dns.resolver.Resolver(configure=self.resolver_addr is None)
-        if self.resolver_addr:
-            resolver.nameservers = [self.resolver_addr]
-        resolver.port = self.port
-        resolver.timeout = self.dns_timeout
-        resolver.lifetime = self.dns_timeout
-        return resolver
-
-    def _query(self):
-        try:
-            resolver = self._make_resolver()
-            return ('ok', resolver.resolve(self.domain, self.record_type))
-        except dns.resolver.NXDOMAIN:
-            return ('nxdomain', None)
-        except dns.resolver.NoAnswer:
-            return ('no_answer', None)
-        except dns.exception.Timeout:
-            return ('timeout', None)
-        except dns.exception.DNSException as e:
-            return ('dns_error', str(e))
-
-    def local_call(self) -> Optional[Callable[[], Any]]:
+    def requests(self) -> List[Request]:
         if not self.domain:
-            return lambda: ('no_domain', None)
-        return self._query
+            return []
+        return [DnsQuery(
+            domain=self.domain,
+            record_type=self.record_type,
+            resolver=self.resolver_addr,
+            port=self.port,
+            timeout=self.dns_timeout,
+        )]
 
-    def parse_local(self, result: Any) -> CollectResult:
-        kind, payload = result
-
-        if kind == 'no_domain':
+    def parse_results(self, results: List[Result]) -> CollectResult:
+        if not results:
             return CollectResult.failed("No 'domain' configured")
+
+        result: DnsResult = results[0]
+        kind = result.kind
+
         if kind == 'nxdomain':
             return CollectResult(
                 metrics={'resolved': 0.0},
@@ -102,11 +87,11 @@ class DnsRecord(Plugin):
         if kind == 'dns_error':
             return CollectResult(
                 metrics={'resolved': 0.0},
-                logs=[(f"DNS query failed: {payload}", "ERROR")],
+                logs=[(f"DNS query failed: {result.error}", "ERROR")],
                 status='failed',
             )
 
-        answers = payload
+        answers = result.answer
         values = [_answer_to_str(self.record_type, r) for r in answers]
         ttl = answers.rrset.ttl if answers.rrset is not None else None
 

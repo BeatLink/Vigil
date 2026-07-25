@@ -1,7 +1,7 @@
 """Shared interface contracts used across module boundaries.
 
 Types that belong to a single subsystem live with that subsystem (e.g.
-CollectResult in orchestration/types.py). This module holds only the
+CollectResult in connectors/types.py). This module holds only the
 contracts that cross subsystem boundaries and would otherwise be
 duck-typed identically in multiple places — see DEVELOP.md's "Interface
 contracts" section for the rationale behind each one.

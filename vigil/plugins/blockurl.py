@@ -3,7 +3,7 @@ import shlex
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 
 def _build_fetch_script(api_url: str, timeout: int, api_key_command: Optional[str],

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.processes import Processes, _parse_ps_output, _level_for
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

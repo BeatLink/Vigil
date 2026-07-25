@@ -4,7 +4,7 @@ import time
 from typing import Any, Dict, List, Optional, Union
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.plugins.base.plugin_helpers import parse_duration, format_duration, format_age
 
 _DEFAULT_UNIT_FILE_WRITE_PATHS = (

@@ -3,15 +3,16 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
     from vigil.core.coordination.data_view import PluginDataView
+    from vigil.core.connectors.types import Request, Result
 
 from vigil.plugins.base.plugin_helpers import PluginConfigMixin, parse_duration
 from vigil.core.connectors.ssh.ssh import COLLECT_TIMEOUT as SSH_TIMEOUT
-from vigil.core.connectors.orchestration.local_io_orchestrator import LocalIOOrchestrator
+from vigil.core.connectors.local_io import LocalIOOrchestrator
 from vigil.core.connectors.ssh.network_orchestrator import NetworkOrchestrator, SSHConnectionPool
 from vigil.core.contracts import ActionButtonSpec, EngineLike
 from vigil.core.settings.config_schema import PluginConfig
 from vigil.core.database.storage_orchestrator import StorageOrchestrator
-from vigil.core.connectors.orchestration.types import (
+from vigil.core.connectors.types import (
     ActionOutcome, ActionPlanResult, CmdResult, Command, CollectResult,
 )
 from vigil.core.ui.spec_types import UISpec
@@ -51,16 +52,34 @@ class Plugin(PluginConfigMixin, ABC):
         from vigil.core.ui.orchestration import UIOrchestrator
         self.ui = UIOrchestrator(self)
 
+    def requests(self) -> List["Request"]:
+        """Declare this cycle's IO as a heterogeneous list of connector
+        requests (Command / HttpRequest / DnsQuery / PingRequest). Pure — no
+        IO, no side effects. The Connector Engine executes them and hands the
+        positionally-matched results to parse_results().
+
+        Default: delegate to the SSH-only commands() so existing plugins that
+        only override commands()/parse() need no change."""
+        return self.commands()
+
+    def parse_results(self, results: List["Result"]) -> CollectResult:
+        """Pure: connector results in, a CollectResult describing what to
+        persist out. No IO, no async, no self.data/self.storage calls.
+
+        Default: delegate to parse() (whose results are the Command-only
+        case), so SSH-only plugins need no change."""
+        return self.parse(results)
+
     @abstractmethod
     def commands(self) -> List[Command]:
-        """Declare what to run this cycle. Pure — no IO, no side effects.
-        Plugins that don't talk over SSH at all (local DNS/HTTP queries,
-        etc.) return [] here and implement local_call()/parse_local()
-        instead — see those methods below."""
+        """Declare what SSH commands to run this cycle. Pure — no IO, no side
+        effects. Plugins that talk over HTTP/DNS/ICMP instead override
+        requests()/parse_results() with the declarative request types and
+        return [] here."""
 
     @abstractmethod
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        """Pure: command results in, a CollectResult describing what to
+        """Pure: SSH command results in, a CollectResult describing what to
         persist out. No IO, no async, no self.storage/self.network calls."""
 
     def local_call(self) -> Optional[Callable[[], Any]]:

@@ -3,7 +3,7 @@ import time as _time
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 _PROPFIND_BODY = (
     '<?xml version="1.0"?>'

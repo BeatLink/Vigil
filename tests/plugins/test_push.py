@@ -4,7 +4,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.push import Push
-from vigil.core.connectors.orchestration.types import CollectResult
+from vigil.core.connectors.types import CollectResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

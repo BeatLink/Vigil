@@ -3,7 +3,7 @@ import shlex
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
 
 _SEP = "@@VIGIL_SPLIT@@"
 

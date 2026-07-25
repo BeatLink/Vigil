@@ -2,7 +2,7 @@ import time
 import pytest
 from unittest.mock import AsyncMock
 from vigil.plugins.systemd_service import SystemdService
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric, LogLine, flush_writes
 
 pytestmark = pytest.mark.asyncio

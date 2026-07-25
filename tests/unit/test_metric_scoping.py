@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 from typing import List
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 from vigil.core.database.database import db, Event, Metric
 
 

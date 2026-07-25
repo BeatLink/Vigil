@@ -4,7 +4,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.ddns_updater import DdnsUpdater
-from vigil.core.connectors.orchestration.types import LocalActionPlan
+from vigil.core.connectors.types import LocalActionPlan
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

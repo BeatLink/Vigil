@@ -8,7 +8,7 @@ from vigil.plugins.mosquitto import (
     _auth_flags,
     _build_probe_script,
 )
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 from vigil.plugins.borg import Borg
-from vigil.core.connectors.orchestration.types import CmdResult, JobPlan
+from vigil.core.connectors.types import CmdResult, JobPlan
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

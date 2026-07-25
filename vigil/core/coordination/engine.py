@@ -24,10 +24,11 @@ from peewee import OperationalError
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.ssh.network_orchestrator import SSHConnectionPool
-from vigil.core.connectors.orchestration.types import DispatchResult, JobPlan
+from vigil.core.connectors.types import DispatchResult, JobPlan
 from vigil.core.settings.config_file import ConfigFileManager as VigilConfig
 from vigil.core.database.database import DatabaseManager as VigilDatabase
 from vigil.core.exporters import ExporterEngine
+from vigil.core.connectors import ConnectorEngine
 
 STARTUP_JITTER_SECONDS = 3.0
 
@@ -59,6 +60,7 @@ class VigilEngine:
             sys.exit(1)
 
         self.exporters = ExporterEngine(self.db, self.config_loader.exporters)
+        self.connectors = ConnectorEngine()
 
     def _apply_ssh_defaults(self, plugin_cfg: Dict) -> Dict:
         defaults = self.config_loader.ssh_defaults
@@ -146,17 +148,22 @@ class VigilEngine:
             yield from VigilEngine._flatten(p.children)
 
     async def _run_cycle(self, plugin: Plugin) -> bool:
-        """The orchestration loop: async/IO lives here, plugin.commands()/
-        parse() (or local_call()/parse_local() for non-SSH plugins) are
-        pure and never touched directly by anything but this."""
+        """The collection loop: all async/IO lives here; the plugin's
+        requests()/parse_results() (and the legacy local_call()/parse_local()
+        for plugins not yet migrated) are pure and touched only from here.
+
+        A plugin declares a heterogeneous request list (SSH Commands, HTTP,
+        DNS, ICMP); the Connector Engine routes and executes them, and the
+        plugin's pure parse_results() turns the results into a CollectResult
+        the Database Engine persists."""
         local_fn = plugin.local_call()
         if local_fn is not None:
             local_result = await plugin.local_io.run(local_fn)
             result = plugin.parse_local(local_result)
         else:
-            commands = plugin.commands()
-            results = await plugin.network.run(commands) if commands else []
-            result = plugin.parse(results)
+            requests = plugin.requests()
+            results = await self.connectors.run(plugin.network, requests) if requests else []
+            result = plugin.parse_results(results)
         plugin.storage.apply(result)
         return True
 
@@ -178,7 +185,7 @@ class VigilEngine:
         .metadata dict when one was applied (e.g. carrying 'content' for
         read-style dialog actions), else None. Plain bool outcomes (the
         common write/dispatch case) return (bool, None)."""
-        from vigil.core.connectors.orchestration.types import CollectResult, LocalActionPlan
+        from vigil.core.connectors.types import CollectResult, LocalActionPlan
 
         plan = plugin.plan_action(action_id, **kwargs)
         if plan is None:

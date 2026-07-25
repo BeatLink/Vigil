@@ -76,7 +76,7 @@ def run_cycle():
     VigilEngine._run_cycle without needing a real NetworkOrchestrator/event
     loop scheduler. commands()/parse() are pure/synchronous, so no awaiting
     is needed here. `fake_run` maps Command -> CmdResult; defaults to (0, "", "")."""
-    from vigil.core.connectors.orchestration.types import CmdResult
+    from vigil.core.connectors.types import CmdResult
 
     def factory(plugin, fake_run=None):
         commands = plugin.commands()
@@ -85,6 +85,29 @@ def run_cycle():
         else:
             results = [fake_run(c) for c in commands]
         result = plugin.parse(results)
+        plugin.storage.apply(result)
+        return result
+
+    return factory
+
+
+@pytest.fixture
+def run_requests():
+    """Drives a Plugin's declarative requests()/parse_results() through a fake
+    connector and applies the result, mirroring VigilEngine._run_cycle for
+    plugins that talk HTTP/DNS/ICMP. requests()/parse_results() are pure, so no
+    event loop or real ConnectorEngine is needed. `fake_run` maps each Request
+    to a Result (HttpResult/DnsResult/PingResult); with no requests it drives
+    parse_results([]) (the 'nothing to query' case, e.g. dns_record with no
+    domain)."""
+
+    def factory(plugin, fake_run=None):
+        requests = plugin.requests()
+        if fake_run is None:
+            results = []
+        else:
+            results = [fake_run(r) for r in requests]
+        result = plugin.parse_results(results)
         plugin.storage.apply(result)
         return result
 

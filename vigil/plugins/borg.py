@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Union
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult, JobPlan
+from vigil.core.connectors.types import CmdResult, Command, CollectResult, JobPlan
 from vigil.plugins.base.plugin_helpers import parse_duration, format_duration, format_age
 
 

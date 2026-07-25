@@ -30,6 +30,73 @@ class JobPlan:
     timeout: Optional[float] = None
 
 
+# --- Declarative connector requests/results ---
+# A plugin declares what IO it needs this cycle as a heterogeneous list of
+# these frozen request objects (from requests()); the Connector Engine routes
+# each to the right sub-connector (SSH / HTTP / DNS / ICMP) and returns a
+# positionally-matched list of result objects the plugin's pure parse_results()
+# consumes. Command/CmdResult (above) are the SSH members of the same union.
+
+@dataclass(frozen=True)
+class HttpRequest:
+    url: str
+    method: str = "GET"
+    headers: Optional[Dict[str, str]] = None
+    body: Optional[str] = None
+    timeout: Optional[float] = None
+    ok_prefixes: Tuple[str, ...] = ()
+    """Optional case-insensitive body-prefix success check (e.g. DDNS
+    providers answer 'good'/'nochg'); empty means status_code alone decides."""
+
+
+@dataclass(frozen=True)
+class HttpResult:
+    status_code: Optional[int]
+    text: str
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class DnsQuery:
+    domain: str
+    record_type: str = "A"
+    resolver: Optional[str] = None
+    port: int = 53
+    timeout: float = 5.0
+
+
+@dataclass(frozen=True)
+class DnsResult:
+    kind: str
+    """One of: 'ok', 'nxdomain', 'no_answer', 'timeout', 'dns_error'."""
+    answer: Any = None
+    """The raw dnspython Answer on 'ok' (so plugins keep full rdata access,
+    e.g. MX preference / TXT strings / rrset TTL); None otherwise."""
+    error: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class PingRequest:
+    host: str
+    count: int = 1
+    timeout: float = 2.0
+
+
+@dataclass(frozen=True)
+class PingResult:
+    exception: Optional[str]
+    returncode: Optional[int]
+    stdout: str = ""
+    stderr: str = ""
+
+
+# The heterogeneous request/result unions the Connector Engine speaks. Command
+# and CmdResult are the SSH members, so an all-SSH plugin's existing
+# commands()/parse() are just the Command-only case of this contract.
+Request = Union[Command, HttpRequest, DnsQuery, PingRequest]
+Result = Union[CmdResult, HttpResult, DnsResult, PingResult]
+
+
 @dataclass(frozen=True)
 class LocalActionPlan:
     """Like ActionPlan, but for actions whose work is local blocking IO
