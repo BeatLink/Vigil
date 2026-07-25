@@ -160,15 +160,17 @@ class TestIcmpConnector:
 
 class TestConnectorEngineRouting:
     async def test_routes_command_to_ssh_network(self):
-        from vigil.core.connectors import ConnectorEngine
+        from vigil.core.connectors import ConnectorEngine, SSHContext
         from unittest.mock import AsyncMock
 
         engine = ConnectorEngine()
-        net = MagicMock()
-        net.run = AsyncMock(return_value=[CmdResult(0, 'out', '')])
-        results = await engine.run(net, [Command('echo hi')])
+        conn = MagicMock()
+        conn.host = 'test.host'
+        conn.execute = AsyncMock(return_value=(0, 'out', ''))
+        ctx = SSHContext(conn=conn, collect_timeout=30.0)
+        results = await engine.run(ctx, [Command('echo hi')])
         assert results[0].stdout == 'out'
-        net.run.assert_awaited_once()
+        conn.execute.assert_awaited_once()
 
     async def test_routes_by_type(self):
         from vigil.core.connectors import ConnectorEngine

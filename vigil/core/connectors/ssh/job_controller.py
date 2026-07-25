@@ -3,7 +3,7 @@
 A long-running job (a borg backup) is no longer a live SSH streaming channel
 held open for hours. It is launched *detached on the target* with one ordinary
 SSH command, then advanced by ordinary polling commands (the same
-`fetch_output` path collection uses) on the owning plugin's normal monitor
+same command path collection uses) on the owning plugin's normal monitor
 cycle. Nothing lives in a Vigil-side coroutine, so a job survives a Vigil
 restart and is re-adopted by polling.
 

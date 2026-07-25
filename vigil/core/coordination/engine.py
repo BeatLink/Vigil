@@ -23,14 +23,13 @@ from typing import List, Optional, Dict
 from peewee import OperationalError
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.ssh.network_orchestrator import NetworkOrchestrator, SSHConnectionPool
 from vigil.core.connectors.types import DispatchResult
 from vigil.core.database.storage_orchestrator import StorageOrchestrator
 from vigil.core.coordination.data_view import PluginDataView
 from vigil.core.settings.config_file import ConfigFileManager as VigilConfig
 from vigil.core.database.database import DatabaseManager as VigilDatabase
 from vigil.core.exporters import ExporterEngine
-from vigil.core.connectors import ConnectorEngine
+from vigil.core.connectors import ConnectorEngine, SSHContext
 
 STARTUP_JITTER_SECONDS = 3.0
 
@@ -44,13 +43,13 @@ class VigilEngine:
         self.plugins: List[Plugin] = []
         self.log_retention_days = self.config_loader.log_retention_days
         self._last_prune = 0.0
-        self.ssh_pool = SSHConnectionPool()
         self._collecting: Dict[str, bool] = {}
         self._last_collected: Dict[str, float] = {}
         # Engine-owned per-plugin IO/persistence, keyed by plugin id. Pure
         # plugins never hold these; the engine wires them in setup_modules and
-        # uses them on the collection/action paths.
-        self._net: Dict[str, "NetworkOrchestrator"] = {}
+        # uses them on the collection/action paths. _net holds each plugin's
+        # SSHContext handle (the pooled connection lives in self.connectors).
+        self._net: Dict[str, "SSHContext"] = {}
         self._store: Dict[str, "StorageOrchestrator"] = {}
         if db_path_override:
             self.db_path = db_path_override
@@ -72,10 +71,9 @@ class VigilEngine:
     def _wire_plugin(self, plugin: Plugin, plugin_cfg: Dict) -> None:
         """Build the engine-owned IO/persistence for a plugin and hand it the
         read-only data view. Keeps pure plugins free of db/network/storage."""
-        net = NetworkOrchestrator(
-            plugin_cfg, self.db, plugin.id, plugin.target, plugin.timeout, self.ssh_pool)
-        # NetworkOrchestrator resolves the effective SSH target host; keep the
-        # plugin's target in sync so its labels/reads match what's collected.
+        net = self.connectors.ssh_context(plugin_cfg, collect_timeout=plugin.timeout)
+        # The SSH pool resolves the effective target host; keep the plugin's
+        # target in sync so its labels/reads match what's collected.
         plugin.target = net.target
         store = StorageOrchestrator(self.db, plugin.target, plugin.name, plugin.id)
         self._net[plugin.id] = net
@@ -250,7 +248,7 @@ class VigilEngine:
             result = (await self.connectors.run(net, [plan]))[0]
             return _finish(plugin.interpret_action(action_id, result, **kwargs))
         # Default: an ActionPlan — a short SSH command.
-        result = await net.execute(plan)
+        result = await self.connectors.execute(net, plan)
         return _finish(plugin.interpret_action(action_id, result, **kwargs))
 
     # --- Job-control surface, now entirely DB-backed. A job is a detached
@@ -281,7 +279,7 @@ class VigilEngine:
             return False
         net = self._net_for(plugin)
         if net is not None:
-            await net.execute_raw(cancel_command(job['pid']))
+            await self.connectors.execute_raw(net, cancel_command(job['pid']))
         self.db.finish_job(job['id'], 'cancelled', exit_code=130, error='Cancelled by user')
         return True
 
