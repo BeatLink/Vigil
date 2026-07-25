@@ -41,22 +41,24 @@ class PluginDataView:
     def latest_statuses(self, max_age: float = 2.0) -> Dict[str, str]:
         return self._db.latest_statuses(max_age=max_age)
 
-    def latest_status_cached(self, collector_id: Optional[str] = None, max_age: float = 1.0):
-        return self._db.latest_status_cached(collector_id or self._id, max_age=max_age)
+    # These mirror the Database Engine's cached-read signatures exactly so the
+    # UI Engine's table/chart readers are drop-in replacements for the former
+    # ``plugin.db.*`` calls.
+    def latest_status_cached(self, collector_id: str, max_age: float = 1.0):
+        return self._db.latest_status_cached(collector_id, max_age=max_age)
 
-    def collector_metrics_cached(self, collector: Optional[str] = None, limit: int = 50):
-        return self._db.collector_metrics_cached(collector or self._id, limit=limit)
+    def collector_metrics_cached(self, collector: str, limit: int = 15, max_age: float = 1.0):
+        return self._db.collector_metrics_cached(collector, limit=limit, max_age=max_age)
 
-    def metric_history_cached(self, metric_name: str, collector: Optional[str] = None,
-                              limit: int = 30, max_age: float = 1.0):
-        return self._db.metric_history_cached(collector or self._id, metric_name,
-                                              limit=limit, max_age=max_age)
+    def metric_history_cached(self, collector: str, metric_name: str, limit: int = 30, max_age: float = 1.0):
+        return self._db.metric_history_cached(collector, metric_name, limit=limit, max_age=max_age)
 
-    def log_lines_cached(self, target: str, filter_prefix: Optional[str] = None, limit: int = 100):
-        return self._db.log_lines_cached(target, filter_prefix, limit=limit)
+    def log_lines_cached(self, target: str, filter_prefix: str = '', limit: int = 15, max_age: float = 1.0):
+        return self._db.log_lines_cached(target, filter_prefix, limit=limit, max_age=max_age)
 
-    def plugin_events_cached(self, plugin_id: Optional[str], prefix: str, target: str, limit: int = 50):
-        return self._db.plugin_events_cached(plugin_id, prefix, target, limit=limit)
+    def plugin_events_cached(self, plugin_id: str = '', prefix: str = '', target: str = '',
+                             limit: int = 100, max_age: float = 1.0):
+        return self._db.plugin_events_cached(plugin_id, prefix, target, limit=limit, max_age=max_age)
 
     def job(self, job_id: int):
         return self._db.get_job(job_id)

@@ -103,7 +103,7 @@ class DiskIo(Plugin):
 
     @property
     def _active_device_text(self) -> str:
-        return (self.storage.get_setting(f"diskio:{self.id}:active_device")
+        return (self.data.get_setting(f"diskio:{self.id}:active_device")
                 or self.config.get('device') or 'Detecting...')
 
     @property

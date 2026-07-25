@@ -180,10 +180,10 @@ class ServiceList(Plugin):
 
     @property
     def _service_count_text(self) -> str:
-        count_metric = self.storage.latest_metric('services_total')
+        count_metric = self.data.latest_metric('services_total')
         if count_metric is not None:
             return str(int(count_metric.value))
-        return str(len(self.storage.latest_snapshot(default=[])))
+        return str(len(self.data.latest_snapshot(default=[])))
 
     @property
     def UI_SPEC(self):

@@ -455,7 +455,7 @@ class Borg(Plugin):
         return out
 
     def cached_archives(self) -> (List[Dict[str, Any]], Dict[str, Any]):
-        metric = self.storage.latest_metric('archive_list')
+        metric = self.data.latest_metric('archive_list')
         if metric is None or not metric.metadata:
             return [], {}
         try:
@@ -544,7 +544,7 @@ class Borg(Plugin):
                 self.storage.apply(CollectResult(logs=[(f"borg: {message}", level)]))
 
     def _epoch(self) -> Optional[float]:
-        m = self.storage.latest_metric('last_backup_epoch')
+        m = self.data.latest_metric('last_backup_epoch')
         return m.value if m is not None else None
 
     @property

@@ -127,7 +127,7 @@ def metric_table(page, collector: str, title: str = 'Monitor Metrics', limit: in
         ], rows=[]).classes('w-full border-none')
 
         def _read():
-            return page.plugin.db.collector_metrics_cached(collector, limit=limit)
+            return page.plugin.data.collector_metrics_cached(collector, limit=limit)
 
         async def update():
             refresh_rows(table, await offload(_read)())
@@ -161,7 +161,7 @@ def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent L
             table.props('virtual-scroll')
 
         def _read():
-            return page.plugin.db.log_lines_cached(target, filter_prefix, limit=limit)
+            return page.plugin.data.log_lines_cached(target, filter_prefix, limit=limit)
 
         async def update_logs():
             refresh_rows(table, await offload(_read)())
@@ -194,7 +194,7 @@ def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
             table.props('virtual-scroll')
 
         def _read():
-            return page.plugin.db.plugin_events_cached(plugin_id, prefix, target, limit=limit)
+            return page.plugin.data.plugin_events_cached(plugin_id, prefix, target, limit=limit)
 
         async def update():
             refresh_rows(table, await offload(_read)())
@@ -221,7 +221,7 @@ def history_chart(page, title: str, collector: str, metric_name: str, limit: int
         }).classes('w-full h-72')
 
         def _read():
-            history = page.plugin.db.metric_history_cached(collector, metric_name, limit=limit)
+            history = page.plugin.data.metric_history_cached(collector, metric_name, limit=limit)
             return (
                 [m.timestamp.strftime('%H:%M:%S') for m in history],
                 [m.value for m in history],
@@ -253,7 +253,7 @@ def _resolve_repeat_items(plugin, repeat_spec: dict) -> list:
     if source == 'setting':
         import json
         key = repeat_spec.get('setting_key', '').format(plugin_id=plugin.id)
-        raw = plugin.storage.get_setting(key)
+        raw = plugin.data.get_setting(key)
         if not raw:
             return []
         try:
@@ -281,7 +281,7 @@ def _resolve_repeat_items(plugin, repeat_spec: dict) -> list:
     if source == 'metrics_prefix':
         return _resolve_metrics_prefix_items(plugin, repeat_spec)
 
-    return plugin.storage.latest_snapshot(default=[])
+    return plugin.data.latest_snapshot(default=[])
 
 
 def _scan_metric_family(plugin, prefix: str, suffix: str, exclude: set, limit: int) -> dict:
@@ -638,13 +638,13 @@ def render_job_panel(plugin, spec: dict):
         ).classes('w-full border-none')
 
         def update():
-            running = plugin.network.is_running()
+            running = plugin.engine.job_is_running(plugin)
             enabled = enabled_predicate(plugin)
             run_btn.set_enabled(enabled and not running)
             cancel_btn.set_visibility(running)
 
             if running:
-                job = plugin.db.get_job(plugin.network.current_job_id())
+                job = plugin.data.job(plugin.engine.job_current_id(plugin))
                 progress_label.text = (job or {}).get('progress') or 'Starting...'
                 progress_label.style(f"color: {STATUS_COLORS['online']}")
             elif not enabled:
@@ -658,7 +658,7 @@ def render_job_panel(plugin, spec: dict):
                     'id': j['id'], 'started': j['started'], 'kind': j['kind'],
                     'state': j['state'], 'duration': format_duration(j['duration']),
                 }
-                for j in plugin.network.recent(limit=history_limit)
+                for j in plugin.engine.job_recent(plugin, limit=history_limit)
             ]
             jobs_table.update()
 
@@ -666,7 +666,7 @@ def render_job_panel(plugin, spec: dict):
 
 
 async def _start(plugin, spec: dict):
-    if plugin.network.is_running():
+    if plugin.engine.job_is_running(plugin):
         ui.notify('A job is already running', type='warning')
         return
     ui.notify(f"{spec.get('run_label', 'Job')} started", type='positive')
@@ -674,7 +674,7 @@ async def _start(plugin, spec: dict):
 
 
 async def _cancel(plugin):
-    if await plugin.network.cancel():
+    if await plugin.engine.job_cancel(plugin):
         ui.notify('Cancellation requested', type='warning')
     else:
         ui.notify('No job is running', type='info')

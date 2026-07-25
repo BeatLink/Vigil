@@ -218,23 +218,23 @@ class DdnsUpdater(Plugin):
 
     @property
     def _public_ip_text(self) -> str:
-        return self.storage.get_setting(f"ddns:{self.id}:public_ip") or '--'
+        return self.data.get_setting(f"ddns:{self.id}:public_ip") or '--'
 
     @property
     def _dns_ip_text(self) -> str:
-        return self.storage.get_setting(f"ddns:{self.id}:dns_ip") or '--'
+        return self.data.get_setting(f"ddns:{self.id}:dns_ip") or '--'
 
     @property
     def _dns_ip_color(self) -> Optional[str]:
-        dns_ip = self.storage.get_setting(f"ddns:{self.id}:dns_ip")
+        dns_ip = self.data.get_setting(f"ddns:{self.id}:dns_ip")
         if not dns_ip:
             return None
-        public_ip = self.storage.get_setting(f"ddns:{self.id}:public_ip")
+        public_ip = self.data.get_setting(f"ddns:{self.id}:public_ip")
         return 'online' if dns_ip == public_ip else 'failed'
 
     @property
     def _last_update_text(self) -> str:
-        last_update = self.storage.latest_metric('last_update_epoch')
+        last_update = self.data.latest_metric('last_update_epoch')
         if last_update is None:
             return 'Never'
         return format_age(int(time.time() - last_update.value))

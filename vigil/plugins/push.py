@@ -26,7 +26,7 @@ class Push(Plugin):
         return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        last = self.storage.latest_metric('last_push_epoch')
+        last = self.data.latest_metric('last_push_epoch')
 
         if last is None:
             return CollectResult(logs=[("No heartbeat received yet", "WARNING")], status='failed')
@@ -42,7 +42,7 @@ class Push(Plugin):
                 status='failed',
             )
 
-        last_reported = self.storage.latest_metric('reported_up')
+        last_reported = self.data.latest_metric('reported_up')
         if last_reported is not None and last_reported.value == 0.0:
             return CollectResult(status='failed')
         return CollectResult(status='online')
@@ -70,7 +70,7 @@ class Push(Plugin):
 
     @property
     def _last_heartbeat_text(self) -> str:
-        last = self.storage.latest_metric('last_push_epoch')
+        last = self.data.latest_metric('last_push_epoch')
         if last is None:
             return 'Never'
         return format_age(int(time.time() - last.value))

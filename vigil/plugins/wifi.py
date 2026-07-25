@@ -92,7 +92,7 @@ class Wifi(Plugin):
 
     @property
     def _active_interface_text(self) -> str:
-        return self.storage.get_setting(f"wifi:{self.id}:active_interface") or self.interface or 'Detecting...'
+        return self.data.get_setting(f"wifi:{self.id}:active_interface") or self.interface or 'Detecting...'
 
     @property
     def UI_SPEC(self):

@@ -208,6 +208,21 @@ class VigilEngine:
             return outcome.success, (outcome.metadata or None)
         return bool(outcome), None
 
+    # --- Job-control surface the UI Engine's job panel calls through the
+    # engine, since these touch the live JobController (not a pure DB read)
+    # and a pure plugin no longer holds self.network. ---
+    def job_is_running(self, plugin: Plugin) -> bool:
+        return plugin.network.is_running()
+
+    def job_current_id(self, plugin: Plugin) -> Optional[int]:
+        return plugin.network.current_job_id()
+
+    def job_recent(self, plugin: Plugin, limit: int = 20) -> list:
+        return plugin.network.recent(limit=limit)
+
+    async def job_cancel(self, plugin: Plugin) -> bool:
+        return plugin.network.cancel()
+
     async def _monitor_loop(self, plugin: Plugin):
         await asyncio.sleep(random.uniform(0, STARTUP_JITTER_SECONDS))
         while True:

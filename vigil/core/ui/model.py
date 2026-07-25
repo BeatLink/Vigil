@@ -93,7 +93,7 @@ class PluginPage:
         if self._metric_names:
             metrics = dict(self.model.metrics)
             for name in self._metric_names:
-                m = self.plugin.storage.latest_metric(name)
+                m = self.plugin.data.latest_metric(name)
                 metrics[name] = m.value if m is not None else None
             self.model.metrics = metrics
 
@@ -102,7 +102,7 @@ class PluginPage:
             return
         names = list(self._metric_names)
         values = await offload(
-            lambda: [self.plugin.storage.latest_metric(n) for n in names]
+            lambda: [self.plugin.data.latest_metric(n) for n in names]
         )()
         metrics = dict(self.model.metrics)
         for name, m in zip(names, values):
@@ -111,6 +111,6 @@ class PluginPage:
 
     async def refresh_status(self) -> None:
         from .theme import STATUS_COLORS
-        state = await offload(self.plugin.db.latest_status_cached)(self.plugin.id)
+        state = await offload(self.plugin.data.latest_status_cached)(self.plugin.id)
         self.model.status = state
         self.model.status_color = STATUS_COLORS.get(state, STATUS_COLORS['offline'])

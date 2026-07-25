@@ -47,7 +47,7 @@ class Group(Plugin):
         return f'group_expanded_{self.id}'
 
     def _load_expanded(self) -> Dict[str, bool]:
-        raw = self.storage.get_setting(self._setting_key())
+        raw = self.data.get_setting(self._setting_key())
         if raw is None:
             return {}
         try:

@@ -87,7 +87,7 @@ class Cloud(Plugin):
 
     def _cloud_fields(self) -> Dict[str, str]:
         import json
-        raw = self.storage.get_setting(f"cloud:{self.id}")
+        raw = self.data.get_setting(f"cloud:{self.id}")
         if not raw:
             return {}
         try:

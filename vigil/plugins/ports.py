@@ -131,7 +131,7 @@ class Ports(Plugin):
             return None
         up = down = 0
         for check in checks:
-            m = self.storage.latest_metric(f"{check['metric']}_up")
+            m = self.data.latest_metric(f"{check['metric']}_up")
             if m is None:
                 continue
             if m.value >= 1.0:
