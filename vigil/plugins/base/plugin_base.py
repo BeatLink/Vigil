@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from vigil.core.coordination.data_view import PluginDataView
 
 from vigil.plugins.base.plugin_helpers import PluginConfigMixin, parse_duration
 from vigil.core.connectors.ssh.ssh import COLLECT_TIMEOUT as SSH_TIMEOUT
@@ -17,6 +20,11 @@ from vigil.core.ui.spec_types import UISpec
 class Plugin(PluginConfigMixin, ABC):
     engine: Optional[EngineLike] = None
 
+    # Read-only projection of the Database Engine, injected in __init__. The
+    # only handle a pure plugin holds into stored state (reads only — no IO,
+    # no writes). See vigil/core/coordination/data_view.py.
+    data: "PluginDataView"
+
     # Plugins that use the declarative render path (spec.generic_render)
     # override this as a @property returning a UISpec dict. Plugins with a
     # hand-written render_ui() may leave it unset — every UI_SPEC consumer
@@ -33,6 +41,12 @@ class Plugin(PluginConfigMixin, ABC):
         self.target = self.network.target
         self.storage = StorageOrchestrator(db, self.target, self.name, self.id)
         self.local_io = LocalIOOrchestrator()
+
+        # The read-only projection of the Database Engine a pure plugin (and
+        # the UI rendering it) holds. Shares the StorageOrchestrator's reads;
+        # writes stay on self.storage (engine-owned in a later phase).
+        from vigil.core.coordination.data_view import PluginDataView
+        self.data = PluginDataView(db, self.id, self.target, self.name, store=self.storage)
 
         from vigil.core.ui.orchestration import UIOrchestrator
         self.ui = UIOrchestrator(self)
