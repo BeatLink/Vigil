@@ -7,7 +7,7 @@ from typing import Dict, Any, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.core.connectors.ssh import job_controller as jobs
+from vigil.core.connectors import ssh_connector as jobs
 from vigil.plugins.base.plugin_helpers import parse_duration, format_duration, format_age
 
 

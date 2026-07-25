@@ -270,10 +270,10 @@ class TestCommand:
         assert "BORG_RSH=" not in make_plugin(Borg, BASE_CFG)._list_command()
 
     def test_borg_defaults_to_a_longer_timeout(self, make_plugin):
-        from vigil.core.connectors.ssh.ssh import TIMEOUT
+        from vigil.core.connectors.ssh_connector import COLLECT_TIMEOUT
         p = make_plugin(Borg, BASE_CFG)
         assert p.timeout == Borg.DEFAULT_TIMEOUT
-        assert p.timeout > TIMEOUT
+        assert p.timeout > COLLECT_TIMEOUT
 
     def test_borg_timeout_is_overridable(self, make_plugin):
         p = make_plugin(Borg, {**BASE_CFG, "timeout": "10m"})

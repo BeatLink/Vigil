@@ -70,9 +70,9 @@ class TestReturnValue:
 
 class TestTimeoutConfig:
     def test_defaults_to_framework_timeout(self, make_plugin):
-        from vigil.core.connectors.ssh.ssh import TIMEOUT
+        from vigil.core.connectors.ssh_connector import COLLECT_TIMEOUT
         p = make_plugin(_Probe, {})
-        assert p.timeout == TIMEOUT
+        assert p.timeout == COLLECT_TIMEOUT
 
     def test_timeout_is_configurable(self, make_plugin):
         p = make_plugin(_Probe, {"timeout": "3m"})

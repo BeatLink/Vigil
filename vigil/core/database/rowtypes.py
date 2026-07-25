@@ -104,7 +104,7 @@ class EventModelDict(TypedDict):
     source_id: Optional[str]
 
 
-# ssh.py / job_controller.py's (exit_code, stdout, stderr) and
+# ssh_connector.py's (exit_code, stdout, stderr) and
 # (exit_code, output) command-result shapes are already-adequate plain
 # tuples, not dicts — no TypedDict needed there. Kept here only as a
 # pointer for anyone looking for "the rest of the DB-adjacent row types":

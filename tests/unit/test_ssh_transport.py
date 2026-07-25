@@ -2,8 +2,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from vigil.core.connectors.ssh import ssh as ssh_module
-from vigil.core.connectors.ssh.ssh import SSHConnection, _TofuClient
+from vigil.core.connectors import ssh_connector as ssh_module
+from vigil.core.connectors.ssh_connector import SSHConnection, _TofuClient
 
 
 def _completed_process(exit_status=0, stdout="", stderr=""):
@@ -19,9 +19,9 @@ def _mock_conn_and_proc(exit_status=0, stdout="", stderr="", wait_hangs=False):
     proc.exit_status = None
     proc.is_closing.return_value = False
 
-    async def wait():
+    async def wait(timeout=None):
         if wait_hangs:
-            await asyncio.sleep(999)
+            raise asyncio.TimeoutError()
         proc.exit_status = exit_status
         return _completed_process(exit_status, stdout, stderr)
 
@@ -256,12 +256,3 @@ class TestClose:
         mock_conn.close.side_effect = Exception("boom")
         conn._conn = mock_conn
         conn.close()
-
-
-class TestContextManager:
-    def test_exit_calls_close(self):
-        conn = SSHConnection("h")
-        with patch.object(conn, "close") as mock_close:
-            with conn:
-                pass
-            mock_close.assert_called_once()

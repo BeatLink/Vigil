@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 pytestmark = pytest.mark.asyncio
 
-from vigil.core.connectors.ssh.ssh import COLLECT_TIMEOUT, CONTROL_TIMEOUT
+from vigil.core.connectors.ssh_connector import COLLECT_TIMEOUT, CONTROL_TIMEOUT
 from vigil.core.connectors.engine import ConnectorEngine, SSHContext
 from vigil.core.connectors.types import ActionPlan, Command
 

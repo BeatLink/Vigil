@@ -1,10 +1,10 @@
 """Connector Engine — the single engine for all plugin IO.
 
 Handles all IO with external sources on behalf of pure plugins. It owns every
-sub-connector domain — SSH (``connectors/ssh/``) and HTTP/DNS/ICMP
-(``connectors/http/``) — and routes a plugin's declared, heterogeneous request
-list to the right one. There is exactly one ConnectorEngine per VigilEngine; it
-holds no per-plugin state.
+sub-connector domain — SSH (``ssh_connector``) and HTTP/DNS/ICMP
+(``http_connector`` / ``dns_connector`` / ``icmp_connector``) — and routes a
+plugin's declared, heterogeneous request list to the right one. There is exactly
+one ConnectorEngine per VigilEngine; it holds no per-plugin state.
 
 A plugin declares ``requests() -> List[Request]`` (a mix of ``Command`` /
 ``HttpRequest`` / ``DnsQuery`` / ``PingRequest``) and consumes a
@@ -22,7 +22,7 @@ import asyncio
 from dataclasses import dataclass
 from typing import List, Optional
 
-from vigil.core.connectors.ssh.ssh import (
+from vigil.core.connectors.ssh_connector import (
     SSHConnection, COLLECT_TIMEOUT, CONTROL_TIMEOUT,
 )
 from vigil.core.connectors.types import (
@@ -122,21 +122,21 @@ class ConnectorEngine:
     @property
     def http(self):
         if self._http is None:
-            from vigil.core.connectors.http.http_connector import HttpConnector
+            from vigil.core.connectors.http_connector import HttpConnector
             self._http = HttpConnector()
         return self._http
 
     @property
     def dns(self):
         if self._dns is None:
-            from vigil.core.connectors.http.dns_connector import DnsConnector
+            from vigil.core.connectors.dns_connector import DnsConnector
             self._dns = DnsConnector()
         return self._dns
 
     @property
     def icmp(self):
         if self._icmp is None:
-            from vigil.core.connectors.http.icmp_connector import IcmpConnector
+            from vigil.core.connectors.icmp_connector import IcmpConnector
             self._icmp = IcmpConnector()
         return self._icmp
 

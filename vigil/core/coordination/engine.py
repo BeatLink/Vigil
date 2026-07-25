@@ -273,7 +273,7 @@ class VigilEngine:
         """Kill the plugin's running detached job on the target (one ordinary
         SSH command) and mark it cancelled. The plugin's next poll would also
         observe the death, but cancelling eagerly gives immediate feedback."""
-        from vigil.core.connectors.ssh.job_controller import cancel_command
+        from vigil.core.connectors.ssh_connector import cancel_command
         job = self.job_running(plugin)
         if not job or not job.get('pid'):
             return False

@@ -6,7 +6,7 @@ if TYPE_CHECKING:
     from vigil.core.connectors.types import Request, Result
 
 from vigil.plugins.base.plugin_helpers import PluginConfigMixin, parse_duration
-from vigil.core.connectors.ssh.ssh import COLLECT_TIMEOUT as SSH_TIMEOUT
+from vigil.core.connectors.ssh_connector import COLLECT_TIMEOUT as SSH_TIMEOUT
 from vigil.core.contracts import ActionButtonSpec, EngineLike
 from vigil.core.settings.config_schema import PluginConfig
 from vigil.core.connectors.types import (

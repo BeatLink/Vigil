@@ -3,7 +3,7 @@ the DB reconcile/re-adopt behavior. A job is now an ordinary detached command
 on the target, polled through the normal SSH command path — there is no
 long-lived controller, so these are pure functions and DB-state tests."""
 
-from vigil.core.connectors.ssh import job_controller as jobs
+from vigil.core.connectors import ssh_connector as jobs
 
 
 class TestLaunch:

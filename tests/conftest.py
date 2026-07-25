@@ -62,7 +62,7 @@ class _FakeEngine:
         return self.db.recent_jobs(plugin_id=plugin.id, limit=limit)
 
     async def job_cancel(self, plugin):
-        from vigil.core.connectors.ssh.job_controller import cancel_command
+        from vigil.core.connectors.ssh_connector import cancel_command
         job = self.job_running(plugin)
         if not job or not job.get('pid'):
             return False
