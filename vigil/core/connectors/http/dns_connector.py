@@ -8,12 +8,9 @@ strings, rrset TTL).
 """
 
 import asyncio
-
 import dns.exception
 import dns.resolver
-
 from vigil.core.connectors.types import DnsQuery, DnsResult
-
 
 class DnsConnector:
     async def resolve(self, query: DnsQuery) -> DnsResult:

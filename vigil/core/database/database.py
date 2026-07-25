@@ -108,6 +108,9 @@ def _job_to_dict(job: 'Job') -> JobDict:
         'progress': job.progress,
         'error': job.error,
         'running': job.state == 'running',
+        'pid': job.pid,
+        'workdir': job.workdir,
+        'output_seq': job.output_seq or 0,
     }
 
 
@@ -186,6 +189,17 @@ class DatabaseManager:
             db.execute_sql('CREATE INDEX IF NOT EXISTS event_source_id '
                            'ON event (source_id)')
             logging.info("Migrated: added event.source_id")
+
+        # Detached-on-target job execution (pid/workdir/output_seq).
+        job_columns = {c.name for c in db.get_columns('job')}
+        for col, ddl in (
+            ('pid', 'ALTER TABLE job ADD COLUMN pid INTEGER'),
+            ('workdir', 'ALTER TABLE job ADD COLUMN workdir TEXT'),
+            ('output_seq', 'ALTER TABLE job ADD COLUMN output_seq INTEGER DEFAULT 0'),
+        ):
+            if col not in job_columns:
+                db.execute_sql(ddl)
+                logging.info(f"Migrated: added job.{col}")
 
     def insert_metric(self, target: str, collector: str, metric_name: str, value: float, metadata: Optional[str] = None):
         _writer.submit(lambda: Metric.create(
@@ -395,10 +409,21 @@ class DatabaseManager:
         return 0
 
 
-    def create_job(self, plugin_id: str, target: str, kind: str, command: str) -> int:
+    def create_job(self, plugin_id: str, target: str, kind: str, command: str,
+                   workdir: Optional[str] = None) -> int:
         with db.connection_context():
             return Job.create(plugin_id=plugin_id, target=target, kind=kind,
-                              command=command, state='running').id
+                              command=command, state='running', workdir=workdir).id
+
+    def set_job_pid(self, job_id: int, pid: int) -> None:
+        with db.connection_context():
+            Job.update(pid=pid).where(Job.id == job_id).execute()
+
+    def bump_job_output_seq(self, job_id: int, new_seq: int) -> None:
+        """Persist how far a poll has consumed the target's output file, so the
+        next poll only appends newly-arrived bytes/lines."""
+        with db.connection_context():
+            Job.update(output_seq=new_seq).where(Job.id == job_id).execute()
 
     def append_job_output(self, job_id: int, lines, stream: str = 'stdout') -> None:
         lines = [ln for ln in lines if ln is not None]
@@ -465,10 +490,24 @@ class DatabaseManager:
             ]
 
     def reconcile_orphaned_jobs(self) -> int:
+        """Jobs run detached on the target and survive a Vigil restart, so a
+        'running' row is no longer force-failed here — the owning plugin's next
+        poll re-adopts it (pid alive → resume; pid/exit gone → finalize). Only
+        rows with no pid recorded (crashed between create_job and launch, so
+        nothing is actually running remotely) are failed."""
         with db.connection_context():
             return (Job.update(state='failed', finished=datetime.now(),
-                               error='Vigil restarted while this job was running')
-                    .where(Job.state == 'running').execute())
+                               error='Vigil restarted before this job started on the target')
+                    .where((Job.state == 'running') & (Job.pid.is_null())).execute())
+
+    def running_jobs_with_pid(self, plugin_id: Optional[str] = None) -> List[JobDict]:
+        """Running jobs that were launched on a target (have a pid), for a
+        restarted engine to re-adopt via polling."""
+        with db.connection_context():
+            query = Job.select().where((Job.state == 'running') & (Job.pid.is_null(False)))
+            if plugin_id:
+                query = query.where(Job.plugin_id == plugin_id)
+            return [_job_to_dict(j) for j in query.order_by(Job.started.desc())]
 
     def prune_jobs(self, retention_days: int) -> int:
         if retention_days is None or retention_days <= 0:

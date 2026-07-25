@@ -30,6 +30,9 @@ class JobDict(TypedDict):
     progress: Optional[str]
     error: Optional[str]
     running: bool
+    pid: Optional[int]              # remote PID of the detached job
+    workdir: Optional[str]          # per-job dir on the target
+    output_seq: int                 # bytes/lines of the output file consumed so far
 
 
 class JobOutputDict(TypedDict):

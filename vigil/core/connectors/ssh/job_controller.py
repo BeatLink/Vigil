@@ -1,116 +1,134 @@
-import asyncio
-import logging
-import time
-from typing import Any, Callable, Optional, Tuple
+"""Detached-job helpers.
 
-from vigil.core.connectors.ssh.ssh import SSHConnection
+A long-running job (a borg backup) is no longer a live SSH streaming channel
+held open for hours. It is launched *detached on the target* with one ordinary
+SSH command, then advanced by ordinary polling commands (the same
+`fetch_output` path collection uses) on the owning plugin's normal monitor
+cycle. Nothing lives in a Vigil-side coroutine, so a job survives a Vigil
+restart and is re-adopted by polling.
 
-FLUSH_INTERVAL = 0.5
+This module holds only pure shell-command builders and result parsers plus a
+thin DB coordinator. It performs no IO itself — the engine runs the strings it
+builds through the SSH connector, exactly like any other command.
+"""
 
-FLUSH_LINES = 50
+import shlex
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
-
-class JobRejected(Exception):
-    pass
-
-
-class JobController:
-    def __init__(self, ssh_conn: SSHConnection, db: Any, plugin_id: str, target: str):
-        self.ssh = ssh_conn
-        self.db = db
-        self.plugin_id = plugin_id
-        self.target = target
-        self._current_job: Optional[int] = None
-        self._cancel = asyncio.Event()
-
-
-    def is_running(self) -> bool:
-        return self._current_job is not None
-
-    def current_job_id(self) -> Optional[int]:
-        return self._current_job
+# Marker lines separating the sections of a single poll command's output, so
+# one round-trip returns size + exit code + liveness + new output.
+_SIZE = "===VIGIL_SIZE==="
+_EXIT = "===VIGIL_EXIT==="
+_ALIVE = "===VIGIL_ALIVE==="
+_OUT = "===VIGIL_OUT==="
 
 
-    async def run_job(self, kind: str, command: str, redacted: Optional[str] = None,
-                      on_line: Optional[Callable[[str, str], None]] = None,
-                      timeout: Optional[float] = None) -> Tuple[int, int]:
-        if self._current_job is not None:
-            raise JobRejected(
-                f"A {kind} job is already running for this monitor"
-            )
-        self._cancel.clear()
-        job_id = self.db.create_job(
-            plugin_id=self.plugin_id, target=self.target, kind=kind,
-            command=redacted if redacted is not None else command,
-        )
-        self._current_job = job_id
-
-        try:
-            return job_id, await self._execute(job_id, command, on_line, timeout)
-        finally:
-            self._current_job = None
-
-    async def _execute(self, job_id: int, command: str,
-                       on_line: Optional[Callable[[str, str], None]],
-                       timeout: Optional[float]) -> int:
-        buffer = []
-        last_flush = time.monotonic()
-
-        def flush():
-            nonlocal buffer, last_flush
-            if buffer:
-                try:
-                    self.db.append_job_output(job_id, buffer)
-                except Exception as e:
-                    logging.error(f"Failed to persist job {job_id} output: {e}")
-                buffer = []
-            last_flush = time.monotonic()
-
-        def handle(stream: str, text: str):
-            nonlocal buffer
-            if on_line is not None:
-                try:
-                    on_line(stream, text)
-                except Exception as e:
-                    logging.error(f"Job {job_id} line handler failed: {e}")
-            buffer.append(text)
-            if len(buffer) >= FLUSH_LINES or (time.monotonic() - last_flush) >= FLUSH_INTERVAL:
-                flush()
-
-        try:
-            status, error = await self.ssh.execute_streaming(
-                command,
-                on_line=handle,
-                timeout=timeout,
-                should_cancel=self._cancel.is_set,
-            )
-        except Exception as e:
-            flush()
-            logging.error(f"Job {job_id} crashed: {e}")
-            self.db.finish_job(job_id, 'failed', exit_code=-1, error=str(e))
-            return -1
-
-        flush()
-
-        if self._cancel.is_set():
-            self.db.finish_job(job_id, 'cancelled', exit_code=status,
-                               error='Cancelled by user')
-        elif status == 0:
-            self.db.finish_job(job_id, 'succeeded', exit_code=0)
-        else:
-            self.db.finish_job(job_id, 'failed', exit_code=status,
-                               error=error or f"Exited with status {status}")
-        return status
-
-    def cancel(self) -> bool:
-        if self._current_job is None:
-            return False
-        self._cancel.set()
-        return True
+def workdir_for(token: str) -> str:
+    """Per-job working dir on the target, keyed by an opaque token the plugin
+    picks (it names the dir before the Job row's id exists)."""
+    safe = "".join(c for c in token if c.isalnum() or c in "-_.")
+    return f"$HOME/.cache/vigil/jobs/{safe}"
 
 
-    def recent(self, limit: int = 20, kind: Optional[str] = None) -> list:
-        return self.db.recent_jobs(plugin_id=self.plugin_id, limit=limit, kind=kind)
+def launch_command(command: str, workdir: str) -> str:
+    """Build the one detached command whose stdout is the remote PID.
 
-    def output(self, job_id: int, after_seq: int = -1, limit: int = 500) -> list:
-        return self.db.job_output(job_id, after_seq=after_seq, limit=limit)
+    The job's stdout+stderr go to `out`; its exit status is written to `exit`
+    on completion. `setsid`/`&` detach it from this SSH channel so it keeps
+    running after the channel closes. `command` is embedded verbatim (it is
+    already a fully-built, quoted shell command from the plugin)."""
+    d = shlex.quote(workdir) if not workdir.startswith("$") else f'"{workdir}"'
+    inner = f'{{ {command}; }} > "$d/out" 2>&1; echo $? > "$d/exit"'
+    return (
+        f'd={d}; mkdir -p "$d"; : > "$d/out"; rm -f "$d/exit"; '
+        f'setsid sh -c {shlex.quote(inner)} < /dev/null > /dev/null 2>&1 & '
+        f'echo $!'
+    )
+
+
+def parse_launch(stdout: str) -> Optional[int]:
+    """Extract the remote PID from launch_command()'s output."""
+    line = stdout.strip().splitlines()[-1] if stdout.strip() else ""
+    try:
+        return int(line)
+    except ValueError:
+        return None
+
+
+def poll_command(workdir: str, pid: int, offset: int) -> str:
+    """One command returning the job's output size, exit code (empty if still
+    running), liveness, and any output beyond `offset` bytes."""
+    d = shlex.quote(workdir) if not workdir.startswith("$") else f'"{workdir}"'
+    start = offset + 1  # tail -c is 1-indexed
+    return (
+        f'd={d}; '
+        f'echo {_SIZE}; wc -c < "$d/out" 2>/dev/null || echo 0; '
+        f'echo {_EXIT}; cat "$d/exit" 2>/dev/null; '
+        f'echo {_ALIVE}; kill -0 {int(pid)} 2>/dev/null && echo 1 || echo 0; '
+        f'echo {_OUT}; tail -c +{start} "$d/out" 2>/dev/null'
+    )
+
+
+@dataclass(frozen=True)
+class PollResult:
+    size: int
+    exit_code: Optional[int]
+    alive: bool
+    new_output: str            # bytes of the output file past the poll offset
+
+
+def parse_poll(stdout: str) -> PollResult:
+    sections = {'size': [], 'exit': [], 'alive': [], 'out': []}
+    current = None
+    for line in stdout.split("\n"):
+        if line == _SIZE:
+            current = 'size'; continue
+        if line == _EXIT:
+            current = 'exit'; continue
+        if line == _ALIVE:
+            current = 'alive'; continue
+        if line == _OUT:
+            current = 'out'; continue
+        if current is None:
+            continue
+        sections[current].append(line)
+
+    def _int(lines: list) -> Optional[int]:
+        s = "".join(lines).strip()
+        return int(s) if s.lstrip("-").isdigit() else None
+
+    # Rejoin the output section with \n so a trailing partial line (no newline
+    # on the target yet) stays partial — split_lines then leaves it unconsumed.
+    return PollResult(
+        size=_int(sections['size']) or 0,
+        exit_code=_int(sections['exit']),
+        alive=("".join(sections['alive']).strip() == '1'),
+        new_output="\n".join(sections['out']),
+    )
+
+
+def cancel_command(pid: int) -> str:
+    """Terminate the detached job, then force-kill after a short grace. Best
+    effort — mirrors the old terminate()->kill() escalation."""
+    p = int(pid)
+    return f'kill {p} 2>/dev/null; sleep 2; kill -9 {p} 2>/dev/null; true'
+
+
+def cleanup_command(workdir: str) -> str:
+    d = shlex.quote(workdir) if not workdir.startswith("$") else f'"{workdir}"'
+    return f'rm -rf {d}'
+
+
+def split_lines(new_output: str) -> Tuple[List[str], int]:
+    """Split a poll's new bytes into whole lines to append as JobOutput,
+    returning (lines, consumed_byte_count). A trailing partial line (no
+    newline yet) is left unconsumed so the next poll completes it."""
+    if not new_output:
+        return [], 0
+    consumed = new_output.rfind("\n")
+    if consumed == -1:
+        return [], 0
+    complete = new_output[:consumed]
+    lines = complete.split("\n")
+    return lines, consumed + 1

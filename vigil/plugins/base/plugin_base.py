@@ -102,11 +102,12 @@ class Plugin(PluginConfigMixin, ABC):
         return []
 
     def plan_action(self, action_id: str, **kwargs) -> ActionPlanResult:
-        """Pure: decide what an action requires. Return an ActionPlan/JobPlan
-        for an SSH command, a declarative connector request (HttpRequest/
-        DnsQuery/PingRequest), an IoActionPlan for sequential local IO, a
-        CollectResult to apply a write with no IO (e.g. logging a refused
-        action), or None for an unhandled action_id."""
+        """Pure: decide what an action requires. Return an ActionPlan for an
+        SSH command (including launching a detached long-running job — see
+        borg), a declarative connector request (HttpRequest/DnsQuery/
+        PingRequest), an IoActionPlan for sequential local IO, a CollectResult
+        to apply a write with no IO (e.g. logging a refused action), or None
+        for an unhandled action_id."""
         return None
 
     def interpret_action(self, action_id: str, result: Any, **kwargs) -> ActionOutcome:
@@ -116,18 +117,6 @@ class Plugin(PluginConfigMixin, ABC):
         CollectResult (with .success set) to also apply a write, e.g. logging
         a failure message alongside the outcome. Default assumes a CmdResult."""
         return result.exit_code == 0
-
-    def job_on_line(self, action_id: str, **kwargs):
-        """Optional streaming line handler for JobPlan actions (e.g. live
-        backup progress). Not pure — mirrors JobController's own internal
-        buffering, which already writes as output streams in. Return None
-        (the default) if the action has no per-line handling."""
-        return None
-
-    def interpret_job(self, action_id: str, exit_code: int, **kwargs) -> ActionOutcome:
-        """Pure: given a JobPlan's exit code, return success/failure, or a
-        CollectResult (with .success set). Default: exit_code == 0."""
-        return exit_code == 0
 
     async def on_action(self, action_id: str, **kwargs) -> bool:
         success, _ = await self.engine.dispatch_action(self, action_id, **kwargs)

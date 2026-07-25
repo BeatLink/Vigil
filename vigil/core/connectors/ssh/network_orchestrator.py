@@ -2,8 +2,7 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.core.connectors.ssh.ssh import SSHConnection, SSHCollector, SSHController
-from vigil.core.connectors.ssh.job_controller import JobController
-from vigil.core.connectors.types import ActionPlan, CmdResult, Command, JobPlan
+from vigil.core.connectors.types import ActionPlan, CmdResult, Command
 from vigil.core.settings.config_schema import PluginConfig
 
 _PoolKey = Tuple[str, int, Optional[str], Optional[str]]
@@ -40,9 +39,13 @@ class SSHConnectionPool:
 
 
 class NetworkOrchestrator:
-    """Owns all SSH/subprocess IO on behalf of a plugin. Plugins never await
-    anything themselves — they declare Commands/ActionPlans/JobPlans and this
-    orchestrator (driven by VigilEngine) executes them."""
+    """Owns all SSH IO on behalf of a plugin. Plugins never await anything
+    themselves — they declare Commands/ActionPlans and this orchestrator
+    (driven by VigilEngine) executes them. Long-running jobs are ordinary
+    commands too: launched detached on the target and advanced by polling
+    commands, so there is no job-specific runtime here (see
+    connectors/ssh/job_controller.py and the poll folded into borg's
+    requests()/parse_results())."""
 
     def __init__(self, config: PluginConfig, db: Any, plugin_id: str, target_hint: str,
                  timeout: float, pool: SSHConnectionPool):
@@ -50,7 +53,6 @@ class NetworkOrchestrator:
         self.target = getattr(self.ssh_conn, 'host', target_hint)
         self._collector = SSHCollector(self.ssh_conn, timeout=timeout)
         self._controller = SSHController(self.ssh_conn)
-        self._job = JobController(self.ssh_conn, db, plugin_id, self.target)
 
     async def run(self, commands: List[Command]) -> List[CmdResult]:
         async def _run_one(cmd: Command) -> CmdResult:
@@ -75,23 +77,3 @@ class NetworkOrchestrator:
         that aren't modeled as a named action. Prefer plan_action()/execute()
         for anything reachable from action_id dispatch."""
         return await self.execute(ActionPlan(command, timeout=timeout))
-
-    async def run_job_plan(self, plan: JobPlan, on_line=None) -> Tuple[int, int]:
-        return await self._job.run_job(
-            plan.kind, plan.command, redacted=plan.redacted, on_line=on_line, timeout=plan.timeout,
-        )
-
-    def is_running(self) -> bool:
-        return self._job.is_running()
-
-    def current_job_id(self) -> Optional[int]:
-        return self._job.current_job_id()
-
-    def cancel(self) -> bool:
-        return self._job.cancel()
-
-    def recent(self, limit: int = 20, kind: Optional[str] = None) -> list:
-        return self._job.recent(limit=limit, kind=kind)
-
-    def output(self, job_id: int, after_seq: int = -1, limit: int = 500) -> list:
-        return self._job.output(job_id, after_seq=after_seq, limit=limit)

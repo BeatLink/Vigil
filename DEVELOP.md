@@ -17,7 +17,7 @@ Vigil runs as one OS process. `main()` (`vigil/__main__.py`) builds one `VigilEn
 
 ### Pure plugins
 
-Plugins expose **only pure functions and data dicts** — no IO, no persistence handles. A `Plugin` is constructed with just `(name, config)`; the Coordination Engine's `_wire_plugin()` builds the plugin's `NetworkOrchestrator` and `StorageOrchestrator` (keyed by id, engine-owned) and injects a read-only `PluginDataView` as `plugin.data`. Collection is `requests() -> parse_results()` (declarative, the 99% path) or the `io_call()` escape hatch for genuinely sequential/conditional local IO (ddns_updater, vigil_self). All writes and IO scheduling happen in the engine; the rare out-of-cycle write (push heartbeat, borg streaming, group expand state) routes back through `engine.apply` / `engine.set_job_progress` / `engine.set_setting`. `EngineLike` (`core/contracts.py`) is the narrow engine surface plugins and the UI call.
+Plugins expose **only pure functions and data dicts** — no IO, no persistence handles. A `Plugin` is constructed with just `(name, config)`; the Coordination Engine's `_wire_plugin()` builds the plugin's `NetworkOrchestrator` and `StorageOrchestrator` (keyed by id, engine-owned) and injects a read-only `PluginDataView` as `plugin.data`. Collection is `requests() -> parse_results()` (declarative, the 99% path) or the `io_call()` escape hatch for genuinely sequential/conditional local IO (ddns_updater, vigil_self). All writes and IO scheduling happen in the engine; the rare out-of-cycle write (push heartbeat, group expand state) and job-row updates route back through `engine.apply` / `engine.set_setting` / `engine.create_job`/`finish_job`/etc. `EngineLike` (`core/contracts.py`) is the narrow engine surface plugins and the UI call.
 
 ## Interface contracts
 
@@ -94,17 +94,21 @@ Two monitors resolving to the same effective `id` (falls back to display name wh
 
 Three behaviors of the old subprocess design had to be reproduced deliberately, each verified empirically against a real sshd:
 
-1. **Killing a remote process.** asyncssh's `process.close()` alone does not reliably terminate the remote command (a `sleep 300` survived it). Every timeout/cancel path explicitly calls `terminate()` then `kill()`. `execute_streaming` opens a PTY (for borg-style interactive progress output); `execute` deliberately does not, because a PTY merges stdout/stderr into one stream and dozens of plugins inspect stderr specifically for error text.
+1. **Killing a remote process.** asyncssh's `process.close()` alone does not reliably terminate the remote command (a `sleep 300` survived it). Every timeout path explicitly calls `terminate()` then `kill()`. Long-running jobs (borg) are not killed this way — they run detached on the target and are cancelled with a plain `kill <pid>` SSH command (see Job control).
 2. **Host key trust.** `known_hosts=None` disables verification entirely with no callback ever firing — that was tried first and provides no MITM protection. `known_hosts=[]` (not `None`) is what makes the `_TofuClient.validate_host_public_key` callback fire, reproducing `StrictHostKeyChecking=accept-new`: trust and persist a host's key on first use, reject any later connection with a different key.
 3. **Per-host channel limits.** sshd's default `MaxSessions` is 10 (15 concurrent channels left 5 failing with "open failed"). Vigil bounds its own per-host concurrency (`_MAX_CONCURRENT_PER_HOST`) below that so it behaves safely against any host regardless of local sshd config.
 
-`execute()` opens no PTY so stdout/stderr stay genuinely separate for callers that destructure and inspect both. `execute_streaming()` merges stderr into stdout (`stderr=asyncssh.STDOUT`) because borg interleaves progress on stderr with results on stdout. It's held against a separate, smaller `_job_semaphore` than regular `execute()` channels, since a job can run for hours.
+`execute()` opens no PTY so stdout/stderr stay genuinely separate for callers that destructure and inspect both. There is no separate streaming/job channel any more — every command, including a job launch and its polls, is an ordinary `execute()`.
 
 ## Job control
 
-`core/connectors/job_controller.py`'s `JobController` exists for long-lived, cancellable commands (a borg backup) that a short remediation-command model (30s ceiling, boolean result) can't express. A job is a database row (`Job`) plus streamed output persisted as it arrives — nothing lives only in memory, so the UI reattaches after a reload and a second browser sees the same state. The controller holds one job at a time per plugin, since borg takes an exclusive repository lock anyway; rejecting a concurrent start here (`JobRejected`) gives a clear error instead of a confusing one from borg itself.
+A long-running job (a borg backup) is **not** a live SSH channel held open for hours. It is folded into the ordinary command path: launched *detached on the target* with one `execute()` and then advanced by ordinary polling commands on the owning plugin's normal monitor cycle. `core/connectors/ssh/job_controller.py` holds only pure shell-command builders + parsers (`launch_command`/`parse_launch`, `poll_command`/`parse_poll`, `cancel_command`, `split_lines`) — no runtime, no coroutine, no IO.
 
-Output lines are buffered and flushed on a timer (`FLUSH_INTERVAL` = 0.5s, `FLUSH_LINES` = 50 cap) so a chatty command doesn't become one DB commit per line, while the UI still sees progress promptly. Cancellation sets a flag `execute_streaming`'s read loop checks between lines, then terminates the remote process — observed at the next line of output, which for borg's continuous progress is effectively immediate.
+- **Launch** (`plan_action` → `ActionPlan(launch_command(...))`): `setsid sh -c '...' &; echo $!` writes the job's stdout+stderr to `<workdir>/out` and its exit status to `<workdir>/exit` on completion, and prints the remote PID. `interpret_action` parses the PID and creates the `Job` row (with `pid`/`workdir`).
+- **Poll** (folded into borg's `commands()`/`parse()`): while `job_running()` returns a row, the monitor cycle emits `poll_command` instead of `borg list`. One round-trip returns the output-file size, the exit code (empty if still running), liveness (`kill -0 <pid>`), and any output past the byte offset the last poll consumed (`Job.output_seq`). `parse()` appends whole new lines as `JobOutput`, updates `Job.progress` from borg's `--log-json` `archive_progress` records, and on completion finalizes the row + returns the interpreted outcome. A trailing partial line (no newline yet) is left unconsumed so the next poll completes it.
+- **Cancel** (`engine.job_cancel`): a plain `kill <pid>; sleep; kill -9 <pid>` SSH command, then the row is marked cancelled.
+
+Because the job lives on the target, it **survives a Vigil restart**: `reconcile_orphaned_jobs` no longer force-fails running jobs — it keeps any row that has a `pid` (only rows that crashed before launch, with no pid, are failed), and the owning plugin's next poll re-adopts it (pid alive → resume; pid/exit gone → finalize). Progress latency is the monitor's poll interval, so a borg monitor wanting a responsive backup panel should run a short interval. Concurrency is guarded by refusing a second launch while `job_running()` is set (borg takes an exclusive repo lock anyway).
 
 ## SQLite writer and caching
 
@@ -118,7 +122,7 @@ Read-heavy queries (`latest_statuses`, `latest_metric_cached`, `metric_history_c
 
 `_migrate` exists because `create_tables` only creates missing tables, never alters an existing one — a column added to a model appears on fresh installs but not upgraded databases, where inserts then fail silently (writes are queued, so the failure only shows as a log line while data is dropped). Each migration step is additive and idempotent, so it's safe to run on every start with no version bookkeeping.
 
-On startup, jobs still marked `running` from a previous process are force-failed (`reconcile_orphaned_jobs`) — they're child processes of Vigil, so they die with it, but their row would otherwise still claim to be live.
+On startup, `reconcile_orphaned_jobs` only fails `running` rows that have no `pid` (created but never launched). Jobs that were launched run detached on the target and survive a Vigil restart, so their rows are kept and re-adopted by the owning plugin's next poll — see "Job control".
 
 ## UI refresh: polling, not push
 

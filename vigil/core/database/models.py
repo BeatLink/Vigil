@@ -58,6 +58,12 @@ class Job(BaseModel):
     exit_code = IntegerField(null=True)
     progress = TextField(null=True)
     error = TextField(null=True)
+    # Detached-on-target execution: the remote PID and working dir let a poll
+    # (a plain SSH command) check liveness / read the exit file, and let a
+    # restarted Vigil re-adopt a job that is still running on the target.
+    pid = IntegerField(null=True)
+    workdir = TextField(null=True)
+    output_seq = IntegerField(default=0)
 
 
 class JobOutput(BaseModel):

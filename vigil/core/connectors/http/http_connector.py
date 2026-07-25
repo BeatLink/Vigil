@@ -8,9 +8,7 @@ engine-owned ``requests.Session`` (connection pooling), off the event loop via
 
 import asyncio
 from typing import Optional
-
 import requests
-
 from vigil.core.connectors.types import HttpRequest, HttpResult
 
 _DEFAULT_TIMEOUT = 10.0

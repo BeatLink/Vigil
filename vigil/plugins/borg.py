@@ -3,10 +3,11 @@ import re
 import shlex
 import time
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult, JobPlan
+from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.core.connectors.ssh import job_controller as jobs
 from vigil.plugins.base.plugin_helpers import parse_duration, format_duration, format_age
 
 
@@ -208,6 +209,12 @@ class Borg(Plugin):
         return f"{self.archive_prefix}-{stamp}"
 
     def commands(self) -> List[Command]:
+        # While a backup is running, this monitor cycle polls the detached job
+        # (a plain SSH command) instead of listing the repo — the same command
+        # handler, no streaming channel.
+        job = self._running_job()
+        if job is not None:
+            return [Command(jobs.poll_command(job['workdir'], job['pid'], job['output_seq']))]
         if not self.repo:
             return []
         commands = [Command(self._list_command())]
@@ -215,7 +222,17 @@ class Borg(Plugin):
             commands.append(Command(self._info_command()))
         return commands
 
+    def _running_job(self) -> Optional[dict]:
+        job = self.engine.job_running(self) if self.engine else None
+        if job and job.get('pid') and job.get('workdir'):
+            return job
+        return None
+
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        job = self._running_job()
+        if job is not None:
+            return self._parse_poll(job, results[0])
+
         if not self.repo:
             return CollectResult.failed("No 'repo' configured for borg monitor")
 
@@ -476,7 +493,7 @@ class Borg(Plugin):
              'variant': 'secondary', 'icon': 'fact_check'},
         ]
 
-    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[JobPlan, CollectResult]]:
+    def plan_action(self, action_id: str, **kwargs):
         if action_id not in ('run_backup', 'dry_run_backup'):
             return None
 
@@ -484,64 +501,103 @@ class Borg(Plugin):
             return CollectResult.failed("Cannot back up: no 'repo' configured")
         if not self.source_paths:
             return CollectResult.failed("Cannot back up: no 'source_paths' configured")
+        if self._running_job() is not None:
+            return CollectResult.failed("A backup is already running for this monitor",
+                                        level="WARNING", status=None)
 
         dry_run = action_id == 'dry_run_backup'
         kind = 'dry-run' if dry_run else 'backup'
         command = self._backup_command(dry_run=dry_run)
-        return JobPlan(kind=kind, command=command, redacted=_redact(command))
+        # Name the on-target workdir before the Job row exists; interpret_action
+        # records the pid the launch prints and creates the row.
+        token = f"{self.id}-{int(time.time())}"
+        workdir = jobs.workdir_for(token)
+        self._pending_launch = (kind, _redact(command), workdir)
+        return ActionPlan(jobs.launch_command(command, workdir))
 
-    def job_on_line(self, action_id: str, **kwargs):
+    def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
         if action_id not in ('run_backup', 'dry_run_backup'):
-            return None
+            return result.exit_code == 0
 
-        def on_line(stream: str, text: str) -> None:
-            self._handle_backup_line(self.engine.job_current_id(self), stream, text)
-        return on_line
+        kind, redacted, workdir = getattr(self, '_pending_launch', ('backup', '', ''))
+        self._pending_launch = None
 
-    def interpret_job(self, action_id: str, exit_code: int, **kwargs):
-        kind = 'dry-run' if action_id == 'dry_run_backup' else 'backup'
+        pid = jobs.parse_launch(result.stdout) if result.exit_code == 0 else None
+        if pid is None:
+            return CollectResult.failed(
+                f"Failed to launch {kind}: {(result.stderr or result.stdout).strip()[:200]}")
+
+        job_id = self.engine.create_job(self, kind, redacted, workdir)
+        self.engine.set_job_pid(job_id, pid)
+        return CollectResult(
+            logs=[(f"{kind.capitalize()} started (pid {pid})", "INFO")],
+            success=True,
+        )
+
+    def _parse_poll(self, job: dict, result: CmdResult) -> CollectResult:
+        """Advance a running detached backup from one poll's output. Appends
+        new output lines, updates the progress summary, and on completion
+        finalizes the Job row and returns the interpreted outcome."""
+        job_id = job['id']
+        poll = jobs.parse_poll(result.stdout)
+
+        lines, consumed = jobs.split_lines(poll.new_output)
+        if lines:
+            self.engine.append_job_output(job_id, lines)
+            self.engine.bump_job_output_seq(job_id, job['output_seq'] + consumed)
+            summary = self._progress_from_lines(lines)
+            if summary:
+                self.engine.set_job_progress(job_id, summary)
+
+        still_running = poll.exit_code is None and poll.alive
+        if still_running:
+            return CollectResult()  # nothing to persist for the monitor itself
+
+        # Completed (exit file present) or the process vanished with no exit
+        # file (target rebooted mid-job → treat as failed).
+        kind = job['kind']
+        if poll.exit_code is None:
+            self.engine.finish_job(job_id, 'failed', exit_code=-1,
+                                   error='Process ended without writing an exit code')
+            return CollectResult.failed(f"{kind.capitalize()} ended unexpectedly")
+
+        exit_code = poll.exit_code
+        state = 'succeeded' if exit_code in (0, 1) else 'failed'
+        self.engine.finish_job(job_id, state, exit_code=exit_code,
+                               error=None if state == 'succeeded' else f"Exited with status {exit_code}")
 
         if exit_code == 0:
             return CollectResult(logs=[(f"{kind.capitalize()} completed successfully", "INFO")], success=True)
         if exit_code == 1:
-            return CollectResult(
-                logs=[(f"{kind.capitalize()} completed with warnings (exit 1)", "WARNING")],
-                success=True,
-            )
+            return CollectResult(logs=[(f"{kind.capitalize()} completed with warnings (exit 1)", "WARNING")], success=True)
         return CollectResult.failed(f"{kind.capitalize()} failed (exit {exit_code})")
 
-    def _handle_backup_line(self, job_id: Optional[int], stream: str, text: str) -> None:
-        if job_id is None or not text.startswith('{'):
-            return
-        try:
-            record = json.loads(text)
-        except (json.JSONDecodeError, ValueError):
-            return
-        if not isinstance(record, dict):
-            return
-
-        rec_type = record.get('type')
-        if rec_type == 'archive_progress':
+    @staticmethod
+    def _progress_from_lines(lines: List[str]) -> Optional[str]:
+        """Extract the latest human progress summary from borg --log-json
+        archive_progress records in a batch of newly-read output lines."""
+        summary = None
+        for text in lines:
+            if not text.startswith('{'):
+                continue
+            try:
+                record = json.loads(text)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(record, dict) or record.get('type') != 'archive_progress':
+                continue
             if record.get('finished'):
-                return
+                continue
             original = record.get('original_size') or 0
             deduplicated = record.get('deduplicated_size') or 0
             nfiles = record.get('nfiles') or 0
             if not (original or deduplicated or nfiles):
-                return
+                continue
             path = record.get('path') or ''
-            summary = (
-                f"{nfiles} files, {_format_bytes(original)} read, "
-                f"{_format_bytes(deduplicated)} new"
-            )
+            summary = f"{nfiles} files, {_format_bytes(original)} read, {_format_bytes(deduplicated)} new"
             if path:
                 summary += f" — {path}"
-            self.engine.set_job_progress(job_id, summary)
-        elif rec_type == 'log_message':
-            level = (record.get('levelname') or 'INFO').upper()
-            message = record.get('message') or ''
-            if message and level in ('WARNING', 'ERROR', 'CRITICAL'):
-                self.engine.apply(self, CollectResult(logs=[(f"borg: {message}", level)]))
+        return summary
 
     def _epoch(self) -> Optional[float]:
         m = self.data.latest_metric('last_backup_epoch')

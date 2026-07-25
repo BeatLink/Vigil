@@ -3,7 +3,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Tuple, Optional, Dict, Any, Callable
+from typing import Tuple, Optional
 
 import asyncssh
 
@@ -15,7 +15,6 @@ _STATE_DIR = Path(os.environ.get("VIGIL_SSH_CONTROL_DIR",
 _KILL_GRACE_SECONDS = 5.0
 
 _MAX_CONCURRENT_PER_HOST = 8
-_MAX_CONCURRENT_JOBS_PER_HOST = 2
 
 COLLECT_TIMEOUT = 30.0
 CONTROL_TIMEOUT = 60.0
@@ -92,7 +91,6 @@ class SSHConnection:
         self._conn: Optional[asyncssh.SSHClientConnection] = None
         self._connect_lock = asyncio.Lock()
         self._channel_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_PER_HOST)
-        self._job_semaphore = asyncio.Semaphore(_MAX_CONCURRENT_JOBS_PER_HOST)
 
     def _host_key_alias(self) -> str:
         user = self.username or os.environ.get("USER", "")
@@ -165,66 +163,6 @@ class SSHConnection:
             await asyncio.wait_for(proc.wait_closed(), timeout=_KILL_GRACE_SECONDS)
         except (asyncio.TimeoutError, OSError):
             pass
-
-    async def execute_streaming(self, command: str, on_line: Optional[Callable[[str, str], None]] = None,
-                                connect_timeout: float = 5.0, timeout: Optional[float] = None,
-                                should_cancel: Optional[Callable[[], bool]] = None) -> Tuple[int, str]:
-        async with self._job_semaphore:
-            return await self._execute_streaming_body(
-                command, on_line, connect_timeout, timeout, should_cancel,
-            )
-
-    async def _execute_streaming_body(self, command: str, on_line: Optional[Callable[[str, str], None]],
-                                       connect_timeout: float, timeout: Optional[float],
-                                       should_cancel: Optional[Callable[[], bool]]) -> Tuple[int, str]:
-        proc = None
-        try:
-            conn = await asyncio.wait_for(
-                self._get_connection(connect_timeout), timeout=connect_timeout + 5
-            )
-            proc = await conn.create_process(
-                command, term_type='xterm-vigil', stderr=asyncssh.STDOUT,
-            )
-        except (asyncssh.Error, OSError, asyncio.TimeoutError) as e:
-            logging.error(f"SSH streaming start failed on {self.host}: {e}")
-            return -1, str(e)
-
-        start = asyncio.get_event_loop().time()
-        cancelled = False
-        try:
-            while True:
-                try:
-                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=1.0)
-                except asyncio.TimeoutError:
-                    line = None
-
-                if line:
-                    if on_line is not None:
-                        try:
-                            on_line("stdout", line.rstrip("\r\n"))
-                        except Exception as e:
-                            logging.error(f"Job output handler failed: {e}")
-                elif proc.stdout.at_eof():
-                    break
-
-                if should_cancel is not None and should_cancel():
-                    cancelled = True
-                    break
-                if timeout is not None and (asyncio.get_event_loop().time() - start) > timeout:
-                    logging.error(f"SSH streaming timed out after {timeout}s on {self.host}")
-                    await self._kill_process(proc)
-                    return -1, f"Timed out after {timeout}s"
-
-            if cancelled:
-                await self._kill_process(proc)
-                return 130, "Cancelled"
-
-            await proc.wait()
-            return proc.exit_status if proc.exit_status is not None else -1, ""
-        except (asyncssh.Error, OSError) as e:
-            logging.error(f"SSH streaming failed on {self.host}: {e}")
-            await self._kill_process(proc)
-            return -1, str(e)
 
     def close(self):
         if self._conn is not None:

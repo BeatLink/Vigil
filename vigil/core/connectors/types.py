@@ -22,14 +22,6 @@ class ActionPlan:
     timeout: Optional[float] = None
 
 
-@dataclass(frozen=True)
-class JobPlan:
-    kind: str
-    command: str
-    redacted: Optional[str] = None
-    timeout: Optional[float] = None
-
-
 # --- Declarative connector requests/results ---
 # A plugin declares what IO it needs this cycle as a heterogeneous list of
 # these frozen request objects (from requests()); the Connector Engine routes
@@ -129,19 +121,18 @@ class CollectResult:
 
 # Plugin.plan_action()'s return type. VigilEngine.dispatch_action
 # discriminates this union with isinstance, in this order: CollectResult
-# (a write with no command run), JobPlan (long-running/cancellable),
-# IoActionPlan (sequential local IO), a declarative connector request
-# (HttpRequest/DnsQuery/PingRequest), ActionPlan (the default — a short SSH
-# command), or None (action_id unhandled). Named here so plan_action's
-# signature and dispatch_action's isinstance chain both reference one union.
+# (a write with no command run), IoActionPlan (sequential local IO), a
+# declarative connector request (HttpRequest/DnsQuery/PingRequest), ActionPlan
+# (the default — a short SSH command, including launching a detached job), or
+# None (action_id unhandled). Named here so plan_action's signature and
+# dispatch_action's isinstance chain both reference one union.
 ActionPlanResult = Union[
-    ActionPlan, JobPlan, IoActionPlan, HttpRequest, DnsQuery, PingRequest,
+    ActionPlan, IoActionPlan, HttpRequest, DnsQuery, PingRequest,
     CollectResult, None,
 ]
 
-# Plugin.interpret_action()/interpret_job()'s return type: a plain
-# success/failure bool, or a CollectResult (.success set) to also apply a
-# write alongside the outcome.
+# Plugin.interpret_action()'s return type: a plain success/failure bool, or a
+# CollectResult (.success set) to also apply a write alongside the outcome.
 ActionOutcome = Union[bool, CollectResult]
 
 # VigilEngine.dispatch_action()'s return: (success, metadata). metadata is
