@@ -229,7 +229,7 @@ class TestPerMonitorScheduling:
         engine._collecting = {}
         engine._last_collected = {}
         engine.run_cycle_now = AsyncMock(return_value=True)
-        with patch("vigil.__main__.asyncio.sleep", side_effect=fake_sleep):
+        with patch("vigil.core.coordination.engine.asyncio.sleep", side_effect=fake_sleep):
             with pytest.raises(asyncio.CancelledError):
                 await engine._monitor_loop(plugin)
 
@@ -250,7 +250,7 @@ class TestPerMonitorScheduling:
         engine._collecting = {}
         engine._last_collected = {}
         engine.run_cycle_now = AsyncMock(side_effect=RuntimeError("boom"))
-        with patch("vigil.__main__.asyncio.sleep", side_effect=fake_sleep):
+        with patch("vigil.core.coordination.engine.asyncio.sleep", side_effect=fake_sleep):
             with pytest.raises(asyncio.CancelledError):
                 await engine._monitor_loop(plugin)
 
@@ -278,7 +278,7 @@ class TestPerMonitorScheduling:
             coro.close()
             return MagicMock()
 
-        with patch("vigil.__main__.asyncio.create_task", side_effect=spy_create_task):
+        with patch("vigil.core.coordination.engine.asyncio.create_task", side_effect=spy_create_task):
             await engine.run()
 
         monitor_tasks = [c for c in created if c.cr_code.co_name == "_monitor_loop"]
