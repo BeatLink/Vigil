@@ -189,7 +189,7 @@ in
       }
     ];
 
-    # Vigil runs as a single process (see vigil/core/app/main.py): one
+    # Vigil runs as a single process (see vigil/__main__.py): one
     # asyncio event loop owns both the target-polling schedule and the
     # NiceGUI web dashboard, sharing the SQLite database directly in-process
     # rather than over a loopback API.

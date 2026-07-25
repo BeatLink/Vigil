@@ -63,7 +63,7 @@
 
                 # Vigil runs as a single process (target polling and the web
                 # dashboard share one asyncio event loop — see
-                # vigil/core/app/main.py). This dev script just runs it.
+                # vigil/__main__.py). This dev script just runs it.
                 vigil-run = pkgs.writeShellScriptBin "vigil-run" ''
                     set -e
                     # Find project root (where pyproject.toml is)
@@ -75,7 +75,7 @@
                     export PYTHONPATH="$VIGIL_ROOT:$PYTHONPATH"
 
                     echo "Starting Vigil on http://localhost:8080"
-                    exec python3 -m vigil.core.app.main --config "$VIGIL_ROOT/config.yaml" --port 8080 "$@"
+                    exec python3 -m vigil --config "$VIGIL_ROOT/config.yaml" --port 8080 "$@"
                 '';
             in
             {

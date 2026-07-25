@@ -32,10 +32,10 @@ def probe(make_plugin):
 @pytest.fixture
 def engine(tmp_path):
     from unittest.mock import patch
-    from vigil.core.app.main import VigilEngine
+    from vigil.__main__ import VigilEngine
     cfg = tmp_path / "c.yaml"
     cfg.write_text("plugins: []\n")
-    with patch("vigil.core.app.main.VigilEngine._connect", create=True):
+    with patch("vigil.__main__.VigilEngine._connect", create=True):
         return VigilEngine(str(cfg), db_path_override=str(tmp_path / "e.db"))
 
 

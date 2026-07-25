@@ -23,7 +23,7 @@ dependencies = [
 ]
 
 [project.scripts]
-vigil = "vigil.core.app.main:main"
+vigil = "vigil.__main__:main"
 
 [project.optional-dependencies]
 dev = [
