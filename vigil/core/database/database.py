@@ -1,11 +1,15 @@
+import json
 import logging
 import hashlib
 import queue
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Optional, Any, Dict, List, Callable
+from typing import Optional, Any, Dict, List, Callable, TYPE_CHECKING
 from peewee import *
+
+if TYPE_CHECKING:
+    from vigil.core.connectors.types import CollectResult
 
 from .models import (
     ALL_MODELS, BaseModel, Event, Job, JobOutput, LogLine, Metric,
@@ -15,6 +19,26 @@ from .rowtypes import (
     EventDict, EventModelDict, JobDict, JobOutputDict, LogLineModelDict,
     MetricModelDict, MetricRowDict, PluginEventDict,
 )
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def _reader():
+    """Read-path connection scope that opens the thread-local SQLite connection
+    if it's closed but — unlike peewee's ``db.connection_context()`` — does NOT
+    close it on exit.
+
+    Reads run on a pool of executor threads (see ui/components.offload), and
+    ``connection_context().__exit__`` unconditionally calls ``db.close()``, so
+    every read would connect + close a fresh connection on its worker thread.
+    peewee's SqliteDatabase keeps connections thread-local, so leaving the
+    connection open lets the next read on that same thread reuse the warm one.
+    The pooled threads live for the process, so the open connections are freed
+    at process exit — nothing to close explicitly."""
+    if db.is_closed():
+        db.connect()
+    yield
 
 
 class _AsyncWriter:
@@ -193,7 +217,7 @@ class DatabaseManager:
         now = time.monotonic()
         if self._statuses_cache is not None and (now - self._statuses_cache_at) < max_age:
             return self._statuses_cache
-        with db.connection_context():
+        with _reader():
             newest = (StatusHistory
                       .select(fn.MAX(StatusHistory.id).alias('max_id'))
                       .group_by(StatusHistory.collector_id))
@@ -206,7 +230,7 @@ class DatabaseManager:
         return result
 
     def latest_metrics(self) -> List[MetricRowDict]:
-        with db.connection_context():
+        with _reader():
             newest = (Metric
                       .select(fn.MAX(Metric.id).alias('max_id'))
                       .group_by(Metric.collector, Metric.metric_name))
@@ -227,7 +251,7 @@ class DatabaseManager:
 
     def latest_metric_cached(self, collector: str, metric_name: str, max_age: float = 1.0):
         def _fetch():
-            with db.connection_context():
+            with _reader():
                 return (
                     Metric.select()
                     .where((Metric.collector == collector) & (Metric.metric_name == metric_name))
@@ -238,7 +262,7 @@ class DatabaseManager:
 
     def metric_history_cached(self, collector: str, metric_name: str, limit: int = 30, max_age: float = 1.0):
         def _fetch():
-            with db.connection_context():
+            with _reader():
                 rows = (
                     Metric.select()
                     .where((Metric.collector == collector) & (Metric.metric_name == metric_name))
@@ -250,7 +274,7 @@ class DatabaseManager:
 
     def collector_metrics_cached(self, collector: str, limit: int = 15, max_age: float = 1.0) -> List[MetricModelDict]:
         def _fetch():
-            with db.connection_context():
+            with _reader():
                 query = (Metric.select()
                          .where(Metric.collector == collector)
                          .order_by(Metric.timestamp.desc())
@@ -260,7 +284,7 @@ class DatabaseManager:
 
     def log_lines_cached(self, target: str, filter_prefix: str = '', limit: int = 15, max_age: float = 1.0) -> List[LogLineModelDict]:
         def _fetch():
-            with db.connection_context():
+            with _reader():
                 condition = (LogLine.target == target)
                 if filter_prefix:
                     condition &= (LogLine.source == filter_prefix)
@@ -271,7 +295,7 @@ class DatabaseManager:
     def plugin_events_cached(self, plugin_id: str = '', prefix: str = '', target: str = '',
                              limit: int = 100, max_age: float = 1.0) -> List[PluginEventDict]:
         def _fetch():
-            with db.connection_context():
+            with _reader():
                 if plugin_id:
                     condition = (Event.source_id == plugin_id)
                 else:
@@ -295,14 +319,14 @@ class DatabaseManager:
 
     def recent_metrics_raw_cached(self, limit: int = 20, max_age: float = 1.0) -> List[MetricModelDict]:
         def _fetch():
-            with db.connection_context():
+            with _reader():
                 query = Metric.select().order_by(Metric.timestamp.desc()).limit(limit)
                 return [m.__data__ for m in query]
         return self._cached(('recent_metrics_raw', limit), max_age, _fetch)
 
     def recent_events_raw_cached(self, limit: int = 20, max_age: float = 1.0) -> List[EventModelDict]:
         def _fetch():
-            with db.connection_context():
+            with _reader():
                 query = Event.select().order_by(Event.timestamp.desc()).limit(limit)
                 return [e.__data__ for e in query]
         return self._cached(('recent_events_raw', limit), max_age, _fetch)
@@ -316,7 +340,7 @@ class DatabaseManager:
 
     def latest_status_cached(self, collector_id: str, max_age: float = 1.0):
         def _fetch():
-            with db.connection_context():
+            with _reader():
                 row = (StatusHistory.select()
                        .where(StatusHistory.collector_id == collector_id)
                        .order_by(StatusHistory.timestamp.desc())
@@ -328,7 +352,7 @@ class DatabaseManager:
         """The timestamp of the most recent status row (or None) — for UIs
         that show 'last checked' distinct from the status value itself."""
         def _fetch():
-            with db.connection_context():
+            with _reader():
                 row = (StatusHistory.select()
                        .where(StatusHistory.collector_id == collector_id)
                        .order_by(StatusHistory.timestamp.desc())
@@ -343,7 +367,7 @@ class DatabaseManager:
 
     def recent_events(self, limit: int = 200, level: Optional[str] = None,
                       target: Optional[str] = None, search: Optional[str] = None) -> List[EventDict]:
-        with db.connection_context():
+        with _reader():
             query = Event.select().order_by(Event.timestamp.desc())
             if level:
                 query = query.where(Event.level == level)
@@ -470,13 +494,13 @@ class DatabaseManager:
                        finished=datetime.now()).where(Job.id == job_id).execute()
 
     def get_job(self, job_id: int) -> Optional[JobDict]:
-        with db.connection_context():
+        with _reader():
             job = Job.get_or_none(Job.id == job_id)
             return _job_to_dict(job) if job else None
 
     def recent_jobs(self, plugin_id: Optional[str] = None, limit: int = 20,
                     kind: Optional[str] = None) -> List[JobDict]:
-        with db.connection_context():
+        with _reader():
             query = Job.select().order_by(Job.started.desc())
             if plugin_id:
                 query = query.where(Job.plugin_id == plugin_id)
@@ -485,14 +509,14 @@ class DatabaseManager:
             return [_job_to_dict(j) for j in query.limit(limit)]
 
     def running_jobs(self, plugin_id: Optional[str] = None) -> List[JobDict]:
-        with db.connection_context():
+        with _reader():
             query = Job.select().where(Job.state == 'running')
             if plugin_id:
                 query = query.where(Job.plugin_id == plugin_id)
             return [_job_to_dict(j) for j in query.order_by(Job.started.desc())]
 
     def job_output(self, job_id: int, after_seq: int = -1, limit: int = 500) -> List[JobOutputDict]:
-        with db.connection_context():
+        with _reader():
             query = (JobOutput
                      .select()
                      .where((JobOutput.job == job_id) & (JobOutput.seq > after_seq))
@@ -514,7 +538,7 @@ class DatabaseManager:
         poll re-adopts it (pid alive → resume; pid/exit gone → finalize). Only
         rows with no pid recorded (crashed between create_job and launch, so
         nothing is actually running remotely) are failed."""
-        with db.connection_context():
+        with _reader():
             return (Job.update(state='failed', finished=datetime.now(),
                                error='Vigil restarted before this job started on the target')
                     .where((Job.state == 'running') & (Job.pid.is_null())).execute())
@@ -522,7 +546,7 @@ class DatabaseManager:
     def running_jobs_with_pid(self, plugin_id: Optional[str] = None) -> List[JobDict]:
         """Running jobs that were launched on a target (have a pid), for a
         restarted engine to re-adopt via polling."""
-        with db.connection_context():
+        with _reader():
             query = Job.select().where((Job.state == 'running') & (Job.pid.is_null(False)))
             if plugin_id:
                 query = query.where(Job.plugin_id == plugin_id)
@@ -544,7 +568,7 @@ class DatabaseManager:
         return 0
 
     def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        with db.connection_context():
+        with _reader():
             try:
                 return Setting.get(Setting.key == key).value
             except DoesNotExist:
@@ -563,6 +587,46 @@ class DatabaseManager:
         )
 
     def get_snapshot(self, plugin_id: str) -> Optional[str]:
-        with db.connection_context():
+        with _reader():
             row = PluginSnapshot.get_or_none(PluginSnapshot.plugin_id == plugin_id)
             return row.data if row else None
+
+    # --- Plugin-scoped write/read surface -----------------------------------
+    #
+    # A plugin's pure parse_results()/plan_action() returns a single
+    # CollectResult; the engine persists it here with one apply_result() call,
+    # passing the plugin's identity (which the engine holds) rather than binding
+    # it into a per-plugin object. The scoped reads back PluginDataView.
+
+    def write_event(self, target: str, plugin_id: str, plugin_name: str,
+                    message: str, level: str = "INFO") -> None:
+        """A plugin event, prefixed with the plugin name for the events feed."""
+        self.insert_event(level, f"[{plugin_name}] {message}", target,
+                          source_id=plugin_id)
+
+    def apply_result(self, target: str, plugin_id: str, plugin_name: str,
+                     result: 'CollectResult') -> None:
+        """Fan a CollectResult out to the per-datatype writes. The one place
+        that translates the plugin-facing CollectResult contract into
+        table-level calls."""
+        for name, value in result.metrics.items():
+            self.insert_metric(target, plugin_id, name, value, result.metadata.get(name))
+        for message, level in result.logs:
+            self.write_event(target, plugin_id, plugin_name, message, level=level)
+        for message, level, log_time in result.log_lines:
+            self.insert_log_line(target, plugin_id, level, message, log_time)
+        if result.status is not None:
+            self.insert_status(plugin_id, result.status)
+        if result.snapshot is not None:
+            self.set_snapshot(plugin_id, json.dumps(result.snapshot))
+        for key, value in result.settings.items():
+            self.set_setting(key, value)
+
+    def latest_snapshot(self, plugin_id: str, default: Any = None) -> Any:
+        raw = self.get_snapshot(plugin_id)
+        if raw is None:
+            return default
+        try:
+            return json.loads(raw)
+        except (ValueError, TypeError):
+            return default

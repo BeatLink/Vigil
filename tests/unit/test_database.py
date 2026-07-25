@@ -3,7 +3,7 @@ import pytest
 from vigil.core.database.database import (
     DatabaseManager, Metric, Event, Setting, StatusHistory, LogLine, PluginSnapshot, db,
 )
-from vigil.core.database.storage_orchestrator import StorageOrchestrator
+from vigil.core.connectors.types import CollectResult
 
 
 @pytest.fixture
@@ -288,10 +288,10 @@ class TestStatusRetention:
             assert StatusHistory.select().count() == 2
 
 
-class TestLogLineLogger:
-    def test_log_line_via_orchestrator(self, mgr):
-        store = StorageOrchestrator(mgr, "host1", "my-plugin", "my-plugin")
-        store.log_line("a log message", level="ERROR", log_time="2024-01-01T00:00:00")
+class TestLogLineWrites:
+    def test_apply_result_writes_log_line(self, mgr):
+        mgr.apply_result("host1", "my-plugin", "my-plugin", CollectResult(
+            log_lines=[("a log message", "ERROR", "2024-01-01T00:00:00")]))
         mgr.flush()
         with db.connection_context():
             row = LogLine.select().where(LogLine.source == "my-plugin").first()
@@ -300,10 +300,9 @@ class TestLogLineLogger:
         assert row.level == "ERROR"
         assert row.target == "host1"
 
-    def test_orchestrator_dedups_repeated_line(self, mgr):
-        store = StorageOrchestrator(mgr, "host1", "my-plugin", "my-plugin")
-        store.log_line("dup", log_time="t1")
-        store.log_line("dup", log_time="t1")
+    def test_dedups_repeated_line(self, mgr):
+        mgr.insert_log_line("host1", "my-plugin", "INFO", "dup", "t1")
+        mgr.insert_log_line("host1", "my-plugin", "INFO", "dup", "t1")
         mgr.flush()
         with db.connection_context():
             assert LogLine.select().where(LogLine.message == "dup").count() == 1
@@ -328,19 +327,10 @@ class TestSettings:
         assert mgr.get_setting("k") == "v2"
 
 
-class TestStorageOrchestratorWrites:
-    def test_scoped_identity(self, mgr):
-        store = StorageOrchestrator(mgr, "host1", "my-plugin", "my-plugin")
-        assert store.target == "host1"
-        assert store.plugin_name == "my-plugin"
-
-    def test_id_falls_back_to_name_when_empty(self, mgr):
-        store = StorageOrchestrator(mgr, "host1", "my-plugin", "")
-        assert store.plugin_id == "my-plugin"
-
-    def test_write_inserts_prefixed_event(self, mgr):
-        store = StorageOrchestrator(mgr, "host1", "test-plugin", "test-plugin")
-        store.write("something happened", level="WARNING")
+class TestApplyResult:
+    def test_write_event_prefixes_with_plugin_name(self, mgr):
+        mgr.write_event("host1", "test-plugin", "test-plugin",
+                        "something happened", level="WARNING")
         mgr.flush()
         with db.connection_context():
             e = Event.select().where(Event.level == "WARNING").first()
@@ -348,9 +338,9 @@ class TestStorageOrchestratorWrites:
         assert "[test-plugin] something happened" in e.message
         assert e.target == "host1"
 
-    def test_metric_inserts_metric_row(self, mgr):
-        store = StorageOrchestrator(mgr, "host1", "test-plugin", "test-plugin")
-        store.metric("cpu_pct", 42.5)
+    def test_apply_result_writes_metric(self, mgr):
+        mgr.apply_result("host1", "test-plugin", "test-plugin",
+                         CollectResult(metrics={"cpu_pct": 42.5}))
         mgr.flush()
         with db.connection_context():
             m = Metric.select().where(
@@ -360,13 +350,33 @@ class TestStorageOrchestratorWrites:
         assert m.value == pytest.approx(42.5)
         assert m.target == "host1"
 
-    def test_snapshot_round_trips_through_get_snapshot(self, mgr):
-        store = StorageOrchestrator(mgr, "host1", "test-plugin", "svc-list")
-        rows = [{"pid": 1, "command": "init"}, {"pid": 2, "command": "sshd"}]
-        store.snapshot(rows)
+    def test_apply_result_fans_out_status_log_and_prefixed_event(self, mgr):
+        mgr.apply_result("host1", "p", "My Plugin", CollectResult(
+            metrics={"v": 1.0}, logs=[("hi", "INFO")], status="online"))
         mgr.flush()
-        import json
-        assert json.loads(mgr.get_snapshot("svc-list")) == rows
+        with db.connection_context():
+            assert Metric.select().where(Metric.collector == "p").count() == 1
+            assert StatusHistory.select().where(
+                (StatusHistory.collector_id == "p") & (StatusHistory.state == "online")
+            ).count() == 1
+            e = Event.select().where(Event.source_id == "p").first()
+        assert "[My Plugin] hi" in e.message
+
+    def test_apply_result_writes_snapshot(self, mgr):
+        rows = [{"pid": 1, "command": "init"}, {"pid": 2, "command": "sshd"}]
+        mgr.apply_result("host1", "svc-list", "svc-list",
+                         CollectResult(snapshot=rows))
+        mgr.flush()
+        assert mgr.latest_snapshot("svc-list") == rows
+
+    def test_latest_snapshot_default_when_missing(self, mgr):
+        assert mgr.latest_snapshot("never", default=[]) == []
+        assert mgr.latest_snapshot("never") is None
+
+    def test_latest_snapshot_falls_back_on_bad_json(self, mgr):
+        mgr.set_snapshot("bad", "{not json")
+        mgr.flush()
+        assert mgr.latest_snapshot("bad", default=[]) == []
 
 
 class TestSnapshot:

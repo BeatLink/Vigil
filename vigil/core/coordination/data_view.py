@@ -1,41 +1,36 @@
 """PluginDataView — the read-only projection of the Database Engine that a
 pure plugin (and the UI Engine rendering it) is allowed to hold.
 
-A plugin never holds ``db``/``storage``/``network``; it holds one ``self.data``
-(a ``PluginDataView``) for reads. Writes go through the Coordination Engine's
-own ``StorageOrchestrator`` on the collection/action path, never through this
-view. Every method here is a read; there is deliberately no ``apply``.
+A plugin never holds ``db``/``network``; it holds one ``self.data``
+(a ``PluginDataView``) for reads. Writes go through the Coordination Engine,
+which calls ``db.apply_result(target, id, name, result)`` on the collection/
+action path, never through this view. Every method here is a read; there is
+deliberately no ``apply``.
 
-The view wraps the plugin-scoped ``StorageOrchestrator`` reads
+The view scopes the plugin-id-keyed Database Engine reads
 (``latest_metric``/``latest_snapshot``/``get_setting``) plus the handful of
-direct Database Engine reads the UI tables and bespoke plugins need, so the UI
-depends only on this read surface rather than reaching through the plugin into
-its orchestrators.
+other reads the UI tables and bespoke plugins need, so the UI depends only on
+this read surface rather than reaching through the plugin into the database.
 """
 
 from typing import Any, Dict, Optional
 
-from vigil.core.database.storage_orchestrator import StorageOrchestrator
 
 class PluginDataView:
-    def __init__(self, db: Any, plugin_id: str, target: str, plugin_name: str,
-                 store: Optional[StorageOrchestrator] = None):
+    def __init__(self, db: Any, plugin_id: str, target: str, plugin_name: str):
         self._db = db
         self._id = plugin_id
         self._target = target
-        # Reuse the plugin's StorageOrchestrator reads when the engine already
-        # built one for the write path; otherwise build a read-only one.
-        self._store = store or StorageOrchestrator(db, target, plugin_name, plugin_id)
 
-    # --- plugin-scoped reads (from StorageOrchestrator) ---
+    # --- plugin-scoped reads (scoped to this plugin's id) ---
     def latest_metric(self, metric_name: str):
-        return self._store.latest_metric(metric_name)
+        return self._db.latest_metric_cached(self._id, metric_name)
 
     def latest_snapshot(self, default: Any = None) -> Any:
-        return self._store.latest_snapshot(default)
+        return self._db.latest_snapshot(self._id, default)
 
     def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        return self._store.get_setting(key, default)
+        return self._db.get_setting(key, default)
 
     # --- direct Database Engine reads the UI tables / bespoke plugins need ---
     def latest_statuses(self, max_age: float = 2.0) -> Dict[str, str]:

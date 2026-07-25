@@ -24,7 +24,6 @@ from peewee import OperationalError
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import DispatchResult
-from vigil.core.database.storage_orchestrator import StorageOrchestrator
 from vigil.core.coordination.data_view import PluginDataView
 from vigil.core.settings.config_file import ConfigFileManager as VigilConfig
 from vigil.core.database.database import DatabaseManager as VigilDatabase
@@ -51,7 +50,6 @@ class VigilEngine:
         # uses them on the collection/action paths. _net holds each plugin's
         # SSHContext handle (the pooled connection lives in self.connectors).
         self._net: Dict[str, "SSHContext"] = {}
-        self._store: Dict[str, "StorageOrchestrator"] = {}
         if db_path_override:
             self.db_path = db_path_override
         else:
@@ -70,21 +68,21 @@ class VigilEngine:
         self.connectors = ConnectorEngine()
 
     def _wire_plugin(self, plugin: Plugin, plugin_cfg: Dict) -> None:
-        """Build the engine-owned IO/persistence for a plugin and hand it the
-        read-only data view. Keeps pure plugins free of db/network/storage."""
+        """Build the engine-owned IO for a plugin and hand it the read-only data
+        view. Keeps pure plugins free of db/network. Persistence needs no
+        per-plugin object: the engine holds the plugin's (target, id, name) and
+        writes via db.apply_result on the collection/action path."""
         net = self.connectors.ssh_context(plugin_cfg, collect_timeout=plugin.timeout)
         # The SSH pool resolves the effective target host; keep the plugin's
         # target in sync so its labels/reads match what's collected.
         plugin.target = net.target
-        store = StorageOrchestrator(self.db, plugin.target, plugin.name, plugin.id)
         self._net[plugin.id] = net
-        self._store[plugin.id] = store
-        plugin.bind(PluginDataView(self.db, plugin.id, plugin.target, plugin.name, store=store))
+        plugin.bind(PluginDataView(self.db, plugin.id, plugin.target, plugin.name))
 
-    def _store_for(self, plugin: Plugin):
-        # Fall back to a plugin-attached orchestrator (test-wired plugins that
-        # weren't registered through setup_modules on this engine instance).
-        return self._store.get(plugin.id) or getattr(plugin, 'storage', None)
+    def _apply(self, plugin: Plugin, result) -> None:
+        """Persist a plugin's CollectResult. The engine owns the write path and
+        supplies the plugin's identity; pure plugins hold no writer."""
+        self.db.apply_result(plugin.target, plugin.id, plugin.name, result)
 
     def _net_for(self, plugin: Plugin):
         return self._net.get(plugin.id) or getattr(plugin, 'network', None)
@@ -202,7 +200,7 @@ class VigilEngine:
             net = self._net_for(plugin)
             results = await self.connectors.run(net, requests) if requests else []
             result = plugin.parse_results(results)
-        self._store_for(plugin).apply(result)
+        self._apply(plugin, result)
         return True
 
     async def run_cycle_now(self, plugin: Plugin) -> bool:
@@ -227,12 +225,11 @@ class VigilEngine:
             CollectResult, HttpRequest, DnsQuery, PingRequest, IoActionPlan,
         )
 
-        store = self._store_for(plugin)
         net = self._net_for(plugin)
 
         def _finish(outcome):
             if isinstance(outcome, CollectResult):
-                store.apply(outcome)
+                self._apply(plugin, outcome)
                 return outcome.success, (outcome.metadata or None)
             return bool(outcome), None
 
@@ -240,7 +237,7 @@ class VigilEngine:
         if plan is None:
             return False, None
         if isinstance(plan, CollectResult):
-            store.apply(plan)
+            self._apply(plugin, plan)
             return plan.success, (plan.metadata or None)
         if isinstance(plan, IoActionPlan):
             io_result = await self._run_io(plan.call)
@@ -293,8 +290,8 @@ class VigilEngine:
     def apply(self, plugin: Plugin, result) -> None:
         """Persist a CollectResult a plugin produced outside the collection
         cycle (e.g. push.record_push from the REST endpoint). The plugin holds
-        no writer of its own; the engine owns the StorageOrchestrator."""
-        self._store_for(plugin).apply(result)
+        no writer of its own; the engine owns the write path."""
+        self._apply(plugin, result)
 
     # --- Job persistence, called by a plugin from its poll (parse_results) to
     # advance its detached job's Job/JobOutput rows through the engine. ---

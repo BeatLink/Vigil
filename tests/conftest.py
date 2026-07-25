@@ -2,6 +2,37 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 
+class _PluginStore:
+    """Test-only per-plugin write/read handle. Production no longer has a
+    StorageOrchestrator — the engine writes via db.apply_result(target, id,
+    name, result) — but tests keep this thin adapter so `plugin.storage.apply`/
+    `latest_metric`/`latest_snapshot`/`snapshot` stay a convenient scoped
+    surface. Every method just forwards to the identity-parameterized
+    DatabaseManager calls the real engine uses."""
+
+    def __init__(self, db, target, plugin_name, plugin_id):
+        self._db = db
+        self._target = target
+        self._name = plugin_name
+        self._id = plugin_id
+
+    def apply(self, result):
+        self._db.apply_result(self._target, self._id, self._name, result)
+
+    def snapshot(self, rows):
+        import json
+        self._db.set_snapshot(self._id, json.dumps(rows))
+
+    def latest_metric(self, metric_name):
+        return self._db.latest_metric_cached(self._id, metric_name)
+
+    def latest_snapshot(self, default=None):
+        return self._db.latest_snapshot(self._id, default)
+
+    def get_setting(self, key, default=None):
+        return self._db.get_setting(key, default)
+
+
 @pytest.fixture(autouse=True)
 def _synchronous_db_writes():
     from vigil.core.database.database import _writer
@@ -23,8 +54,7 @@ def db_manager(tmp_path):
 
 
 class _FakeEngine:
-    """Stands in for the Coordination Engine in plugin tests. Owns the same
-    per-plugin StorageOrchestrator the real engine wires, and exposes the
+    """Stands in for the Coordination Engine in plugin tests. Exposes the
     narrow engine surface pure plugins call back into (apply/set_setting and
     the DB-backed job methods). Mirrors VigilEngine's implementations so a
     plugin behaves identically here and in the real app."""
@@ -36,12 +66,8 @@ class _FakeEngine:
         self._last_collected = {}
         self.connectors = connectors
 
-    @property
-    def _store(self):
-        return {self._plugin.id: self._plugin.storage}
-
     def apply(self, plugin, result):
-        plugin.storage.apply(result)
+        self.db.apply_result(plugin.target, plugin.id, plugin.name, result)
 
     def set_setting(self, key, value):
         self.db.set_setting(key, value)
@@ -94,7 +120,6 @@ class _FakeEngine:
 def make_plugin(db_manager):
     def factory(cls, extra_config=None):
         from vigil.core.connectors.engine import ConnectorEngine
-        from vigil.core.database.storage_orchestrator import StorageOrchestrator
         from vigil.core.coordination.data_view import PluginDataView
 
         cfg = {
@@ -121,9 +146,8 @@ def make_plugin(db_manager):
         plugin.target = net.target
 
         plugin.network = net
-        plugin.storage = StorageOrchestrator(db_manager, plugin.target, plugin.name, plugin.id)
-        plugin.bind(PluginDataView(db_manager, plugin.id, plugin.target, plugin.name,
-                                   store=plugin.storage))
+        plugin.storage = _PluginStore(db_manager, plugin.target, plugin.name, plugin.id)
+        plugin.bind(PluginDataView(db_manager, plugin.id, plugin.target, plugin.name))
         plugin.engine = _FakeEngine(db_manager, plugin, connectors=connectors)
         return plugin
 
@@ -133,7 +157,7 @@ def make_plugin(db_manager):
 @pytest.fixture
 def run_cycle():
     """Drives a Plugin's commands()/parse() through a fake command
-    runner and applies the result via StorageOrchestrator, mirroring
+    runner and applies the result via plugin.storage, mirroring
     VigilEngine._run_cycle without needing a real ConnectorEngine/event
     loop scheduler. commands()/parse() are pure/synchronous, so no awaiting
     is needed here. `fake_run` maps Command -> CmdResult; defaults to (0, "", "")."""

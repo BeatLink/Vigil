@@ -42,7 +42,7 @@ class Plugin(PluginConfigMixin, ABC):
     def bind(self, data: "PluginDataView") -> None:
         """Called once by the Coordination Engine to hand the plugin its
         read-only Database Engine projection. The engine keeps the write path
-        (StorageOrchestrator) and connectors keyed by plugin id on its side."""
+        (db.apply_result) and connectors keyed by plugin id on its side."""
         self.data = data
 
     @property

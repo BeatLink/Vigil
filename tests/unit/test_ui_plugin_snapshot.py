@@ -28,14 +28,15 @@ class TestLatestSnapshot:
         assert plugin.storage.latest_snapshot() is None
 
     def test_returns_decoded_json_after_collector_writes(self, plugin, db_manager):
-        logger = db_manager.get_logger("host1", "probe", "probe")
-        logger.snapshot([{"pid": 1}, {"pid": 2}])
+        plugin.storage.snapshot([{"pid": 1}, {"pid": 2}])
         db_manager.flush()
         assert plugin.storage.latest_snapshot(default=[]) == [{"pid": 1}, {"pid": 2}]
 
     def test_scoped_by_plugin_id_not_name(self, plugin, db_manager):
-        other_logger = db_manager.get_logger("host1", "probe", "someone-else")
-        other_logger.snapshot([{"pid": 99}])
+        from vigil.core.connectors.types import CollectResult
+        # A different plugin id writing a snapshot must not leak into this one.
+        db_manager.apply_result("host1", "someone-else", "probe",
+                                CollectResult(snapshot=[{"pid": 99}]))
         db_manager.flush()
         assert plugin.storage.latest_snapshot(default=[]) == []
 
