@@ -25,7 +25,7 @@ def db_manager(tmp_path):
 @pytest.fixture
 def make_plugin(db_manager):
     def factory(cls, extra_config=None):
-        from vigil.core.connectors.orchestration.network_orchestrator import SSHConnectionPool
+        from vigil.core.connectors.ssh.network_orchestrator import SSHConnectionPool
 
         cfg = {
             "name": "test-plugin",
@@ -36,9 +36,9 @@ def make_plugin(db_manager):
         if extra_config:
             cfg.update(extra_config)
 
-        with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection") as MockSSH, \
-             patch("vigil.core.connectors.orchestration.network_orchestrator.SSHCollector") as MockCollector, \
-             patch("vigil.core.connectors.orchestration.network_orchestrator.SSHController") as MockController:
+        with patch("vigil.core.connectors.ssh.network_orchestrator.SSHConnection") as MockSSH, \
+             patch("vigil.core.connectors.ssh.network_orchestrator.SSHCollector") as MockCollector, \
+             patch("vigil.core.connectors.ssh.network_orchestrator.SSHController") as MockController:
 
             mock_conn = MagicMock()
             mock_conn.host = cfg.get("ssh_config", {}).get("host", "test.host")
@@ -58,7 +58,7 @@ def make_plugin(db_manager):
         plugin.network._controller = MagicMock(
             execute_action=AsyncMock(return_value=(0, "", ""))
         )
-        from vigil.core.connectors.job_controller import JobController
+        from vigil.core.connectors.ssh.job_controller import JobController
         mock_ssh = MagicMock()
         mock_ssh.execute_streaming = AsyncMock(return_value=(0, ""))
         plugin.network._job = JobController(

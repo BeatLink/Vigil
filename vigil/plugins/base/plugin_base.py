@@ -2,11 +2,11 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional
 
 from vigil.plugins.base.plugin_helpers import PluginConfigMixin, parse_duration
-from vigil.core.connectors.ssh import COLLECT_TIMEOUT as SSH_TIMEOUT
+from vigil.core.connectors.ssh.ssh import COLLECT_TIMEOUT as SSH_TIMEOUT
 from vigil.core.connectors.orchestration.local_io_orchestrator import LocalIOOrchestrator
-from vigil.core.connectors.orchestration.network_orchestrator import NetworkOrchestrator, SSHConnectionPool
+from vigil.core.connectors.ssh.network_orchestrator import NetworkOrchestrator, SSHConnectionPool
 from vigil.core.contracts import ActionButtonSpec, EngineLike
-from vigil.core.database.config_schema import PluginConfig
+from vigil.core.settings.config_schema import PluginConfig
 from vigil.core.database.storage_orchestrator import StorageOrchestrator
 from vigil.core.connectors.orchestration.types import (
     ActionOutcome, ActionPlanResult, CmdResult, Command, CollectResult,

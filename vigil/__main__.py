@@ -11,9 +11,9 @@ from typing import List, Optional, Dict
 from peewee import OperationalError
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.network_orchestrator import SSHConnectionPool
+from vigil.core.connectors.ssh.network_orchestrator import SSHConnectionPool
 from vigil.core.connectors.orchestration.types import DispatchResult, JobPlan
-from vigil.core.database.config_file import ConfigFileManager as VigilConfig
+from vigil.core.settings.config_file import ConfigFileManager as VigilConfig
 from vigil.core.database.database import DatabaseManager as VigilDatabase
 
 STARTUP_JITTER_SECONDS = 3.0
@@ -126,7 +126,7 @@ class VigilEngine:
         influx_cfg = exporters_cfg.get('influxdb')
         if influx_cfg and influx_cfg.get('url'):
             try:
-                from vigil.core.connectors.exporters.influxdb import InfluxDBExporter
+                from vigil.core.exporters.influxdb import InfluxDBExporter
                 exporter = InfluxDBExporter(self.db, influx_cfg)
                 asyncio.create_task(exporter.run())
                 logging.info("InfluxDB exporter task started.")

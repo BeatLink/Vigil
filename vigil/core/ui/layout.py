@@ -1,7 +1,7 @@
 from contextlib import contextmanager
 from typing import Any, Dict, List, Tuple
 
-from vigil.core.database.config_schema import PluginConfig
+from vigil.core.settings.config_schema import PluginConfig
 from vigil.core.ui.spec_types import LayoutRow
 
 

@@ -7,7 +7,7 @@ from typing import Tuple, Optional, Dict, Any, Callable
 
 import asyncssh
 
-from vigil.core.database.config_schema import PluginConfig
+from vigil.core.settings.config_schema import PluginConfig
 
 _STATE_DIR = Path(os.environ.get("VIGIL_SSH_CONTROL_DIR",
                                  Path(tempfile.gettempdir()) / "vigil-ssh"))

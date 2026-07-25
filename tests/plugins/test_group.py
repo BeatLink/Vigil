@@ -14,10 +14,10 @@ GROUP_CFG = {
 
 @pytest.fixture
 def group(db_manager):
-    from vigil.core.connectors.orchestration.network_orchestrator import SSHConnectionPool
-    with patch("vigil.core.connectors.orchestration.network_orchestrator.SSHConnection") as MockSSH, \
-         patch("vigil.core.connectors.orchestration.network_orchestrator.SSHCollector"), \
-         patch("vigil.core.connectors.orchestration.network_orchestrator.SSHController"):
+    from vigil.core.connectors.ssh.network_orchestrator import SSHConnectionPool
+    with patch("vigil.core.connectors.ssh.network_orchestrator.SSHConnection") as MockSSH, \
+         patch("vigil.core.connectors.ssh.network_orchestrator.SSHCollector"), \
+         patch("vigil.core.connectors.ssh.network_orchestrator.SSHController"):
         MockSSH.from_config.return_value = MagicMock(host="localhost")
         plugin = Group("test-group", GROUP_CFG, db_manager, SSHConnectionPool())
     return plugin
