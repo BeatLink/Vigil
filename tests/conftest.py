@@ -29,11 +29,12 @@ class _FakeEngine:
     the DB-backed job methods). Mirrors VigilEngine's implementations so a
     plugin behaves identically here and in the real app."""
 
-    def __init__(self, db, plugin):
+    def __init__(self, db, plugin, connectors=None):
         self.db = db
         self._plugin = plugin
         self.plugins = [plugin]
         self._last_collected = {}
+        self.connectors = connectors
 
     @property
     def _store(self):
@@ -65,7 +66,7 @@ class _FakeEngine:
         job = self.job_running(plugin)
         if not job or not job.get('pid'):
             return False
-        await plugin.network.execute_raw(cancel_command(job['pid']))
+        await self.connectors.execute_raw(plugin.network, cancel_command(job['pid']))
         self.db.finish_job(job['id'], 'cancelled', exit_code=130, error='Cancelled by user')
         return True
 
@@ -92,8 +93,7 @@ class _FakeEngine:
 @pytest.fixture
 def make_plugin(db_manager):
     def factory(cls, extra_config=None):
-        from vigil.core.connectors.ssh.network_orchestrator import (
-            NetworkOrchestrator, SSHConnectionPool)
+        from vigil.core.connectors.engine import ConnectorEngine
         from vigil.core.database.storage_orchestrator import StorageOrchestrator
         from vigil.core.coordination.data_view import PluginDataView
 
@@ -111,24 +111,20 @@ def make_plugin(db_manager):
 
         # Engine-owned IO/persistence, built and attached the way
         # VigilEngine._wire_plugin does — but with the SSH transport mocked.
-        with patch("vigil.core.connectors.ssh.network_orchestrator.SSHConnection") as MockSSH, \
-             patch("vigil.core.connectors.ssh.network_orchestrator.SSHCollector"), \
-             patch("vigil.core.connectors.ssh.network_orchestrator.SSHController"):
+        connectors = ConnectorEngine()
+        with patch("vigil.core.connectors.engine.SSHConnection") as MockSSH:
             mock_conn = MagicMock()
             mock_conn.host = cfg.get("ssh_config", {}).get("host", "test.host")
+            mock_conn.execute = AsyncMock(return_value=(0, "", ""))
             MockSSH.from_config.return_value = mock_conn
-            pool = SSHConnectionPool()
-            net = NetworkOrchestrator(cfg, db_manager, plugin.id, plugin.target,
-                                      plugin.timeout, pool)
+            net = connectors.ssh_context(cfg, collect_timeout=plugin.timeout)
         plugin.target = net.target
-        net._collector = MagicMock(fetch_output=AsyncMock(return_value=(0, "", "")))
-        net._controller = MagicMock(execute_action=AsyncMock(return_value=(0, "", "")))
 
         plugin.network = net
         plugin.storage = StorageOrchestrator(db_manager, plugin.target, plugin.name, plugin.id)
         plugin.bind(PluginDataView(db_manager, plugin.id, plugin.target, plugin.name,
                                    store=plugin.storage))
-        plugin.engine = _FakeEngine(db_manager, plugin)
+        plugin.engine = _FakeEngine(db_manager, plugin, connectors=connectors)
         return plugin
 
     return factory
@@ -138,7 +134,7 @@ def make_plugin(db_manager):
 def run_cycle():
     """Drives a Plugin's commands()/parse() through a fake command
     runner and applies the result via StorageOrchestrator, mirroring
-    VigilEngine._run_cycle without needing a real NetworkOrchestrator/event
+    VigilEngine._run_cycle without needing a real ConnectorEngine/event
     loop scheduler. commands()/parse() are pure/synchronous, so no awaiting
     is needed here. `fake_run` maps Command -> CmdResult; defaults to (0, "", "")."""
     from vigil.core.connectors.types import CmdResult
