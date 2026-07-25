@@ -113,6 +113,34 @@ class TestLogRetentionConfig:
         assert cfg.log_retention_days == 30
 
 
+class TestMetricRetentionConfig:
+    def test_defaults_to_log_retention_when_unset(self, write_yaml):
+        path = write_yaml({"logging": {"retention_days": 7}})
+        cfg = ConfigFileManager(path)
+        assert cfg.metric_retention_days == 7
+
+    def test_defaults_to_30_when_nothing_set(self, write_yaml):
+        path = write_yaml({"plugins": []})
+        cfg = ConfigFileManager(path)
+        assert cfg.metric_retention_days == 30
+
+    def test_reads_configured_value(self, write_yaml):
+        path = write_yaml({"logging": {"retention_days": 7, "metric_retention_days": 90}})
+        cfg = ConfigFileManager(path)
+        assert cfg.metric_retention_days == 90
+
+    def test_zero_disables_independently_of_logs(self, write_yaml):
+        path = write_yaml({"logging": {"retention_days": 30, "metric_retention_days": 0}})
+        cfg = ConfigFileManager(path)
+        assert cfg.metric_retention_days == 0
+        assert cfg.log_retention_days == 30
+
+    def test_invalid_value_falls_back_to_log_retention(self, write_yaml):
+        path = write_yaml({"logging": {"retention_days": 15, "metric_retention_days": "nope"}})
+        cfg = ConfigFileManager(path)
+        assert cfg.metric_retention_days == 15
+
+
 class TestAlertAndControlProperties:
     def test_alert_handlers_empty_when_missing(self, write_yaml):
         path = write_yaml({"plugins": []})

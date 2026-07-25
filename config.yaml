@@ -12,7 +12,9 @@ database:
 # Collected log lines (e.g. journald output) are stored persistently and
 # deduplicated. Old lines are pruned automatically.
 logging:
-  retention_days: 30   # Days to keep log lines; 0 disables pruning (keep forever)
+  retention_days: 30          # Days to keep log lines; 0 disables pruning (keep forever)
+  metric_retention_days: 30   # Days to keep metrics & status history (powers charts);
+                              # 0 disables. Omit to reuse retention_days above.
 
 # Metric export (optional).
 # Prometheus is always available (pull) at GET /metrics — no config needed.

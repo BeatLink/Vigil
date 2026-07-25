@@ -42,6 +42,7 @@ class VigilEngine:
         self.config = self.config_loader.data
         self.plugins: List[Plugin] = []
         self.log_retention_days = self.config_loader.log_retention_days
+        self.metric_retention_days = self.config_loader.metric_retention_days
         self._last_prune = 0.0
         self._collecting: Dict[str, bool] = {}
         self._last_collected: Dict[str, float] = {}
@@ -345,14 +346,21 @@ class VigilEngine:
         asyncio.create_task(self._prune_loop())
 
     def _maybe_prune_logs(self, interval: float = 3600.0):
-        if self.log_retention_days <= 0:
+        # Nothing to prune if both retention windows are disabled (0/negative).
+        if self.log_retention_days <= 0 and self.metric_retention_days <= 0:
             return
         now = time.monotonic()
         if now - self._last_prune < interval:
             return
         self._last_prune = now
         try:
+            # Logs and jobs share the log-retention window; metrics and status
+            # history use their own (metric_retention_days, which defaults to
+            # log_retention_days when unset). Each prune_* is a no-op when its
+            # window is <= 0, so the two schedules are independent.
             self.db.prune_logs(self.log_retention_days)
             self.db.prune_jobs(self.log_retention_days)
+            self.db.prune_metrics(self.metric_retention_days)
+            self.db.prune_status(self.metric_retention_days)
         except Exception as e:
-            logging.error(f"Log retention prune failed: {e}")
+            logging.error(f"Retention prune failed: {e}")

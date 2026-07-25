@@ -114,29 +114,6 @@ def _job_to_dict(job: 'Job') -> JobDict:
     }
 
 
-class InternalDatabaseLogger:
-    def __init__(self, db_manager: 'DatabaseManager', target: str, plugin_name: str,
-                 plugin_id: Optional[str] = None):
-        self.db = db_manager
-        self.target = target
-        self.plugin_name = plugin_name
-        self.plugin_id = plugin_id or plugin_name
-
-    def write(self, message: str, level: str = "INFO"):
-        formatted_message = f"[{self.plugin_name}] {message}"
-        self.db.insert_event(level, formatted_message, self.target,
-                             source_id=self.plugin_id)
-
-    def metric(self, name: str, value: float, metadata: Optional[str] = None):
-        self.db.insert_metric(self.target, self.plugin_id, name, value, metadata)
-
-    def log_line(self, message: str, level: str = "INFO", log_time: Optional[str] = None):
-        self.db.insert_log_line(self.target, self.plugin_id, level, message, log_time)
-
-    def snapshot(self, rows: Any):
-        import json
-        self.db.set_snapshot(self.plugin_id, json.dumps(rows))
-
 class DatabaseManager:
     def __init__(self, db_path: str = "vigil.db", write_batch_seconds: float = 1.0):
         self.db_path = db_path
@@ -408,6 +385,48 @@ class DatabaseManager:
         _writer.submit(_do_prune)
         return 0
 
+    def prune_metrics(self, retention_days: int) -> int:
+        """Delete Metric rows older than the retention window. Unlike logs and
+        jobs, metrics are inserted on every poll of every plugin, so without
+        this the table (and every dashboard query that scans it) grows without
+        bound. 0/None disables pruning (keep forever), matching prune_logs."""
+        if retention_days is None or retention_days <= 0:
+            return 0
+        cutoff = datetime.now() - timedelta(days=retention_days)
+
+        def _do_prune():
+            deleted = Metric.delete().where(Metric.timestamp < cutoff).execute()
+            if deleted:
+                logging.info(f"Pruned {deleted} metric(s) older than {retention_days}d")
+
+        _writer.submit(_do_prune)
+        return 0
+
+    def prune_status(self, retention_days: int) -> int:
+        """Delete StatusHistory rows older than the retention window. Like
+        metrics, a status row is written on every poll, so the table grows
+        unbounded without pruning. The most recent row per collector is kept
+        regardless of age so latest_status* never loses a plugin's current
+        state to pruning. 0/None disables (keep forever)."""
+        if retention_days is None or retention_days <= 0:
+            return 0
+        cutoff = datetime.now() - timedelta(days=retention_days)
+
+        def _do_prune():
+            newest = (StatusHistory
+                      .select(fn.MAX(StatusHistory.id))
+                      .group_by(StatusHistory.collector_id))
+            deleted = (StatusHistory
+                       .delete()
+                       .where((StatusHistory.timestamp < cutoff)
+                              & (StatusHistory.id.not_in(newest)))
+                       .execute())
+            if deleted:
+                logging.info(f"Pruned {deleted} status row(s) older than {retention_days}d")
+
+        _writer.submit(_do_prune)
+        return 0
+
 
     def create_job(self, plugin_id: str, target: str, kind: str, command: str,
                    workdir: Optional[str] = None) -> int:
@@ -534,10 +553,6 @@ class DatabaseManager:
     def set_setting(self, key: str, value: str):
         _writer.submit(lambda: Setting.insert(key=key, value=value).on_conflict_replace().execute(),
                        event='setting')
-
-    def get_logger(self, target: str, plugin_name: str,
-                   plugin_id: Optional[str] = None) -> InternalDatabaseLogger:
-        return InternalDatabaseLogger(self, target, plugin_name, plugin_id)
 
     def set_snapshot(self, plugin_id: str, data: str):
         _writer.submit(

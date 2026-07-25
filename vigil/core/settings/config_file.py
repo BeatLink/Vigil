@@ -79,6 +79,24 @@ class ConfigFileManager:
             return self.DEFAULT_LOG_RETENTION_DAYS
 
     @property
+    def metric_retention_days(self) -> int:
+        """How long to keep Metric and StatusHistory rows. Metrics power the
+        charts, so this is a separate knob from log retention; when unset it
+        defaults to log_retention_days so existing configs get bounded metric
+        growth automatically. 0 disables (keep forever)."""
+        value = self.logging_settings.get('metric_retention_days')
+        if value is None:
+            return self.log_retention_days
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logging.warning(
+                f"Invalid logging.metric_retention_days={value!r}; "
+                f"falling back to log retention ({self.log_retention_days}d)"
+            )
+            return self.log_retention_days
+
+    @property
     def ssh_defaults(self) -> SSHConfig:
         return self.data.get('ssh_defaults', {})
 

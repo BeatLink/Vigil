@@ -28,6 +28,7 @@ class DatabaseSettings(TypedDict, total=False):
 
 class LoggingSettings(TypedDict, total=False):
     retention_days: int
+    metric_retention_days: int
 
 
 class AuthSettings(TypedDict, total=False):

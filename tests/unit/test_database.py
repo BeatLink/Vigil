@@ -3,6 +3,7 @@ import pytest
 from vigil.core.database.database import (
     DatabaseManager, Metric, Event, Setting, StatusHistory, LogLine, PluginSnapshot, db,
 )
+from vigil.core.database.storage_orchestrator import StorageOrchestrator
 
 
 @pytest.fixture
@@ -212,10 +213,85 @@ class TestLogRetention:
             assert LogLine.select().count() == 1
 
 
+class TestMetricRetention:
+    def _insert_aged(self, days_old: int, name: str, value: float = 1.0):
+        with db.connection_context():
+            Metric.create(
+                timestamp=datetime.now() - timedelta(days=days_old),
+                target="h", collector="c", metric_name=name, value=value,
+            )
+
+    def test_prune_removes_old_metrics(self, mgr):
+        self._insert_aged(40, "old")
+        self._insert_aged(1, "fresh")
+        mgr.prune_metrics(retention_days=30)
+        mgr.flush()
+        with db.connection_context():
+            remaining = [m.metric_name for m in Metric.select()]
+        assert remaining == ["fresh"]
+
+    def test_prune_keeps_metrics_within_window(self, mgr):
+        self._insert_aged(5, "recent")
+        mgr.prune_metrics(retention_days=30)
+        mgr.flush()
+        with db.connection_context():
+            assert Metric.select().count() == 1
+
+    def test_prune_zero_disables_and_keeps_all(self, mgr):
+        self._insert_aged(400, "ancient")
+        mgr.prune_metrics(retention_days=0)
+        mgr.flush()
+        with db.connection_context():
+            assert Metric.select().count() == 1
+
+    def test_prune_negative_disables(self, mgr):
+        self._insert_aged(400, "ancient")
+        mgr.prune_metrics(retention_days=-1)
+        mgr.flush()
+        with db.connection_context():
+            assert Metric.select().count() == 1
+
+
+class TestStatusRetention:
+    def _insert_aged(self, days_old: int, collector_id: str, state: str = 'online'):
+        with db.connection_context():
+            StatusHistory.create(
+                timestamp=datetime.now() - timedelta(days=days_old),
+                collector_id=collector_id, state=state,
+            )
+
+    def test_prune_removes_old_status_rows(self, mgr):
+        self._insert_aged(40, "a", "online")   # old, not the newest for 'a'
+        self._insert_aged(1, "a", "failed")    # newest for 'a', kept anyway
+        mgr.prune_status(retention_days=30)
+        mgr.flush()
+        with db.connection_context():
+            remaining = [s.state for s in StatusHistory.select()]
+        assert remaining == ["failed"]
+
+    def test_prune_keeps_newest_row_per_collector_even_if_old(self, mgr):
+        # A plugin whose only status row is older than the window must not lose
+        # its current state — latest_status* relies on it always being present.
+        self._insert_aged(400, "stale", "offline")
+        mgr.prune_status(retention_days=30)
+        mgr.flush()
+        with db.connection_context():
+            rows = [(s.collector_id, s.state) for s in StatusHistory.select()]
+        assert rows == [("stale", "offline")]
+
+    def test_prune_zero_disables_and_keeps_all(self, mgr):
+        self._insert_aged(400, "a", "online")
+        self._insert_aged(300, "a", "failed")
+        mgr.prune_status(retention_days=0)
+        mgr.flush()
+        with db.connection_context():
+            assert StatusHistory.select().count() == 2
+
+
 class TestLogLineLogger:
-    def test_log_line_via_logger(self, mgr):
-        logger = mgr.get_logger("host1", "my-plugin")
-        logger.log_line("a log message", level="ERROR", log_time="2024-01-01T00:00:00")
+    def test_log_line_via_orchestrator(self, mgr):
+        store = StorageOrchestrator(mgr, "host1", "my-plugin", "my-plugin")
+        store.log_line("a log message", level="ERROR", log_time="2024-01-01T00:00:00")
         mgr.flush()
         with db.connection_context():
             row = LogLine.select().where(LogLine.source == "my-plugin").first()
@@ -224,10 +300,10 @@ class TestLogLineLogger:
         assert row.level == "ERROR"
         assert row.target == "host1"
 
-    def test_logger_dedups_repeated_line(self, mgr):
-        logger = mgr.get_logger("host1", "my-plugin")
-        logger.log_line("dup", log_time="t1")
-        logger.log_line("dup", log_time="t1")
+    def test_orchestrator_dedups_repeated_line(self, mgr):
+        store = StorageOrchestrator(mgr, "host1", "my-plugin", "my-plugin")
+        store.log_line("dup", log_time="t1")
+        store.log_line("dup", log_time="t1")
         mgr.flush()
         with db.connection_context():
             assert LogLine.select().where(LogLine.message == "dup").count() == 1
@@ -252,15 +328,19 @@ class TestSettings:
         assert mgr.get_setting("k") == "v2"
 
 
-class TestInternalDatabaseLogger:
-    def test_get_logger_returns_scoped_logger(self, mgr):
-        logger = mgr.get_logger("host1", "my-plugin")
-        assert logger.target == "host1"
-        assert logger.plugin_name == "my-plugin"
+class TestStorageOrchestratorWrites:
+    def test_scoped_identity(self, mgr):
+        store = StorageOrchestrator(mgr, "host1", "my-plugin", "my-plugin")
+        assert store.target == "host1"
+        assert store.plugin_name == "my-plugin"
+
+    def test_id_falls_back_to_name_when_empty(self, mgr):
+        store = StorageOrchestrator(mgr, "host1", "my-plugin", "")
+        assert store.plugin_id == "my-plugin"
 
     def test_write_inserts_prefixed_event(self, mgr):
-        logger = mgr.get_logger("host1", "test-plugin")
-        logger.write("something happened", level="WARNING")
+        store = StorageOrchestrator(mgr, "host1", "test-plugin", "test-plugin")
+        store.write("something happened", level="WARNING")
         mgr.flush()
         with db.connection_context():
             e = Event.select().where(Event.level == "WARNING").first()
@@ -269,8 +349,8 @@ class TestInternalDatabaseLogger:
         assert e.target == "host1"
 
     def test_metric_inserts_metric_row(self, mgr):
-        logger = mgr.get_logger("host1", "test-plugin")
-        logger.metric("cpu_pct", 42.5)
+        store = StorageOrchestrator(mgr, "host1", "test-plugin", "test-plugin")
+        store.metric("cpu_pct", 42.5)
         mgr.flush()
         with db.connection_context():
             m = Metric.select().where(
@@ -281,9 +361,9 @@ class TestInternalDatabaseLogger:
         assert m.target == "host1"
 
     def test_snapshot_round_trips_through_get_snapshot(self, mgr):
-        logger = mgr.get_logger("host1", "test-plugin", "svc-list")
+        store = StorageOrchestrator(mgr, "host1", "test-plugin", "svc-list")
         rows = [{"pid": 1, "command": "init"}, {"pid": 2, "command": "sshd"}]
-        logger.snapshot(rows)
+        store.snapshot(rows)
         mgr.flush()
         import json
         assert json.loads(mgr.get_snapshot("svc-list")) == rows
