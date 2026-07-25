@@ -47,8 +47,8 @@ _DEFAULT_LAYOUT = [
 
 
 class NetworkUsage(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.interface: Optional[str] = config.get('interface')
         self._active_interface: Optional[str] = self.interface
 

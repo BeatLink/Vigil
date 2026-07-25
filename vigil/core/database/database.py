@@ -396,6 +396,18 @@ class DatabaseManager:
                 return row.state if row else 'offline'
         return self._cached(('status', collector_id), max_age, _fetch)
 
+    def latest_status_time_cached(self, collector_id: str, max_age: float = 1.0):
+        """The timestamp of the most recent status row (or None) — for UIs
+        that show 'last checked' distinct from the status value itself."""
+        def _fetch():
+            with db.connection_context():
+                row = (StatusHistory.select()
+                       .where(StatusHistory.collector_id == collector_id)
+                       .order_by(StatusHistory.timestamp.desc())
+                       .first())
+                return row.timestamp if row else None
+        return self._cached(('status_time', collector_id), max_age, _fetch)
+
     def insert_event(self, level: str, message: str, target: Optional[str] = None,
                      source_id: Optional[str] = None):
         _writer.submit(lambda: Event.create(level=level, message=message, target=target,

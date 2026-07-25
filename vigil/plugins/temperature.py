@@ -27,8 +27,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Temperature(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.temp_warning   = int(config.get('temp_warning',   70))
         self.temp_threshold = int(config.get('temp_threshold', 80))
 

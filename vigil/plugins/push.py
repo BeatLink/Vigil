@@ -14,8 +14,8 @@ _VALID_PUSH_STATUSES = {'up', 'down'}
 
 
 class Push(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.max_age = int(config.get('max_age', self.interval * 2))
         self.token = config.get('token')
         self.target = config.get('target_host', self.name)
@@ -65,7 +65,7 @@ class Push(Plugin):
             logs=[(f"Heartbeat received (status={status}){detail}", log_level)],
             status='online' if is_up else 'failed',
         )
-        self.storage.apply(result)
+        self.engine.apply(self, result)
         return True
 
     @property

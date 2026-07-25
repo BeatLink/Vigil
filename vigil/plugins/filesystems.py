@@ -61,8 +61,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Filesystems(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.warning   = int(config.get('warning',   80))
         self.threshold = int(config.get('threshold', 90))
         self.inode_warning   = int(config.get('inode_warning',   85))

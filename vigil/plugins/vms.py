@@ -34,8 +34,8 @@ def _parse_row(line: str):
 
 
 class Vms(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.uri = config.get('uri', 'qemu:///system')
         self.expect_running = set(config.get('expect_running', []) or [])
         self.offline_warning = bool(config.get('offline_warning', True))

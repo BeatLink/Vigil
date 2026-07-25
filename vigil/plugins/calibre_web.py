@@ -73,8 +73,8 @@ class CalibreWeb(Plugin):
         'events': True,
     }
 
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.url = config.get('url', 'http://127.0.0.1:8083')
         self.username = config.get('username', 'vigil')
         self.password = config.get('password')

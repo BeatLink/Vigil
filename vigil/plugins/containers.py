@@ -32,8 +32,8 @@ class Containers(Plugin):
         'events': True,
     }
 
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.runtime = config.get('runtime', 'docker')
         self.expect_running = set(config.get('expect_running', []) or [])
         self.stopped_warning = bool(config.get('stopped_warning', True))

@@ -32,8 +32,8 @@ _RUNNING_SUBSTATES = {'running', 'start', 'start-pre', 'start-post', 'start-chro
 
 
 class SystemdService(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.service_name = config.get('service_name')
         self.lines = config.get('lines', 10)
         self.max_age = parse_duration(config['max_age']) if 'max_age' in config else None
@@ -260,7 +260,6 @@ class SystemdService(Plugin):
             self._render_continuous_ui(context)
 
     def _render_continuous_ui(self, context: str = 'page'):
-        from vigil.core.database.database import StatusHistory
         from vigil.core.ui.layout import PluginLayout, make_inline_layout
         from vigil.core.ui.components import info_card
 
@@ -287,11 +286,9 @@ class SystemdService(Plugin):
             self.ui.logs_table(page, title='LOGS', limit=100, full_height=True)
 
         def update_time():
-            last = StatusHistory.select().where(
-                StatusHistory.collector_id == self.id
-            ).order_by(StatusHistory.timestamp.desc()).first()
-            if last:
-                time_label.text = last.timestamp.strftime('%H:%M:%S')
+            ts = self.data.latest_status_time(self.id)
+            if ts:
+                time_label.text = ts.strftime('%H:%M:%S')
 
         page.on_refresh(update_time)
         page.start()

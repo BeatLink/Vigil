@@ -47,6 +47,9 @@ class PluginDataView:
     def latest_status_cached(self, collector_id: str, max_age: float = 1.0):
         return self._db.latest_status_cached(collector_id, max_age=max_age)
 
+    def latest_status_time(self, collector_id: Optional[str] = None, max_age: float = 1.0):
+        return self._db.latest_status_time_cached(collector_id or self._id, max_age=max_age)
+
     def collector_metrics_cached(self, collector: str, limit: int = 15, max_age: float = 1.0):
         return self._db.collector_metrics_cached(collector, limit=limit, max_age=max_age)
 

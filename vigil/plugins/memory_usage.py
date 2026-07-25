@@ -15,8 +15,8 @@ _DEFAULT_LAYOUT = [
 
 
 class MemoryUsage(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.memory_warning   = int(config.get('memory_warning',   75))
         self.memory_threshold = int(config.get('memory_threshold', 90))
 

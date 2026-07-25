@@ -23,8 +23,10 @@ from typing import List, Optional, Dict
 from peewee import OperationalError
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.ssh.network_orchestrator import SSHConnectionPool
+from vigil.core.connectors.ssh.network_orchestrator import NetworkOrchestrator, SSHConnectionPool
 from vigil.core.connectors.types import DispatchResult, JobPlan
+from vigil.core.database.storage_orchestrator import StorageOrchestrator
+from vigil.core.coordination.data_view import PluginDataView
 from vigil.core.settings.config_file import ConfigFileManager as VigilConfig
 from vigil.core.database.database import DatabaseManager as VigilDatabase
 from vigil.core.exporters import ExporterEngine
@@ -45,6 +47,11 @@ class VigilEngine:
         self.ssh_pool = SSHConnectionPool()
         self._collecting: Dict[str, bool] = {}
         self._last_collected: Dict[str, float] = {}
+        # Engine-owned per-plugin IO/persistence, keyed by plugin id. Pure
+        # plugins never hold these; the engine wires them in setup_modules and
+        # uses them on the collection/action paths.
+        self._net: Dict[str, "NetworkOrchestrator"] = {}
+        self._store: Dict[str, "StorageOrchestrator"] = {}
         if db_path_override:
             self.db_path = db_path_override
         else:
@@ -61,6 +68,35 @@ class VigilEngine:
 
         self.exporters = ExporterEngine(self.db, self.config_loader.exporters)
         self.connectors = ConnectorEngine()
+
+    def _wire_plugin(self, plugin: Plugin, plugin_cfg: Dict) -> None:
+        """Build the engine-owned IO/persistence for a plugin and hand it the
+        read-only data view. Keeps pure plugins free of db/network/storage."""
+        net = NetworkOrchestrator(
+            plugin_cfg, self.db, plugin.id, plugin.target, plugin.timeout, self.ssh_pool)
+        # NetworkOrchestrator resolves the effective SSH target host; keep the
+        # plugin's target in sync so its labels/reads match what's collected.
+        plugin.target = net.target
+        store = StorageOrchestrator(self.db, plugin.target, plugin.name, plugin.id)
+        self._net[plugin.id] = net
+        self._store[plugin.id] = store
+        plugin.bind(PluginDataView(self.db, plugin.id, plugin.target, plugin.name, store=store))
+
+    def _store_for(self, plugin: Plugin):
+        # Fall back to a plugin-attached orchestrator (test-wired plugins that
+        # weren't registered through setup_modules on this engine instance).
+        return self._store.get(plugin.id) or getattr(plugin, 'storage', None)
+
+    def _net_for(self, plugin: Plugin):
+        return self._net.get(plugin.id) or getattr(plugin, 'network', None)
+
+    async def _run_io(self, fn):
+        """Run a plugin's io_call()/IoActionPlan closure off the event loop
+        (or await it if it's a coroutine function). Engine-owned so pure
+        plugins never do their own thread offloading."""
+        if inspect.iscoroutinefunction(fn):
+            return await fn()
+        return await asyncio.to_thread(fn)
 
     def _apply_ssh_defaults(self, plugin_cfg: Dict) -> Dict:
         defaults = self.config_loader.ssh_defaults
@@ -85,8 +121,9 @@ class VigilEngine:
 
                 for _, obj in inspect.getmembers(module, inspect.isclass):
                     if issubclass(obj, Plugin) and obj is not Plugin:
-                        plugin_instance = obj(name, plugin_cfg, self.db, self.ssh_pool)
+                        plugin_instance = obj(name, plugin_cfg)
                         plugin_instance.engine = self
+                        self._wire_plugin(plugin_instance, plugin_cfg)
 
                         if 'children' in plugin_cfg:
                             plugin_instance.children = self.setup_modules(plugin_cfg['children'])
@@ -149,22 +186,24 @@ class VigilEngine:
 
     async def _run_cycle(self, plugin: Plugin) -> bool:
         """The collection loop: all async/IO lives here; the plugin's
-        requests()/parse_results() (and the legacy local_call()/parse_local()
-        for plugins not yet migrated) are pure and touched only from here.
+        requests()/parse_results() (and io_call() for the sequential-local-IO
+        case) are pure and touched only from here.
 
         A plugin declares a heterogeneous request list (SSH Commands, HTTP,
         DNS, ICMP); the Connector Engine routes and executes them, and the
         plugin's pure parse_results() turns the results into a CollectResult
-        the Database Engine persists."""
-        local_fn = plugin.local_call()
-        if local_fn is not None:
-            local_result = await plugin.local_io.run(local_fn)
-            result = plugin.parse_local(local_result)
+        the Database Engine persists. The rare plugin with genuinely
+        sequential/conditional local IO uses io_call() instead."""
+        io_fn = plugin.io_call()
+        if io_fn is not None:
+            io_result = await self._run_io(io_fn)
+            result = plugin.parse_results([io_result])
         else:
             requests = plugin.requests()
-            results = await self.connectors.run(plugin.network, requests) if requests else []
+            net = self._net_for(plugin)
+            results = await self.connectors.run(net, requests) if requests else []
             result = plugin.parse_results(results)
-        plugin.storage.apply(result)
+        self._store_for(plugin).apply(result)
         return True
 
     async def run_cycle_now(self, plugin: Plugin) -> bool:
@@ -185,50 +224,70 @@ class VigilEngine:
         .metadata dict when one was applied (e.g. carrying 'content' for
         read-style dialog actions), else None. Plain bool outcomes (the
         common write/dispatch case) return (bool, None)."""
-        from vigil.core.connectors.types import CollectResult, LocalActionPlan
+        from vigil.core.connectors.types import (
+            CollectResult, HttpRequest, DnsQuery, PingRequest, IoActionPlan,
+        )
+
+        store = self._store_for(plugin)
+        net = self._net_for(plugin)
+
+        def _finish(outcome):
+            if isinstance(outcome, CollectResult):
+                store.apply(outcome)
+                return outcome.success, (outcome.metadata or None)
+            return bool(outcome), None
 
         plan = plugin.plan_action(action_id, **kwargs)
         if plan is None:
             return False, None
         if isinstance(plan, CollectResult):
-            plugin.storage.apply(plan)
+            store.apply(plan)
             return plan.success, (plan.metadata or None)
         if isinstance(plan, JobPlan):
             on_line = plugin.job_on_line(action_id, **kwargs)
-            _, status = await plugin.network.run_job_plan(plan, on_line=on_line)
-            outcome = plugin.interpret_job(action_id, status, **kwargs)
-            if isinstance(outcome, CollectResult):
-                plugin.storage.apply(outcome)
-                return outcome.success, (outcome.metadata or None)
-            return bool(outcome), None
-        if isinstance(plan, LocalActionPlan):
-            local_result = await plugin.local_io.run(plan.call)
-            outcome = plugin.interpret_local_action(action_id, local_result, **kwargs)
-            if isinstance(outcome, CollectResult):
-                plugin.storage.apply(outcome)
-                return outcome.success, (outcome.metadata or None)
-            return bool(outcome), None
-        result = await plugin.network.execute(plan)
-        outcome = plugin.interpret_action(action_id, result, **kwargs)
-        if isinstance(outcome, CollectResult):
-            plugin.storage.apply(outcome)
-            return outcome.success, (outcome.metadata or None)
-        return bool(outcome), None
+            _, status = await net.run_job_plan(plan, on_line=on_line)
+            return _finish(plugin.interpret_job(action_id, status, **kwargs))
+        if isinstance(plan, IoActionPlan):
+            io_result = await self._run_io(plan.call)
+            return _finish(plugin.interpret_action(action_id, io_result, **kwargs))
+        if isinstance(plan, (HttpRequest, DnsQuery, PingRequest)):
+            result = (await self.connectors.run(net, [plan]))[0]
+            return _finish(plugin.interpret_action(action_id, result, **kwargs))
+        # Default: an ActionPlan — a short SSH command.
+        result = await net.execute(plan)
+        return _finish(plugin.interpret_action(action_id, result, **kwargs))
 
     # --- Job-control surface the UI Engine's job panel calls through the
     # engine, since these touch the live JobController (not a pure DB read)
     # and a pure plugin no longer holds self.network. ---
     def job_is_running(self, plugin: Plugin) -> bool:
-        return plugin.network.is_running()
+        return self._net_for(plugin).is_running()
 
     def job_current_id(self, plugin: Plugin) -> Optional[int]:
-        return plugin.network.current_job_id()
+        return self._net_for(plugin).current_job_id()
 
     def job_recent(self, plugin: Plugin, limit: int = 20) -> list:
-        return plugin.network.recent(limit=limit)
+        return self._net_for(plugin).recent(limit=limit)
 
     async def job_cancel(self, plugin: Plugin) -> bool:
-        return plugin.network.cancel()
+        return self._net_for(plugin).cancel()
+
+    def set_setting(self, key: str, value: str) -> None:
+        """UI-triggered setting write (e.g. a group's expand/collapse state)
+        the Database Engine persists. Pure plugins read settings via their
+        data view and route the occasional write back through the engine."""
+        self.db.set_setting(key, value)
+
+    def apply(self, plugin: Plugin, result) -> None:
+        """Persist a CollectResult a plugin produced outside the collection
+        cycle (e.g. push.record_push from the REST endpoint). The plugin holds
+        no writer of its own; the engine owns the StorageOrchestrator."""
+        self._store_for(plugin).apply(result)
+
+    def set_job_progress(self, job_id: int, summary: str) -> None:
+        """Streaming job-progress write (borg's per-line progress) the
+        Database Engine persists on the plugin's behalf."""
+        self.db.set_job_progress(job_id, summary)
 
     async def _monitor_loop(self, plugin: Plugin):
         await asyncio.sleep(random.uniform(0, STARTUP_JITTER_SECONDS))

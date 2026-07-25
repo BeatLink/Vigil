@@ -30,8 +30,8 @@ _LIST_UNIT_FILES_CMD = (
 
 
 class ServiceList(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.max_logs = int(config.get('lines', 10))
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
 

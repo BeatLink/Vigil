@@ -1,5 +1,5 @@
 import json
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import CmdResult, Command, CollectResult
@@ -13,18 +13,18 @@ SEVERITY_ORDER = {
 
 
 class Group(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
-        self._expanded: Dict[str, bool] = self._load_expanded()
-
     def commands(self) -> List[Command]:
         return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         return CollectResult()
 
-    def local_call(self) -> Optional[Callable[[], Any]]:
-        return lambda: self.db.latest_statuses()
+    def parse_results(self, results: List[Any]) -> CollectResult:
+        """A group issues no requests; each cycle it re-reads live child
+        status from the Database Engine (via the read-only data view) and
+        folds it into a worst-case aggregate status."""
+        statuses = self.data.latest_statuses()
+        return CollectResult(status=self._aggregate_status(statuses))
 
     def _aggregate_status(self, statuses: Dict[str, str]) -> str:
         current_max_severity = SEVERITY_ORDER['online']
@@ -40,23 +40,25 @@ class Group(Plugin):
             'offline',
         )
 
-    def parse_local(self, result: Any) -> CollectResult:
-        return CollectResult(status=self._aggregate_status(result))
-
     def _setting_key(self) -> str:
         return f'group_expanded_{self.id}'
 
-    def _load_expanded(self) -> Dict[str, bool]:
-        raw = self.data.get_setting(self._setting_key())
-        if raw is None:
-            return {}
-        try:
-            return json.loads(raw)
-        except (ValueError, TypeError):
-            return {}
+    @property
+    def _expanded(self) -> Dict[str, bool]:
+        # Lazy so it reads through the engine-injected data view, which isn't
+        # available at construction time.
+        cached = self.__dict__.get('_expanded_cache')
+        if cached is None:
+            raw = self.data.get_setting(self._setting_key())
+            try:
+                cached = json.loads(raw) if raw else {}
+            except (ValueError, TypeError):
+                cached = {}
+            self.__dict__['_expanded_cache'] = cached
+        return cached
 
     def _save_expanded(self):
-        self.db.set_setting(self._setting_key(), json.dumps(self._expanded))
+        self.engine.set_setting(self._setting_key(), json.dumps(self._expanded))
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
@@ -67,7 +69,7 @@ class Group(Plugin):
         with ui.element('div').style(
             f'display: flex; flex-wrap: wrap; align-items: stretch; gap: 0.75rem; width: 100%;'
         ):
-            statuses = self.db.latest_statuses()
+            statuses = self.data.latest_statuses()
             for child in self.children:
                 child_status = statuses.get(child.id, 'offline')
                 child_color = STATUS_COLORS.get(child_status, STATUS_COLORS['offline'])

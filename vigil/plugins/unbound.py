@@ -57,8 +57,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Unbound(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.control_cmd = config.get('control_cmd', 'unbound-control stats_noreset')
         self.query_host = config.get('query_host', '127.0.0.1')
         self.query_port = int(config.get('query_port', 53))

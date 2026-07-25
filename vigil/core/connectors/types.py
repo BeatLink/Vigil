@@ -98,11 +98,13 @@ Result = Union[CmdResult, HttpResult, DnsResult, PingResult]
 
 
 @dataclass(frozen=True)
-class LocalActionPlan:
-    """Like ActionPlan, but for actions whose work is local blocking IO
-    (e.g. an outbound HTTP request) rather than an SSH command. The engine
-    runs `call` via LocalIOOrchestrator and passes its return value to
-    interpret_local_action() instead of interpret_action()."""
+class IoActionPlan:
+    """For actions whose work is genuinely sequential/conditional local IO
+    (e.g. ddns_updater's Force Update: resolve the update URL — possibly via a
+    file or subprocess — then push it) that a single declarative HttpRequest
+    can't express. The Coordination Engine runs `call` off the event loop and
+    passes its return value to interpret_action(). Prefer a plain HttpRequest/
+    DnsQuery/PingRequest action plan whenever the work is a single request."""
     call: Callable[[], Any]
 
 
@@ -128,15 +130,18 @@ class CollectResult:
 # Plugin.plan_action()'s return type. VigilEngine.dispatch_action
 # discriminates this union with isinstance, in this order: CollectResult
 # (a write with no command run), JobPlan (long-running/cancellable),
-# LocalActionPlan (local blocking IO, no SSH), ActionPlan (the default —
-# a short SSH command), or None (action_id unhandled). Named here so
-# plan_action's signature and dispatch_action's isinstance chain both
-# reference one union instead of restating it independently.
-ActionPlanResult = Union[ActionPlan, JobPlan, LocalActionPlan, CollectResult, None]
+# IoActionPlan (sequential local IO), a declarative connector request
+# (HttpRequest/DnsQuery/PingRequest), ActionPlan (the default — a short SSH
+# command), or None (action_id unhandled). Named here so plan_action's
+# signature and dispatch_action's isinstance chain both reference one union.
+ActionPlanResult = Union[
+    ActionPlan, JobPlan, IoActionPlan, HttpRequest, DnsQuery, PingRequest,
+    CollectResult, None,
+]
 
-# Plugin.interpret_action()/interpret_local_action()/interpret_job()'s
-# return type: a plain success/failure bool, or a CollectResult (.success
-# set) to also apply a write alongside the outcome.
+# Plugin.interpret_action()/interpret_job()'s return type: a plain
+# success/failure bool, or a CollectResult (.success set) to also apply a
+# write alongside the outcome.
 ActionOutcome = Union[bool, CollectResult]
 
 # VigilEngine.dispatch_action()'s return: (success, metadata). metadata is

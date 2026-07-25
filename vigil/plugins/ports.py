@@ -75,8 +75,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Ports(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.timeout = int(config.get('timeout', 5))
         self.checks: List[Dict[str, Any]] = config.get('checks', [])
         for check in self.checks:

@@ -37,8 +37,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Processes(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.max_processes = int(config.get('max_processes', 20))
         self.require_sudo  = bool(config.get('require_sudo', False))
         self.kill_signal   = str(config.get('kill_signal', 'TERM')).upper()

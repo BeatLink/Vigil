@@ -38,8 +38,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Wifi(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.interface: Optional[str] = config.get('interface')
         self.quality_warning   = float(config.get('quality_warning',   40))
         self.quality_threshold = float(config.get('quality_threshold', 20))

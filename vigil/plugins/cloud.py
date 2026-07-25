@@ -42,8 +42,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Cloud(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.provider = str(config.get('provider', 'auto')).lower()
 
     def _cmds(self):

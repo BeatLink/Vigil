@@ -39,8 +39,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Blockurl(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.api_url = config.get('api_url', 'http://127.0.0.1:9001')
         self.api_key = config.get('api_key')
         self.api_key_command = config.get(

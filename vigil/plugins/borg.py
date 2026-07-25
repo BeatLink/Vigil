@@ -89,9 +89,9 @@ def _parse_archive_time(value: str) -> int:
 class Borg(Plugin):
     DEFAULT_TIMEOUT = 180.0
 
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
+    def __init__(self, name: str, config: Dict[str, Any]):
         config = {'timeout': self.DEFAULT_TIMEOUT, **config}
-        super().__init__(name, config, db, ssh_pool)
+        super().__init__(name, config)
         self.repo = config.get('repo')
         self.max_age = parse_duration(config.get('max_age', '1d'))
         self.passphrase = config.get('passphrase')
@@ -495,7 +495,7 @@ class Borg(Plugin):
             return None
 
         def on_line(stream: str, text: str) -> None:
-            self._handle_backup_line(self.network.current_job_id(), stream, text)
+            self._handle_backup_line(self.engine.job_current_id(self), stream, text)
         return on_line
 
     def interpret_job(self, action_id: str, exit_code: int, **kwargs):
@@ -536,12 +536,12 @@ class Borg(Plugin):
             )
             if path:
                 summary += f" — {path}"
-            self.db.set_job_progress(job_id, summary)
+            self.engine.set_job_progress(job_id, summary)
         elif rec_type == 'log_message':
             level = (record.get('levelname') or 'INFO').upper()
             message = record.get('message') or ''
             if message and level in ('WARNING', 'ERROR', 'CRITICAL'):
-                self.storage.apply(CollectResult(logs=[(f"borg: {message}", level)]))
+                self.engine.apply(self, CollectResult(logs=[(f"borg: {message}", level)]))
 
     def _epoch(self) -> Optional[float]:
         m = self.data.latest_metric('last_backup_epoch')

@@ -1,5 +1,5 @@
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from vigil.plugins.group import Group, SEVERITY_ORDER
 from vigil.core.database.database import db, StatusHistory
 
@@ -13,14 +13,8 @@ GROUP_CFG = {
 
 
 @pytest.fixture
-def group(db_manager):
-    from vigil.core.connectors.ssh.network_orchestrator import SSHConnectionPool
-    with patch("vigil.core.connectors.ssh.network_orchestrator.SSHConnection") as MockSSH, \
-         patch("vigil.core.connectors.ssh.network_orchestrator.SSHCollector"), \
-         patch("vigil.core.connectors.ssh.network_orchestrator.SSHController"):
-        MockSSH.from_config.return_value = MagicMock(host="localhost")
-        plugin = Group("test-group", GROUP_CFG, db_manager, SSHConnectionPool())
-    return plugin
+def group(make_plugin):
+    return make_plugin(Group, GROUP_CFG)
 
 
 def _make_child(plugin_id: str, status: str, db_manager) -> MagicMock:
@@ -109,9 +103,9 @@ class TestStatusAggregation:
 
 
 class TestOnCollect:
-    async def test_writes_aggregated_status_to_db(self, group, db_manager, run_local_cycle):
+    async def test_writes_aggregated_status_to_db(self, group, db_manager, run_requests):
         group.children = [_make_child("child-x", "online", db_manager)]
-        run_local_cycle(group)
+        run_requests(group)
         with db.connection_context():
             row = StatusHistory.select().where(
                 StatusHistory.collector_id == "test-group"
@@ -119,12 +113,12 @@ class TestOnCollect:
         assert row is not None
         assert row.state == "online"
 
-    async def test_propagates_failed_child_to_group(self, group, db_manager, run_local_cycle):
+    async def test_propagates_failed_child_to_group(self, group, db_manager, run_requests):
         group.children = [
             _make_child("child-ok", "online", db_manager),
             _make_child("child-bad", "failed", db_manager),
         ]
-        run_local_cycle(group)
+        run_requests(group)
         with db.connection_context():
             row = StatusHistory.select().where(
                 StatusHistory.collector_id == "test-group"

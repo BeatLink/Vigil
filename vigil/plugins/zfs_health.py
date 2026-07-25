@@ -12,8 +12,8 @@ _DEFAULT_LAYOUT = [
 
 
 class ZFSHealth(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
 
     def commands(self) -> List[Command]:
         return [Command("zpool list -H -o name,health 2>&1")]

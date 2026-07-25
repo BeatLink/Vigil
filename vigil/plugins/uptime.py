@@ -1,6 +1,6 @@
 import re
 import logging
-from typing import Any, Dict, List
+from typing import List
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (

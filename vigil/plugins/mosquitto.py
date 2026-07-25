@@ -61,8 +61,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Mosquitto(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.host = config.get('host', '127.0.0.1')
         self.port = int(config.get('port', 1883))
         self.username = config.get('username')

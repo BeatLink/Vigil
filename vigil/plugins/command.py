@@ -18,8 +18,8 @@ _DEFAULT_LAYOUT_PLAIN = [
 
 
 class CommandPlugin(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.command = config.get('command')
         self.command_timeout = int(config.get('timeout', 30))
         pattern = config.get('pattern')

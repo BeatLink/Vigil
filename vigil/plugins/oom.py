@@ -23,8 +23,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Oom(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.alert_for  = int(config.get('alert_for', 3))
         self.is_warning = bool(config.get('is_warning', False))
         self._last_total: Optional[int] = None

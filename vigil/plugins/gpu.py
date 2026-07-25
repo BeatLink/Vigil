@@ -18,8 +18,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Gpu(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.util_warning   = int(config.get('util_warning',   85))
         self.util_threshold = int(config.get('util_threshold', 95))
         self.mem_warning    = int(config.get('mem_warning',    85))

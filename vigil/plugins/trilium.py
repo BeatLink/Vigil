@@ -63,8 +63,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Trilium(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8080')
         self.token = config.get('token')
         self.token_command = config.get('token_command')

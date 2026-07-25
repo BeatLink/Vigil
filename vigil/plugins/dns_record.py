@@ -22,8 +22,8 @@ def _answer_to_str(record_type: str, rdata) -> str:
 
 
 class DnsRecord(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.domain = config.get('domain')
         self.record_type = str(config.get('record_type', 'A')).upper()
         self.resolver_addr = config.get('resolver')
