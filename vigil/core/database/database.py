@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from typing import Optional, Any, Dict, List, Callable
 from peewee import *
 
-from .events import bus
 from .models import (
     ALL_MODELS, BaseModel, Event, Job, JobOutput, LogLine, Metric,
     PluginSnapshot, Setting, StatusHistory, db,
@@ -74,9 +73,10 @@ class _AsyncWriter:
                                 item_fn()
                             except Exception as e:
                                 logging.error(f"DB write failed: {e}")
-                events_in_batch = {ev for _, ev in batch if ev}
-                for ev in events_in_batch:
-                    bus.emit(ev)
+                # The UI polls the Database Engine on a shared timer rather than
+                # subscribing to post-commit notifications, so the writer no
+                # longer fans out events. The per-write `event` tag is retained
+                # in the queue as a harmless label.
             finally:
                 for _ in batch:
                     self._q.task_done()

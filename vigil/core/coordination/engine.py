@@ -306,9 +306,6 @@ class VigilEngine:
     async def run(self):
         logging.info("Vigil Engine started...")
 
-        from vigil.core.database.events import bus
-        bus.bind_loop(asyncio.get_running_loop())
-
         self.db.insert_event("INFO", "Vigil Engine started polling loop.", "vigil_core")
 
         self._start_exporters()

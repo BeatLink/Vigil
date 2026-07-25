@@ -2,7 +2,6 @@ import asyncio
 from typing import Optional, Union
 from nicegui import ui
 from vigil.core.contracts import EventName, RefreshCallback
-from vigil.core.database.events import bus
 from .theme import TEXT, TEXT_MUTED, PRIMARY, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
 
 
@@ -56,45 +55,14 @@ POLL_FALLBACK_SECONDS = 1.0
 
 
 def on_data_event(event: Union[EventName, list], element, callback: RefreshCallback, run_now: bool = True):
-    if bus.polling_mode:
-        safe_timer(POLL_FALLBACK_SECONDS, callback, defer_first=not run_now)
-        return
-
-    events = [event] if isinstance(event, str) else list(event)
-
-    def _detached() -> bool:
-        if getattr(element, 'is_deleted', False):
-            return True
-        try:
-            return element.id not in element.client.elements
-        except Exception:
-            return True
-
-    from nicegui import helpers
-    offs: list = []
-
-    def _unsubscribe():
-        for off in offs:
-            off()
-
-    async def _wrapped():
-        if _detached():
-            _unsubscribe()
-            return
-        try:
-            result = callback()
-            if helpers.should_await(result):
-                await result
-        except RuntimeError as e:
-            if 'parent slot' not in str(e) and 'has been deleted' not in str(e):
-                raise
-            _unsubscribe()
-
-    offs.extend(bus.on(ev, _wrapped) for ev in events)
-    element.client.on_disconnect(_unsubscribe)
-    if run_now:
-        import asyncio
-        asyncio.create_task(_wrapped())
+    """Refresh `element` by polling: run `callback` on a shared-cadence
+    safe_timer. The `event` argument is advisory (it names which data type the
+    callback reads) and no longer drives push notifications — the Database
+    Engine is polled, not subscribed to. `element` is accepted for call-site
+    symmetry; the timer's own detachment check (see _SafeTimer) handles
+    teardown. `run_now=False` defers the first tick to the next event-loop
+    iteration instead of firing inline during construction."""
+    safe_timer(POLL_FALLBACK_SECONDS, callback, defer_first=not run_now)
 
 
 LABEL_CLASS = 'text-xs font-bold'

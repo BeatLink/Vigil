@@ -13,18 +13,16 @@ from typing import (
 )
 
 # A callback that may be a plain sync function or one returning an
-# awaitable — both are valid everywhere NiceGUI/DataBus invoke a callback,
-# since `helpers.should_await` (or an equivalent check) decides at the call
-# site whether to await the result. Previously reimplemented ad hoc in
-# DataBus.emit, PluginPage._tick, safe_timer, and on_data_event.
+# awaitable — both are valid everywhere NiceGUI invokes a callback, since
+# `helpers.should_await` (or an equivalent check) decides at the call site
+# whether to await the result. Reused by PluginPage._tick, safe_timer, and
+# on_data_event.
 RefreshCallback = Callable[[], Union[None, Awaitable[None]]]
 
-# The five DataBus event kinds. Not a Literal, deliberately: DataBus.emit is
-# instructed to broadcast the exact string it's given, and adding a new
-# writer that emits a different kind should not require touching this file.
-# Callers that want closed-set safety can still write `event: EventName`
-# themselves; this exists so both emit and subscribe sites reference one
-# shared name instead of typing the string literal independently.
+# Names the data type a polling refresh callback reads (status/metric/event/
+# log_line/setting/snapshot). Advisory now that the UI polls the Database
+# Engine rather than subscribing to write notifications — kept so on_data_event
+# call sites still document which data a callback depends on.
 EventName = str
 
 
