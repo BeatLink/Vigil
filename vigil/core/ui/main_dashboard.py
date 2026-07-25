@@ -3,6 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
 from nicegui import app, ui
+from vigil.core.contracts import EngineLike
 from vigil.core.database.database import Setting
 from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
 from .components import action_chip, card, section_title, on_data_event, offload, refresh_rows
@@ -19,7 +20,7 @@ def navigate_to(plugin_instance: Any):
             _navigation_state['switch_func']('plugin', plugin_instance)
 
 
-def init_gui(engine: Any, port: int = 8080):
+def init_gui(engine: EngineLike, port: int = 8080):
     app.on_startup(engine.run)
 
     app.add_static_file(local_file=_ICON, url_path='/icon.svg')

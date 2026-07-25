@@ -1,10 +1,10 @@
 import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
-from vigil.core.connectors.ssh_connector import SSHConnection
-from vigil.core.connectors.ssh_runner import SSHCollector, SSHController
+from vigil.core.connectors.ssh import SSHConnection, SSHCollector, SSHController
 from vigil.core.connectors.job_controller import JobController
 from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, JobPlan
+from vigil.core.database.config_schema import PluginConfig
 
 _PoolKey = Tuple[str, int, Optional[str], Optional[str]]
 
@@ -18,7 +18,7 @@ class SSHConnectionPool:
     def __init__(self):
         self._conns: Dict[_PoolKey, SSHConnection] = {}
 
-    def get(self, config: Dict[str, Any]) -> SSHConnection:
+    def get(self, config: PluginConfig) -> SSHConnection:
         ssh_cfg = config.get('ssh_config', {})
         host = ssh_cfg.get('host', config.get('target_host', 'localhost'))
         key: _PoolKey = (
@@ -44,7 +44,7 @@ class NetworkOrchestrator:
     anything themselves — they declare Commands/ActionPlans/JobPlans and this
     orchestrator (driven by VigilEngine) executes them."""
 
-    def __init__(self, config: Dict[str, Any], db: Any, plugin_id: str, target_hint: str,
+    def __init__(self, config: PluginConfig, db: Any, plugin_id: str, target_hint: str,
                  timeout: float, pool: SSHConnectionPool):
         self.ssh_conn = pool.get(config)
         self.target = getattr(self.ssh_conn, 'host', target_hint)

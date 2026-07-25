@@ -44,7 +44,7 @@
                     nicegui
                     dnspython
                     # Native async SSH transport (see
-                    # vigil/core/connectors/ssh_connector.py) — Vigil's only
+                    # vigil/core/connectors/ssh.py) — Vigil's only
                     # way of talking to monitored hosts.
                     asyncssh
                 ];

@@ -1,6 +1,7 @@
 import asyncio
-from typing import Optional
+from typing import Optional, Union
 from nicegui import ui
+from vigil.core.contracts import EventName, RefreshCallback
 from vigil.core.database.events import bus
 from .theme import TEXT, TEXT_MUTED, PRIMARY, STATUS_COLORS, BACKGROUND_MUTED, BACKGROUND
 
@@ -31,7 +32,7 @@ class _SafeTimer(ui.timer):
         return self._detached() or super()._should_stop()
 
 
-def safe_timer(interval: float, callback, defer_first: bool = False):
+def safe_timer(interval: float, callback: RefreshCallback, defer_first: bool = False):
     from nicegui import helpers
     timer = None
 
@@ -54,7 +55,7 @@ def safe_timer(interval: float, callback, defer_first: bool = False):
 POLL_FALLBACK_SECONDS = 1.0
 
 
-def on_data_event(event, element, callback, run_now: bool = True):
+def on_data_event(event: Union[EventName, list], element, callback: RefreshCallback, run_now: bool = True):
     if bus.polling_mode:
         safe_timer(POLL_FALLBACK_SECONDS, callback, defer_first=not run_now)
         return

@@ -7,6 +7,8 @@ from typing import Tuple, Optional, Dict, Any, Callable
 
 import asyncssh
 
+from vigil.core.database.config_schema import PluginConfig
+
 _STATE_DIR = Path(os.environ.get("VIGIL_SSH_CONTROL_DIR",
                                  Path(tempfile.gettempdir()) / "vigil-ssh"))
 
@@ -70,7 +72,7 @@ class _TofuClient(asyncssh.SSHClient):
 
 class SSHConnection:
     @classmethod
-    def from_config(cls, config: Dict[str, Any]) -> "SSHConnection":
+    def from_config(cls, config: PluginConfig) -> "SSHConnection":
         ssh_cfg = config.get('ssh_config', {})
         return cls(
             host=ssh_cfg.get('host', config.get('target_host', 'localhost')),

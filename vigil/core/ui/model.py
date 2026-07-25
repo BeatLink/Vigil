@@ -1,9 +1,10 @@
 import asyncio
-from typing import Any, Callable, Dict, List
+from typing import Any, Dict, List
 
 from nicegui import binding, context, helpers
 from nicegui import Client
 
+from vigil.core.contracts import RefreshCallback
 from .components import safe_timer, offload
 
 _schedulers: Dict[str, "_PageScheduler"] = {}
@@ -63,11 +64,11 @@ class PluginPage:
         self.plugin = plugin
         self.model = PluginModel()
         self._metric_names = list(metric_names)
-        self._refresh_callbacks: List[Callable[[], None]] = []
+        self._refresh_callbacks: List[RefreshCallback] = []
         self._interval = interval
         self._client = None
 
-    def on_refresh(self, callback: Callable[[], None]) -> None:
+    def on_refresh(self, callback: RefreshCallback) -> None:
         self._refresh_callbacks.append(callback)
 
     def track_metric(self, name: str) -> None:

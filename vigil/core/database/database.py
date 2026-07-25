@@ -4,10 +4,14 @@ import queue
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Optional, Any, Dict, Callable
+from typing import Optional, Any, Dict, List, Callable
 from peewee import *
 
 from .events import bus
+from .rowtypes import (
+    EventDict, EventModelDict, JobDict, JobOutputDict, LogLineModelDict,
+    MetricModelDict, MetricRowDict, PluginEventDict,
+)
 
 db = SqliteDatabase(None)
 
@@ -151,7 +155,7 @@ class LogLine(BaseModel):
     message = TextField()
     dedup_hash = CharField(unique=True)
 
-def _job_to_dict(job: 'Job') -> Dict[str, Any]:
+def _job_to_dict(job: 'Job') -> JobDict:
     end = job.finished or datetime.now()
     return {
         'id': job.id,
@@ -273,7 +277,7 @@ class DatabaseManager:
         self._statuses_cache_at = now
         return result
 
-    def latest_metrics(self):
+    def latest_metrics(self) -> List[MetricRowDict]:
         with db.connection_context():
             newest = (Metric
                       .select(fn.MAX(Metric.id).alias('max_id'))
@@ -316,7 +320,7 @@ class DatabaseManager:
                 return list(reversed(rows))
         return self._cached(('metric_history', collector, metric_name, limit), max_age, _fetch)
 
-    def collector_metrics_cached(self, collector: str, limit: int = 15, max_age: float = 1.0):
+    def collector_metrics_cached(self, collector: str, limit: int = 15, max_age: float = 1.0) -> List[MetricModelDict]:
         def _fetch():
             with db.connection_context():
                 query = (Metric.select()
@@ -326,7 +330,7 @@ class DatabaseManager:
                 return [m.__data__ for m in query]
         return self._cached(('collector_metrics', collector, limit), max_age, _fetch)
 
-    def log_lines_cached(self, target: str, filter_prefix: str = '', limit: int = 15, max_age: float = 1.0):
+    def log_lines_cached(self, target: str, filter_prefix: str = '', limit: int = 15, max_age: float = 1.0) -> List[LogLineModelDict]:
         def _fetch():
             with db.connection_context():
                 condition = (LogLine.target == target)
@@ -337,7 +341,7 @@ class DatabaseManager:
         return self._cached(('log_lines', target, filter_prefix, limit), max_age, _fetch)
 
     def plugin_events_cached(self, plugin_id: str = '', prefix: str = '', target: str = '',
-                             limit: int = 100, max_age: float = 1.0):
+                             limit: int = 100, max_age: float = 1.0) -> List[PluginEventDict]:
         def _fetch():
             with db.connection_context():
                 if plugin_id:
@@ -361,14 +365,14 @@ class DatabaseManager:
                 ]
         return self._cached(('plugin_events', plugin_id, prefix, target, limit), max_age, _fetch)
 
-    def recent_metrics_raw_cached(self, limit: int = 20, max_age: float = 1.0):
+    def recent_metrics_raw_cached(self, limit: int = 20, max_age: float = 1.0) -> List[MetricModelDict]:
         def _fetch():
             with db.connection_context():
                 query = Metric.select().order_by(Metric.timestamp.desc()).limit(limit)
                 return [m.__data__ for m in query]
         return self._cached(('recent_metrics_raw', limit), max_age, _fetch)
 
-    def recent_events_raw_cached(self, limit: int = 20, max_age: float = 1.0):
+    def recent_events_raw_cached(self, limit: int = 20, max_age: float = 1.0) -> List[EventModelDict]:
         def _fetch():
             with db.connection_context():
                 query = Event.select().order_by(Event.timestamp.desc()).limit(limit)
@@ -377,7 +381,7 @@ class DatabaseManager:
 
     def recent_events_cached(self, limit: int = 200, level: Optional[str] = None,
                              target: Optional[str] = None, search: Optional[str] = None,
-                             max_age: float = 1.0):
+                             max_age: float = 1.0) -> List[EventDict]:
         key = ('recent_events', limit, level, target, search)
         return self._cached(key, max_age, lambda: self.recent_events(
             limit=limit, level=level, target=target, search=search))
@@ -398,7 +402,7 @@ class DatabaseManager:
                                             source_id=source_id), event='event')
 
     def recent_events(self, limit: int = 200, level: Optional[str] = None,
-                      target: Optional[str] = None, search: Optional[str] = None):
+                      target: Optional[str] = None, search: Optional[str] = None) -> List[EventDict]:
         with db.connection_context():
             query = Event.select().order_by(Event.timestamp.desc())
             if level:
@@ -472,13 +476,13 @@ class DatabaseManager:
             Job.update(state=state, exit_code=exit_code, error=error,
                        finished=datetime.now()).where(Job.id == job_id).execute()
 
-    def get_job(self, job_id: int) -> Optional[Dict[str, Any]]:
+    def get_job(self, job_id: int) -> Optional[JobDict]:
         with db.connection_context():
             job = Job.get_or_none(Job.id == job_id)
             return _job_to_dict(job) if job else None
 
     def recent_jobs(self, plugin_id: Optional[str] = None, limit: int = 20,
-                    kind: Optional[str] = None) -> list:
+                    kind: Optional[str] = None) -> List[JobDict]:
         with db.connection_context():
             query = Job.select().order_by(Job.started.desc())
             if plugin_id:
@@ -487,14 +491,14 @@ class DatabaseManager:
                 query = query.where(Job.kind == kind)
             return [_job_to_dict(j) for j in query.limit(limit)]
 
-    def running_jobs(self, plugin_id: Optional[str] = None) -> list:
+    def running_jobs(self, plugin_id: Optional[str] = None) -> List[JobDict]:
         with db.connection_context():
             query = Job.select().where(Job.state == 'running')
             if plugin_id:
                 query = query.where(Job.plugin_id == plugin_id)
             return [_job_to_dict(j) for j in query.order_by(Job.started.desc())]
 
-    def job_output(self, job_id: int, after_seq: int = -1, limit: int = 500) -> list:
+    def job_output(self, job_id: int, after_seq: int = -1, limit: int = 500) -> List[JobOutputDict]:
         with db.connection_context():
             query = (JobOutput
                      .select()

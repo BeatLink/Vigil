@@ -2,8 +2,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from vigil.core.connectors import ssh_connector
-from vigil.core.connectors.ssh_connector import SSHConnection, _TofuClient
+from vigil.core.connectors import ssh as ssh_module
+from vigil.core.connectors.ssh import SSHConnection, _TofuClient
 
 
 def _completed_process(exit_status=0, stdout="", stderr=""):
@@ -256,17 +256,17 @@ class TestKillProcess:
 class TestConcurrencyBound:
     async def test_execute_channels_are_bounded_per_host(self):
         conn = SSHConnection("h")
-        assert conn._channel_semaphore._value == ssh_connector._MAX_CONCURRENT_PER_HOST
+        assert conn._channel_semaphore._value == ssh_module._MAX_CONCURRENT_PER_HOST
 
     async def test_job_channels_use_a_separate_smaller_pool(self):
         conn = SSHConnection("h")
-        assert conn._job_semaphore._value == ssh_connector._MAX_CONCURRENT_JOBS_PER_HOST
-        assert ssh_connector._MAX_CONCURRENT_JOBS_PER_HOST < ssh_connector._MAX_CONCURRENT_PER_HOST
+        assert conn._job_semaphore._value == ssh_module._MAX_CONCURRENT_JOBS_PER_HOST
+        assert ssh_module._MAX_CONCURRENT_JOBS_PER_HOST < ssh_module._MAX_CONCURRENT_PER_HOST
 
 
 class TestTofuHostKeyValidation:
     def test_no_stored_key_trusts_and_persists(self, tmp_path):
-        with patch.object(ssh_connector, "_STATE_DIR", tmp_path):
+        with patch.object(ssh_module, "_STATE_DIR", tmp_path):
             client = _TofuClient("myhost", "user@myhost:22")
             key = MagicMock()
             key.get_fingerprint.return_value = "SHA256:abc"
@@ -280,7 +280,7 @@ class TestTofuHostKeyValidation:
 
     def test_matching_stored_key_is_accepted(self, tmp_path):
         (tmp_path / "known_hosts").write_text("user@myhost:22 ssh-ed25519 AAAAmatching\n")
-        with patch.object(ssh_connector, "_STATE_DIR", tmp_path):
+        with patch.object(ssh_module, "_STATE_DIR", tmp_path):
             client = _TofuClient("myhost", "user@myhost:22")
             with patch("asyncssh.read_known_hosts") as mock_read:
                 stored_key = MagicMock()
@@ -294,7 +294,7 @@ class TestTofuHostKeyValidation:
 
     def test_mismatched_stored_key_is_rejected(self, tmp_path):
         (tmp_path / "known_hosts").write_text("user@myhost:22 ssh-ed25519 AAAAoriginal\n")
-        with patch.object(ssh_connector, "_STATE_DIR", tmp_path):
+        with patch.object(ssh_module, "_STATE_DIR", tmp_path):
             client = _TofuClient("myhost", "user@myhost:22")
             with patch("asyncssh.read_known_hosts") as mock_read:
                 stored_key = MagicMock()

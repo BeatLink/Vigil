@@ -3,16 +3,21 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
+from vigil.core.database.config_schema import (
+    AuthSettings, DatabaseSettings, ExporterSettings, PluginConfig, SSHConfig,
+    ThemeSettings, VigilConfig,
+)
+
 class ConfigFileManager:
     def __init__(self, config_path: str):
         self.path = Path(config_path)
-        self.data = self._load()
+        self.data: VigilConfig = self._load()
 
-    def _load(self) -> Dict[str, Any]:
+    def _load(self) -> VigilConfig:
         if not self.path.exists():
             logging.warning(f"Configuration file not found at {self.path}. Using empty configuration defaults.")
             return {}
-        
+
         try:
             with open(self.path, 'r') as f:
                 data = yaml.safe_load(f)
@@ -22,7 +27,7 @@ class ConfigFileManager:
             return {}
 
     @property
-    def database_settings(self) -> Dict[str, Any]:
+    def database_settings(self) -> DatabaseSettings:
         return self.data.get('database', {'path': 'vigil.db'})
 
     DEFAULT_WRITE_BATCH_SECONDS = 1.0
@@ -40,7 +45,7 @@ class ConfigFileManager:
             return self.DEFAULT_WRITE_BATCH_SECONDS
 
     @property
-    def plugins(self) -> List[Dict[str, Any]]:
+    def plugins(self) -> List[PluginConfig]:
         return self.data.get('plugins', [])
 
     @property
@@ -48,11 +53,11 @@ class ConfigFileManager:
         return self.data.get('alerting', [])
 
     @property
-    def theme_settings(self) -> Dict[str, Any]:
+    def theme_settings(self) -> ThemeSettings:
         return self.data.get('theme', {})
 
     @property
-    def exporters(self) -> Dict[str, Any]:
+    def exporters(self) -> ExporterSettings:
         return self.data.get('exporters', {})
 
     DEFAULT_LOG_RETENTION_DAYS = 30
@@ -74,7 +79,7 @@ class ConfigFileManager:
             return self.DEFAULT_LOG_RETENTION_DAYS
 
     @property
-    def ssh_defaults(self) -> Dict[str, Any]:
+    def ssh_defaults(self) -> SSHConfig:
         return self.data.get('ssh_defaults', {})
 
     @property
@@ -82,5 +87,5 @@ class ConfigFileManager:
         return self.data.get('control', [])
 
     @property
-    def auth_settings(self) -> Dict[str, Any]:
+    def auth_settings(self) -> AuthSettings:
         return self.data.get('auth', {})

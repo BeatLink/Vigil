@@ -2,19 +2,29 @@ from abc import ABC, abstractmethod
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from vigil.plugins.base.plugin_helpers import PluginConfigMixin, parse_duration
-from vigil.core.connectors.ssh_runner import COLLECT_TIMEOUT as SSH_TIMEOUT
+from vigil.core.connectors.ssh import COLLECT_TIMEOUT as SSH_TIMEOUT
 from vigil.core.connectors.orchestration.local_io_orchestrator import LocalIOOrchestrator
 from vigil.core.connectors.orchestration.network_orchestrator import NetworkOrchestrator, SSHConnectionPool
+from vigil.core.contracts import ActionButtonSpec, EngineLike
+from vigil.core.database.config_schema import PluginConfig
 from vigil.core.database.storage_orchestrator import StorageOrchestrator
 from vigil.core.connectors.orchestration.types import (
-    ActionPlan, CmdResult, Command, CollectResult, JobPlan, LocalActionPlan,
+    ActionOutcome, ActionPlanResult, CmdResult, Command, CollectResult,
 )
+from vigil.core.ui.spec_types import UISpec
 
 
 class Plugin(PluginConfigMixin, ABC):
-    engine: Any = None
+    engine: Optional[EngineLike] = None
 
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: SSHConnectionPool):
+    # Plugins that use the declarative render path (spec.generic_render)
+    # override this as a @property returning a UISpec dict. Plugins with a
+    # hand-written render_ui() may leave it unset — every UI_SPEC consumer
+    # (spec._dialog_spec_for, main_dashboard.py) already treats a missing
+    # UI_SPEC as "no declarative UI", via getattr(plugin, 'UI_SPEC', None).
+    UI_SPEC: Optional[UISpec] = None
+
+    def __init__(self, name: str, config: PluginConfig, db: Any, ssh_pool: SSHConnectionPool):
         self._init_config(name, config)
         self.db = db
         self.timeout = parse_duration(config.get('timeout', SSH_TIMEOUT))
@@ -55,7 +65,7 @@ class Plugin(PluginConfigMixin, ABC):
         implemented by plugins that override local_call()."""
         raise NotImplementedError
 
-    def get_actions(self) -> List[Dict[str, str]]:
+    def get_actions(self) -> List[ActionButtonSpec]:
         return []
 
     def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, JobPlan, LocalActionPlan, CollectResult]]:

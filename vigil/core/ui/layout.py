@@ -1,11 +1,14 @@
 from contextlib import contextmanager
 from typing import Any, Dict, List, Tuple
 
+from vigil.core.database.config_schema import PluginConfig
+from vigil.core.ui.spec_types import LayoutRow
+
 
 def make_inline_layout(
-    default_layout: list,
+    default_layout: List[LayoutRow],
     hidden: Tuple[str, ...] = ('host_card', 'logs'),
-) -> list:
+) -> List[LayoutRow]:
     result = []
     for row in default_layout:
         new_row = []
@@ -24,13 +27,20 @@ def make_inline_layout(
 
 
 class PluginLayout:
-    def __init__(self, plugin_config: dict, default_layout: list) -> None:
+    """`plugin_config['layout']`, if set, is polymorphic: either a full
+    List[LayoutRow] replacing default_layout's row structure entirely, or a
+    Dict[str, dict] of per-widget property overrides (visible/height/flex/
+    min_width) merged onto default_layout's existing rows. Distinguished
+    at runtime by isinstance since UI_SPEC config is plain YAML-sourced
+    data with no tag to dispatch on structurally."""
+
+    def __init__(self, plugin_config: PluginConfig, default_layout: List[LayoutRow]) -> None:
         from nicegui import ui
 
         user = plugin_config.get('layout', {})
 
         if isinstance(user, list):
-            raw_rows = user
+            raw_rows: List[LayoutRow] = user
             widget_overrides: Dict[str, dict] = {}
         else:
             raw_rows = default_layout

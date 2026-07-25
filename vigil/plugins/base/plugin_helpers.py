@@ -1,9 +1,11 @@
 import re
 from typing import Any, Dict, List
 
+from vigil.core.database.config_schema import PluginConfig
+
 
 class PluginConfigMixin:
-    def _init_config(self, name: str, config: Dict[str, Any]):
+    def _init_config(self, name: str, config: PluginConfig):
         self.name = name
         self.id = config.get('id', name)
         self.config = config

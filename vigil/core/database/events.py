@@ -2,17 +2,19 @@ import asyncio
 import logging
 from typing import Callable, Dict, List, Optional
 
+from vigil.core.contracts import EventName, RefreshCallback
+
 
 class DataBus:
     def __init__(self):
-        self._subscribers: Dict[str, List[Callable[[], None]]] = {}
+        self._subscribers: Dict[str, List[RefreshCallback]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self.polling_mode: bool = False
 
     def bind_loop(self, loop: asyncio.AbstractEventLoop):
         self._loop = loop
 
-    def on(self, event: str, callback: Callable[[], None]) -> Callable[[], None]:
+    def on(self, event: EventName, callback: RefreshCallback) -> Callable[[], None]:
         subs = self._subscribers.setdefault(event, [])
         subs.append(callback)
 
@@ -24,7 +26,7 @@ class DataBus:
 
         return off
 
-    def emit(self, event: str):
+    def emit(self, event: EventName):
         loop = self._loop
         if loop is None:
             return

@@ -1,5 +1,6 @@
 import re
-from typing import Any
+
+from vigil.core.contracts import MetricsSource
 
 _INVALID = re.compile(r'[^a-zA-Z0-9_:]')
 
@@ -17,7 +18,7 @@ def _escape_label(value: str) -> str:
     return value.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
 
 
-def render(db: Any) -> str:
+def render(db: MetricsSource) -> str:
     lines = []
 
     lines.append('# HELP vigil_up Monitor status (1=online, 0.5=warning, 0=failed, -1=offline)')

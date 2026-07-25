@@ -200,14 +200,14 @@ in
 
       # ping (uptime plugin, run as a local subprocess) must be on PATH.
       # The system `ssh` client is NOT needed here — Vigil speaks SSH
-      # natively via asyncssh (see core/connectors/ssh_connector.py) rather
+      # natively via asyncssh (see core/connectors/ssh.py) rather
       # than shelling out.
       path = [
         pkgs.iputils
       ];
 
       # The known_hosts file Vigil's own TOFU host-key trust persists to
-      # (see ssh_connector.py's _TofuClient) lives here — writable, and
+      # (see ssh.py's _TofuClient) lives here — writable, and
       # ProtectHome hides ~/.ssh. Under the service's private /tmp.
       environment.VIGIL_SSH_CONTROL_DIR = "/tmp/vigil-ssh";
 

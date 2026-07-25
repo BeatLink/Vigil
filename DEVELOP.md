@@ -58,7 +58,7 @@ Two monitors resolving to the same effective `id` (falls back to display name wh
 
 ## SSH transport
 
-`core/connectors/ssh_connector.py` uses asyncssh rather than shelling out to the system `ssh` client — one native connection per host stands in for the old ControlMaster socket, and each command becomes a channel on that connection rather than a forked process. This removed the old thread-pool/semaphore concurrency ceiling entirely (multiple commands to the same host already run concurrently on one asyncssh connection).
+`core/connectors/ssh.py` uses asyncssh rather than shelling out to the system `ssh` client — one native connection per host stands in for the old ControlMaster socket, and each command becomes a channel on that connection rather than a forked process. This removed the old thread-pool/semaphore concurrency ceiling entirely (multiple commands to the same host already run concurrently on one asyncssh connection).
 
 Three behaviors of the old subprocess design had to be reproduced deliberately, each verified empirically against a real sshd:
 

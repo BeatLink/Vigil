@@ -1,6 +1,10 @@
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
-FORMATTERS: Dict[str, Callable[[Optional[float]], str]] = {}
+from vigil.core.ui.spec_types import (
+    ColorRule, EnabledPredicate, Formatter, ItemColorRule, ItemFormatter, UISpec,
+)
+
+FORMATTERS: Dict[str, Formatter] = {}
 
 
 def register_formatter(name: str):
@@ -96,7 +100,7 @@ def _ttl_seconds(v):
     return '--' if v is None else f'{int(v)}s'
 
 
-COLOR_RULES: Dict[str, Callable[[Optional[float]], Optional[str]]] = {}
+COLOR_RULES: Dict[str, ColorRule] = {}
 
 
 def register_color_rule(name: str):
@@ -106,7 +110,7 @@ def register_color_rule(name: str):
     return wrap
 
 
-ITEM_FORMATTERS: Dict[str, Callable[[dict], str]] = {}
+ITEM_FORMATTERS: Dict[str, ItemFormatter] = {}
 
 
 def register_item_formatter(name: str):
@@ -119,7 +123,7 @@ def register_item_formatter(name: str):
     return wrap
 
 
-ITEM_COLOR_RULES: Dict[str, Callable[[dict], Optional[str]]] = {}
+ITEM_COLOR_RULES: Dict[str, ItemColorRule] = {}
 
 
 def register_item_color_rule(name: str):
@@ -132,7 +136,7 @@ def register_item_color_rule(name: str):
     return wrap
 
 
-ENABLED_PREDICATES: Dict[str, Callable[[Any], bool]] = {}
+ENABLED_PREDICATES: Dict[str, EnabledPredicate] = {}
 
 
 def register_enabled_predicate(name: str):
@@ -163,11 +167,11 @@ def threshold_color(warning: float, threshold: float):
 
 
 def _dialog_spec_for(plugin: Any, dialog_name: str) -> Optional[Dict[str, Any]]:
-    ui_spec = getattr(plugin, 'UI_SPEC', None) or {}
+    ui_spec: UISpec = getattr(plugin, 'UI_SPEC', None) or {}
     return ui_spec.get('dialogs', {}).get(dialog_name)
 
 
-def generic_render(plugin: Any, context: str = 'page', spec: Optional[Dict[str, Any]] = None,
+def generic_render(plugin: Any, context: str = 'page', spec: Optional[UISpec] = None,
                    page=None, start: bool = True):
     from nicegui import ui
     from vigil.core.ui.layout import PluginLayout, make_inline_layout

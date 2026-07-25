@@ -5,6 +5,8 @@ from typing import Any, Dict
 
 import requests
 
+from vigil.core.contracts import MetricsSource
+
 _STATUS_VALUE = {'online': 1.0, 'warning': 0.5, 'failed': 0.0, 'offline': -1.0}
 
 
@@ -17,7 +19,7 @@ def _line(measurement: str, tags: Dict[str, str], value: float, ts_ns: int) -> s
     return f'{measurement}{tag_str} value={value} {ts_ns}'
 
 
-def build_payload(db: Any) -> str:
+def build_payload(db: MetricsSource) -> str:
     ts_ns = int(time.time() * 1e9)
     lines = []
     for m in db.latest_metrics():
@@ -31,7 +33,7 @@ def build_payload(db: Any) -> str:
 
 
 class InfluxDBExporter:
-    def __init__(self, db: Any, config: Dict[str, Any]):
+    def __init__(self, db: MetricsSource, config: Dict[str, Any]):
         self.db = db
         self.url = config['url'].rstrip('/')
         self.interval = int(config.get('interval', 30))

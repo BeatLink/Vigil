@@ -4,6 +4,7 @@ from typing import Any, Optional
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from vigil.core.connectors.exporters import prometheus
+from vigil.core.contracts import EngineLike, PushablePlugin
 
 
 def _tokens_match(given: str, expected: str) -> bool:
@@ -16,7 +17,7 @@ def _flatten(plugins):
         yield from _flatten(p.children)
 
 
-def register_api(app: Any, engine: Any) -> None:
+def register_api(app: Any, engine: EngineLike) -> None:
     db = engine.db
 
     def _monitor_summary(statuses):
@@ -75,9 +76,8 @@ def register_api(app: Any, engine: Any) -> None:
     @app.post('/api/push/{monitor_id}/{token}')
     def push(monitor_id: str, token: str, status: str = 'up',
              msg: Optional[str] = None, value: Optional[float] = None):
-        from vigil.plugins.push import Push
         plugin = next((p for p in _flatten(engine.plugins) if p.id == monitor_id), None)
-        if plugin is None or not isinstance(plugin, Push):
+        if plugin is None or not isinstance(plugin, PushablePlugin):
             return JSONResponse({'error': 'not found'}, status_code=404)
         if not plugin.token or not _tokens_match(token, plugin.token):
             return JSONResponse({'error': 'invalid token'}, status_code=401)
