@@ -2,7 +2,7 @@ import re
 from typing import Any, Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 _ARRAY_RE = re.compile(r'^(md\d+)\s*:\s*(\S+)\s+(\S+)', re.MULTILINE)
 _STATE_RE = re.compile(r'\[(\d+)/(\d+)\]\s*\[([U_]+)\]')

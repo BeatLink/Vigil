@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.traccar import Traccar, _age_hours, _AUTH_FAILED
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 pytestmark = pytest.mark.asyncio

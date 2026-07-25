@@ -3,7 +3,7 @@ from typing import Any, Optional
 
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-from vigil.core.connectors.exporters import prometheus
+from vigil.core.exporters import prometheus
 from vigil.core.contracts import EngineLike, PushablePlugin
 
 

@@ -3,7 +3,7 @@ import shlex
 from typing import Any, Dict, List, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 _MSG_TYPE_STATUS = 0
 _MSG_TYPE_CONNECT = 1
@@ -42,8 +42,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Openbooks(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.ws_url = config.get('ws_url', 'ws://127.0.0.1:9777/ws')
         self.probe_timeout = int(config.get('probe_timeout', 8))
 

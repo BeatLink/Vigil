@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 _AUTH_FAILED = "VIGIL_AUTH_FAILED"
 
@@ -59,8 +59,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Traccar(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8082')
         self.username = config.get('username')
         self.password = config.get('password')

@@ -4,7 +4,7 @@ pytestmark = pytest.mark.asyncio
 from vigil.plugins.filesystems import (
     Filesystems, _sanitize, _parse_inodes, _parse_readonly, _SNAP,
 )
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

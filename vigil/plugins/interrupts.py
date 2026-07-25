@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 
@@ -25,8 +25,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Interrupts(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.irq_warning   = int(config.get('irq_warning',   20000))
         self.irq_threshold = int(config.get('irq_threshold', 50000))
 

@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import AsyncMock
 
 from vigil.plugins.borg import Borg
-from vigil.core.connectors.orchestration.types import CmdResult, JobPlan
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 
@@ -270,7 +270,7 @@ class TestCommand:
         assert "BORG_RSH=" not in make_plugin(Borg, BASE_CFG)._list_command()
 
     def test_borg_defaults_to_a_longer_timeout(self, make_plugin):
-        from vigil.core.connectors.ssh import TIMEOUT
+        from vigil.core.connectors.ssh.ssh import TIMEOUT
         p = make_plugin(Borg, BASE_CFG)
         assert p.timeout == Borg.DEFAULT_TIMEOUT
         assert p.timeout > TIMEOUT
@@ -425,13 +425,14 @@ class TestBackupCommand:
         assert p._backup_command().startswith("sudo -n ")
 
 
-def _streaming(lines, status=0, error=""):
-    async def run(command, on_line=None, timeout=None, should_cancel=None):
-        for line in lines:
-            if on_line:
-                on_line("stdout", line)
-        return status, error
-    return run
+def _poll(size, exit_code, alive, out):
+    """Build the raw stdout one poll_command produces on the target."""
+    return CmdResult(0, (
+        f"===VIGIL_SIZE===\n{size}\n"
+        f"===VIGIL_EXIT===\n{exit_code if exit_code is not None else ''}\n"
+        f"===VIGIL_ALIVE===\n{1 if alive else 0}\n"
+        f"===VIGIL_OUT===\n{out}"
+    ), "")
 
 
 @pytest.fixture
@@ -439,126 +440,139 @@ def backup_plugin(make_plugin):
     return make_plugin(Borg, BACKUP_CFG)
 
 
-async def _run_backup(plugin, engine_dispatch_action, action_id="run_backup"):
-    """Drives plan_action -> network.run_job_plan (with job_on_line) ->
-    interpret_job, mirroring VigilEngine.dispatch_action's JobPlan branch."""
+async def _launch(plugin, action_id="run_backup", pid=4242):
+    """Drive plan_action -> ActionPlan (launch) -> interpret_action, mirroring
+    VigilEngine.dispatch_action for a launched detached job. Fakes the launch
+    command's stdout as the remote pid."""
     plan = plugin.plan_action(action_id)
     if plan is None:
-        return False
-    if not isinstance(plan, JobPlan):
+        return None
+    if hasattr(plan, "success"):        # CollectResult (refused) — no launch
         plugin.storage.apply(plan)
-        return plan.success
-    on_line = plugin.job_on_line(action_id)
-    _job_id, status = await plugin.network.run_job_plan(plan, on_line=on_line)
-    outcome = plugin.interpret_job(action_id, status)
-    if hasattr(outcome, "success"):
-        plugin.storage.apply(outcome)
-        return outcome.success
+        return plan
+    launch_result = CmdResult(0, f"{pid}\n", "")
+    outcome = plugin.interpret_action(action_id, launch_result)
+    plugin.storage.apply(outcome)
     return outcome
 
 
-class TestBackupExecution:
-    async def test_successful_backup_records_job(self, backup_plugin, db_manager):
-        backup_plugin.network._job.ssh.execute_streaming = _streaming(["done"])
-        assert await _run_backup(backup_plugin, None) is True
+def _poll_once(plugin, poll_result):
+    """Drive one monitor cycle while a job runs: commands() emits the poll
+    command, parse() advances the job from the poll's (faked) output."""
+    cmds = plugin.commands()
+    assert len(cmds) == 1                # a running job polls with one command
+    result = plugin.parse([poll_result])
+    plugin.storage.apply(result)
+    return result
 
-        jobs = backup_plugin.network.recent()
-        assert len(jobs) == 1
-        assert jobs[0]['kind'] == 'backup'
-        assert jobs[0]['state'] == 'succeeded'
 
-    async def test_dry_run_recorded_as_its_own_kind(self, backup_plugin):
-        backup_plugin.network._job.ssh.execute_streaming = _streaming(["ok"])
-        await _run_backup(backup_plugin, None, "dry_run_backup")
-        assert backup_plugin.network.recent()[0]['kind'] == 'dry-run'
+class TestBackupLaunch:
+    async def test_launch_records_running_job(self, backup_plugin, db_manager):
+        outcome = await _launch(backup_plugin, pid=1234)
+        assert outcome.success is True
+        job = backup_plugin.engine.job_running(backup_plugin)
+        assert job is not None
+        assert job['kind'] == 'backup'
+        assert job['pid'] == 1234
+        assert job['state'] == 'running'
 
-    async def test_borg_warning_exit_is_still_success(self, backup_plugin):
-        backup_plugin.network._job.ssh.execute_streaming = _streaming(["warn"], status=1)
-        assert await _run_backup(backup_plugin, None) is True
+    async def test_dry_run_launch_records_its_kind(self, backup_plugin):
+        await _launch(backup_plugin, "dry_run_backup")
+        assert backup_plugin.engine.job_running(backup_plugin)['kind'] == 'dry-run'
 
-    async def test_borg_error_exit_is_failure(self, backup_plugin):
-        backup_plugin.network._job.ssh.execute_streaming = _streaming(["err"], status=2)
-        assert await _run_backup(backup_plugin, None) is False
+    async def test_launch_failure_records_no_job(self, backup_plugin):
+        plan = backup_plugin.plan_action("run_backup")
+        outcome = backup_plugin.interpret_action("run_backup", CmdResult(1, "", "boom"))
+        backup_plugin.storage.apply(outcome)
+        assert outcome.success is False
+        assert backup_plugin.engine.job_running(backup_plugin) is None
 
-    async def test_job_command_is_redacted(self, backup_plugin, db_manager):
-        p = backup_plugin
-        p.passphrase = "s3cret"
-        p.network._job.ssh.execute_streaming = _streaming(["ok"])
-        await _run_backup(p, None)
-
-        stored = p.network.recent()[0]['command']
+    async def test_launched_command_is_redacted(self, backup_plugin, db_manager):
+        backup_plugin.passphrase = "s3cret"
+        await _launch(backup_plugin)
+        stored = backup_plugin.engine.job_running(backup_plugin)['command']
         assert "s3cret" not in stored
         assert "BORG_PASSPHRASE=*****" in stored
 
-    async def test_progress_is_parsed_from_log_json(self, backup_plugin, db_manager):
+    async def test_second_backup_refused_while_running(self, backup_plugin):
+        await _launch(backup_plugin)
+        refused = backup_plugin.plan_action("run_backup")
+        assert hasattr(refused, "success")           # a CollectResult, not a launch
+        assert any("already running" in m for m, _ in refused.logs)
+
+
+class TestBackupPolling:
+    async def test_poll_while_running_keeps_job_running(self, backup_plugin, db_manager):
+        await _launch(backup_plugin)
+        _poll_once(backup_plugin, _poll(10, None, True, "working\n"))
+        assert backup_plugin.engine.job_running(backup_plugin) is not None
+
+    async def test_poll_completion_marks_succeeded(self, backup_plugin, db_manager):
+        await _launch(backup_plugin)
+        _poll_once(backup_plugin, _poll(20, 0, False, "done\n"))
+        assert backup_plugin.engine.job_running(backup_plugin) is None
+        assert backup_plugin.engine.job_recent(backup_plugin)[0]['state'] == 'succeeded'
+
+    async def test_borg_warning_exit_is_still_success(self, backup_plugin):
+        await _launch(backup_plugin)
+        _poll_once(backup_plugin, _poll(5, 1, False, ""))
+        assert backup_plugin.engine.job_recent(backup_plugin)[0]['state'] == 'succeeded'
+
+    async def test_borg_error_exit_is_failure(self, backup_plugin):
+        await _launch(backup_plugin)
+        _poll_once(backup_plugin, _poll(5, 2, False, ""))
+        job = backup_plugin.engine.job_recent(backup_plugin)[0]
+        assert job['state'] == 'failed'
+        assert job['exit_code'] == 2
+
+    async def test_dead_process_without_exit_file_fails(self, backup_plugin):
+        await _launch(backup_plugin)
+        _poll_once(backup_plugin, _poll(5, None, False, "partial"))
+        assert backup_plugin.engine.job_recent(backup_plugin)[0]['state'] == 'failed'
+
+    async def test_progress_parsed_from_log_json_on_poll(self, backup_plugin, db_manager):
+        await _launch(backup_plugin)
         progress = json.dumps({
-            "type": "archive_progress",
-            "path": "/home/user/file.txt",
-            "original_size": 1048576,
-            "deduplicated_size": 524288,
-            "nfiles": 42,
+            "type": "archive_progress", "path": "/home/user/file.txt",
+            "original_size": 1048576, "deduplicated_size": 524288, "nfiles": 42,
         })
-        seen = []
+        _poll_once(backup_plugin, _poll(len(progress) + 1, None, True, progress + "\n"))
+        job = backup_plugin.engine.job_running(backup_plugin)
+        assert "42 files" in job['progress']
+        assert "/home/user/file.txt" in job['progress']
 
-        async def streaming(command, on_line=None, timeout=None, should_cancel=None):
-            on_line("stdout", progress)
-            job_id = backup_plugin.network.current_job_id()
-            seen.append(db_manager.get_job(job_id)['progress'])
-            return 0, ""
-
-        backup_plugin.network._job.ssh.execute_streaming = streaming
-        await _run_backup(backup_plugin, None)
-
-        assert "42 files" in seen[0]
-        assert "/home/user/file.txt" in seen[0]
-
-    def test_zero_counter_progress_is_ignored(self, backup_plugin, db_manager):
-        job_id = db_manager.create_job("test-borg", "h", "backup", "cmd")
+    async def test_zero_counter_progress_is_ignored(self, backup_plugin):
+        await _launch(backup_plugin)
         real = json.dumps({
-            "original_size": 1048576, "deduplicated_size": 524288,
-            "nfiles": 42, "path": "src/big.bin",
-            "type": "archive_progress", "finished": False,
+            "original_size": 1048576, "deduplicated_size": 524288, "nfiles": 42,
+            "path": "src/big.bin", "type": "archive_progress", "finished": False,
         })
         opening = json.dumps({
             "original_size": 0, "deduplicated_size": 0, "nfiles": 0,
             "path": "src", "type": "archive_progress", "finished": False,
         })
-        closing = json.dumps({"type": "archive_progress", "finished": True})
-
-        backup_plugin._handle_backup_line(job_id, "stdout", real)
-        backup_plugin._handle_backup_line(job_id, "stdout", closing)
-        assert "42 files" in db_manager.get_job(job_id)['progress']
-
-        backup_plugin._handle_backup_line(job_id, "stdout", opening)
-        assert "42 files" in db_manager.get_job(job_id)['progress']
-
-    async def test_borg_warnings_reach_the_event_log(self, backup_plugin, db_manager):
-        message = json.dumps({
-            "type": "log_message",
-            "levelname": "WARNING",
-            "message": "file changed while we backed it up",
-        })
-        backup_plugin.network._job.ssh.execute_streaming = _streaming([message])
-        await _run_backup(backup_plugin, None)
-        db_manager.flush()
-
-        from vigil.core.database.database import Event
-        with db.connection_context():
-            events = [e.message for e in Event.select().where(Event.message.contains("file changed"))]
-        assert events
-
-    async def test_non_json_output_does_not_crash(self, backup_plugin):
-        backup_plugin.network._job.ssh.execute_streaming = _streaming(
-            ["Warning: Permanently added host", "{not json", "plain text"]
-        )
-        assert await _run_backup(backup_plugin, None) is True
+        _poll_once(backup_plugin, _poll(len(real) + 1, None, True, real + "\n"))
+        assert "42 files" in backup_plugin.engine.job_running(backup_plugin)['progress']
+        # a subsequent zero-counter line must not clobber the real summary
+        off = backup_plugin.engine.job_running(backup_plugin)['output_seq']
+        _poll_once(backup_plugin, _poll(off + len(opening) + 1, None, True, opening + "\n"))
+        assert "42 files" in backup_plugin.engine.job_running(backup_plugin)['progress']
 
     async def test_output_lines_are_stored(self, backup_plugin, db_manager):
-        backup_plugin.network._job.ssh.execute_streaming = _streaming(["line1", "line2"])
-        await _run_backup(backup_plugin, None)
-
-        job_id = backup_plugin.network.recent()[0]['id']
+        await _launch(backup_plugin)
+        _poll_once(backup_plugin, _poll(12, 0, False, "line1\nline2\n"))
+        job_id = backup_plugin.engine.job_recent(backup_plugin)[0]['id']
         assert [o['message'] for o in db_manager.job_output(job_id)] == ["line1", "line2"]
+
+    async def test_partial_line_completed_across_polls(self, backup_plugin, db_manager):
+        await _launch(backup_plugin)
+        # first poll delivers a line with no trailing newline yet
+        _poll_once(backup_plugin, _poll(4, None, True, "par"))
+        job_id = backup_plugin.engine.job_running(backup_plugin)['id']
+        assert db_manager.job_output(job_id) == []       # nothing consumed yet
+        # next poll re-reads from offset 0 and completes the line
+        _poll_once(backup_plugin, _poll(8, 0, False, "partial\n"))
+        assert [o['message'] for o in db_manager.job_output(job_id)] == ["partial"]
 
 
 def _info_json(total=1000, csize=500, unique=250) -> str:

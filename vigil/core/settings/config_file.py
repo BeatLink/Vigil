@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List
 
-from vigil.core.database.config_schema import (
+from vigil.core.settings.config_schema import (
     AuthSettings, DatabaseSettings, ExporterSettings, PluginConfig, SSHConfig,
     ThemeSettings, VigilConfig,
 )

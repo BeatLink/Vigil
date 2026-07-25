@@ -2,7 +2,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.connections import Connections, _parse_states
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

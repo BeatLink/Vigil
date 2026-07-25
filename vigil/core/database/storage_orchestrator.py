@@ -1,7 +1,7 @@
 import json
 from typing import Any, Optional
 
-from vigil.core.connectors.orchestration.types import CollectResult
+from vigil.core.connectors.types import CollectResult
 
 
 class StorageOrchestrator:

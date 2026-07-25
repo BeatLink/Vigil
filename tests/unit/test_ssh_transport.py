@@ -2,8 +2,8 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from vigil.core.connectors import ssh as ssh_module
-from vigil.core.connectors.ssh import SSHConnection, _TofuClient
+from vigil.core.connectors.ssh import ssh as ssh_module
+from vigil.core.connectors.ssh.ssh import SSHConnection, _TofuClient
 
 
 def _completed_process(exit_status=0, stdout="", stderr=""):
@@ -132,71 +132,6 @@ class TestExecute:
         assert rc == 0
 
 
-class TestExecuteStreaming:
-    async def test_cancellation_kills_the_process(self):
-        conn = SSHConnection("h")
-        proc = MagicMock()
-        proc.exit_status = None
-        proc.is_closing.return_value = False
-        proc.stdout.at_eof.return_value = False
-
-        async def readline():
-            await asyncio.sleep(999)
-
-        proc.stdout.readline = readline
-
-        async def wait_closed():
-            return None
-
-        proc.wait_closed = wait_closed
-        proc.terminate = MagicMock()
-
-        mock_conn = MagicMock()
-
-        async def create_process(*a, **kw):
-            return proc
-
-        mock_conn.create_process = create_process
-
-        with patch.object(conn, "_get_connection", AsyncMock(return_value=mock_conn)):
-            status, msg = await conn.execute_streaming("sleep 999", should_cancel=lambda: True)
-        assert status == 130
-        assert proc.terminate.called
-
-    async def test_lines_delivered_to_callback(self):
-        conn = SSHConnection("h")
-        proc = MagicMock()
-        proc.exit_status = 0
-        proc.is_closing.return_value = False
-        lines = iter(["first\n", "second\n", ""])
-
-        async def readline():
-            return next(lines)
-
-        proc.stdout.readline = readline
-        proc.stdout.at_eof.side_effect = lambda: proc.exit_status == 0 and next(iter([True]), True)
-
-        async def wait():
-            return _completed_process(0)
-
-        proc.wait = wait
-
-        mock_conn = MagicMock()
-
-        async def create_process(*a, **kw):
-            return proc
-
-        mock_conn.create_process = create_process
-
-        received = []
-        with patch.object(conn, "_get_connection", AsyncMock(return_value=mock_conn)):
-            status, _ = await conn.execute_streaming(
-                "cmd", on_line=lambda stream, text: received.append((stream, text)),
-            )
-        assert ("stdout", "first") in received
-        assert ("stdout", "second") in received
-
-
 class TestKillProcess:
     async def test_terminate_succeeds_kill_not_called(self):
         proc = MagicMock()
@@ -257,11 +192,6 @@ class TestConcurrencyBound:
     async def test_execute_channels_are_bounded_per_host(self):
         conn = SSHConnection("h")
         assert conn._channel_semaphore._value == ssh_module._MAX_CONCURRENT_PER_HOST
-
-    async def test_job_channels_use_a_separate_smaller_pool(self):
-        conn = SSHConnection("h")
-        assert conn._job_semaphore._value == ssh_module._MAX_CONCURRENT_JOBS_PER_HOST
-        assert ssh_module._MAX_CONCURRENT_JOBS_PER_HOST < ssh_module._MAX_CONCURRENT_PER_HOST
 
 
 class TestTofuHostKeyValidation:

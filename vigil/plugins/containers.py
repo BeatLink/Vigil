@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional, Union
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
 
 _PS_FMT = "ps -a --format '{{.Names}}\t{{.State}}'"
 
@@ -32,8 +32,8 @@ class Containers(Plugin):
         'events': True,
     }
 
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.runtime = config.get('runtime', 'docker')
         self.expect_running = set(config.get('expect_running', []) or [])
         self.stopped_warning = bool(config.get('stopped_warning', True))

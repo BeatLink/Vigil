@@ -7,13 +7,14 @@ from datetime import datetime, timedelta
 from typing import Optional, Any, Dict, List, Callable
 from peewee import *
 
-from .events import bus
+from .models import (
+    ALL_MODELS, BaseModel, Event, Job, JobOutput, LogLine, Metric,
+    PluginSnapshot, Setting, StatusHistory, db,
+)
 from .rowtypes import (
     EventDict, EventModelDict, JobDict, JobOutputDict, LogLineModelDict,
     MetricModelDict, MetricRowDict, PluginEventDict,
 )
-
-db = SqliteDatabase(None)
 
 
 class _AsyncWriter:
@@ -72,9 +73,10 @@ class _AsyncWriter:
                                 item_fn()
                             except Exception as e:
                                 logging.error(f"DB write failed: {e}")
-                events_in_batch = {ev for _, ev in batch if ev}
-                for ev in events_in_batch:
-                    bus.emit(ev)
+                # The UI polls the Database Engine on a shared timer rather than
+                # subscribing to post-commit notifications, so the writer no
+                # longer fans out events. The per-write `event` tag is retained
+                # in the queue as a harmless label.
             finally:
                 for _ in batch:
                     self._q.task_done()
@@ -89,71 +91,6 @@ _writer = _AsyncWriter()
 def flush_writes(timeout: Optional[float] = None):
     _writer.flush(timeout)
 
-class BaseModel(Model):
-    class Meta:
-        database = db
-
-class Metric(BaseModel):
-    timestamp = DateTimeField(default=datetime.now, index=True)
-    target = CharField(index=True)
-    collector = CharField()
-    metric_name = CharField(index=True)
-    value = DoubleField()
-    metadata = TextField(null=True)
-
-class Event(BaseModel):
-    timestamp = DateTimeField(default=datetime.now, index=True)
-    level = CharField()
-    message = TextField()
-    target = CharField(null=True)
-    source_id = CharField(null=True, index=True)
-
-class Setting(BaseModel):
-    key = CharField(primary_key=True)
-    value = TextField()
-
-class StatusHistory(BaseModel):
-    timestamp = DateTimeField(default=datetime.now, index=True)
-    collector_id = CharField(index=True)
-    state = CharField()
-
-class Job(BaseModel):
-    plugin_id = CharField(index=True)
-    target = CharField(index=True)
-    kind = CharField(index=True)
-    state = CharField(index=True, default='running')
-    command = TextField()
-    started = DateTimeField(default=datetime.now, index=True)
-    finished = DateTimeField(null=True)
-    exit_code = IntegerField(null=True)
-    progress = TextField(null=True)
-    error = TextField(null=True)
-
-
-class JobOutput(BaseModel):
-    job = ForeignKeyField(Job, backref='output', on_delete='CASCADE', index=True)
-    seq = IntegerField()
-    timestamp = DateTimeField(default=datetime.now)
-    stream = CharField(default='stdout')
-    message = TextField()
-
-    class Meta:
-        indexes = ((('job', 'seq'), True),)
-
-
-class PluginSnapshot(BaseModel):
-    plugin_id = CharField(primary_key=True)
-    updated = DateTimeField(default=datetime.now)
-    data = TextField()
-
-
-class LogLine(BaseModel):
-    timestamp = DateTimeField(default=datetime.now, index=True)
-    target = CharField(index=True)
-    source = CharField(index=True)
-    level = CharField()
-    message = TextField()
-    dedup_hash = CharField(unique=True)
 
 def _job_to_dict(job: 'Job') -> JobDict:
     end = job.finished or datetime.now()
@@ -171,6 +108,9 @@ def _job_to_dict(job: 'Job') -> JobDict:
         'progress': job.progress,
         'error': job.error,
         'running': job.state == 'running',
+        'pid': job.pid,
+        'workdir': job.workdir,
+        'output_seq': job.output_seq or 0,
     }
 
 
@@ -232,7 +172,7 @@ class DatabaseManager:
                 'foreign_keys': 1,
             })
             db.connect()
-            db.create_tables([Metric, Event, Setting, StatusHistory, LogLine, Job, JobOutput, PluginSnapshot])
+            db.create_tables(ALL_MODELS)
             self._migrate()
             db.close()
             logging.info(f"Database initialized and connected at {self.db_path}")
@@ -249,6 +189,17 @@ class DatabaseManager:
             db.execute_sql('CREATE INDEX IF NOT EXISTS event_source_id '
                            'ON event (source_id)')
             logging.info("Migrated: added event.source_id")
+
+        # Detached-on-target job execution (pid/workdir/output_seq).
+        job_columns = {c.name for c in db.get_columns('job')}
+        for col, ddl in (
+            ('pid', 'ALTER TABLE job ADD COLUMN pid INTEGER'),
+            ('workdir', 'ALTER TABLE job ADD COLUMN workdir TEXT'),
+            ('output_seq', 'ALTER TABLE job ADD COLUMN output_seq INTEGER DEFAULT 0'),
+        ):
+            if col not in job_columns:
+                db.execute_sql(ddl)
+                logging.info(f"Migrated: added job.{col}")
 
     def insert_metric(self, target: str, collector: str, metric_name: str, value: float, metadata: Optional[str] = None):
         _writer.submit(lambda: Metric.create(
@@ -396,6 +347,18 @@ class DatabaseManager:
                 return row.state if row else 'offline'
         return self._cached(('status', collector_id), max_age, _fetch)
 
+    def latest_status_time_cached(self, collector_id: str, max_age: float = 1.0):
+        """The timestamp of the most recent status row (or None) — for UIs
+        that show 'last checked' distinct from the status value itself."""
+        def _fetch():
+            with db.connection_context():
+                row = (StatusHistory.select()
+                       .where(StatusHistory.collector_id == collector_id)
+                       .order_by(StatusHistory.timestamp.desc())
+                       .first())
+                return row.timestamp if row else None
+        return self._cached(('status_time', collector_id), max_age, _fetch)
+
     def insert_event(self, level: str, message: str, target: Optional[str] = None,
                      source_id: Optional[str] = None):
         _writer.submit(lambda: Event.create(level=level, message=message, target=target,
@@ -446,10 +409,21 @@ class DatabaseManager:
         return 0
 
 
-    def create_job(self, plugin_id: str, target: str, kind: str, command: str) -> int:
+    def create_job(self, plugin_id: str, target: str, kind: str, command: str,
+                   workdir: Optional[str] = None) -> int:
         with db.connection_context():
             return Job.create(plugin_id=plugin_id, target=target, kind=kind,
-                              command=command, state='running').id
+                              command=command, state='running', workdir=workdir).id
+
+    def set_job_pid(self, job_id: int, pid: int) -> None:
+        with db.connection_context():
+            Job.update(pid=pid).where(Job.id == job_id).execute()
+
+    def bump_job_output_seq(self, job_id: int, new_seq: int) -> None:
+        """Persist how far a poll has consumed the target's output file, so the
+        next poll only appends newly-arrived bytes/lines."""
+        with db.connection_context():
+            Job.update(output_seq=new_seq).where(Job.id == job_id).execute()
 
     def append_job_output(self, job_id: int, lines, stream: str = 'stdout') -> None:
         lines = [ln for ln in lines if ln is not None]
@@ -516,10 +490,24 @@ class DatabaseManager:
             ]
 
     def reconcile_orphaned_jobs(self) -> int:
+        """Jobs run detached on the target and survive a Vigil restart, so a
+        'running' row is no longer force-failed here — the owning plugin's next
+        poll re-adopts it (pid alive → resume; pid/exit gone → finalize). Only
+        rows with no pid recorded (crashed between create_job and launch, so
+        nothing is actually running remotely) are failed."""
         with db.connection_context():
             return (Job.update(state='failed', finished=datetime.now(),
-                               error='Vigil restarted while this job was running')
-                    .where(Job.state == 'running').execute())
+                               error='Vigil restarted before this job started on the target')
+                    .where((Job.state == 'running') & (Job.pid.is_null())).execute())
+
+    def running_jobs_with_pid(self, plugin_id: Optional[str] = None) -> List[JobDict]:
+        """Running jobs that were launched on a target (have a pid), for a
+        restarted engine to re-adopt via polling."""
+        with db.connection_context():
+            query = Job.select().where((Job.state == 'running') & (Job.pid.is_null(False)))
+            if plugin_id:
+                query = query.where(Job.plugin_id == plugin_id)
+            return [_job_to_dict(j) for j in query.order_by(Job.started.desc())]
 
     def prune_jobs(self, retention_days: int) -> int:
         if retention_days is None or retention_days <= 0:

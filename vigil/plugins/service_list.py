@@ -3,7 +3,7 @@ import shlex
 from typing import Any, Dict, List, Optional, Union
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'count_card', 'reload_card'],
@@ -30,8 +30,8 @@ _LIST_UNIT_FILES_CMD = (
 
 
 class ServiceList(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.max_logs = int(config.get('lines', 10))
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
 
@@ -180,10 +180,10 @@ class ServiceList(Plugin):
 
     @property
     def _service_count_text(self) -> str:
-        count_metric = self.storage.latest_metric('services_total')
+        count_metric = self.data.latest_metric('services_total')
         if count_metric is not None:
             return str(int(count_metric.value))
-        return str(len(self.storage.latest_snapshot(default=[])))
+        return str(len(self.data.latest_snapshot(default=[])))
 
     @property
     def UI_SPEC(self):

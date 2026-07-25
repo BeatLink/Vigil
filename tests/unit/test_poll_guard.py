@@ -3,7 +3,7 @@ import pytest
 from typing import List
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 
 class _Probe(Plugin):
@@ -70,7 +70,7 @@ class TestReturnValue:
 
 class TestTimeoutConfig:
     def test_defaults_to_framework_timeout(self, make_plugin):
-        from vigil.core.connectors.ssh import TIMEOUT
+        from vigil.core.connectors.ssh.ssh import TIMEOUT
         p = make_plugin(_Probe, {})
         assert p.timeout == TIMEOUT
 

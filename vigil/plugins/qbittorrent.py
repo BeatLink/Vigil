@@ -3,7 +3,7 @@ import shlex
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
 
 _SEP = "@@VIGIL_SPLIT@@"
 
@@ -179,8 +179,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Qbittorrent(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.api_url = config.get('api_url', 'http://127.0.0.1:8080')
         self.username = config.get('username')
         self.password = config.get('password')

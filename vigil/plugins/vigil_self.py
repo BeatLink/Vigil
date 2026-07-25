@@ -3,7 +3,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _CLOCK_TICKS = os.sysconf('SC_CLK_TCK') if hasattr(os, 'sysconf') else 100
@@ -36,8 +36,8 @@ def _read_cpu_seconds() -> Optional[float]:
 
 
 class VigilSelfPlugin(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.memory_warning   = float(config.get('memory_warning',   256))
         self.memory_threshold = float(config.get('memory_threshold', 512))
         self.stale_warning    = float(config.get('stale_warning',     3))
@@ -98,7 +98,9 @@ class VigilSelfPlugin(Plugin):
         offenders.sort(reverse=True)
         return total, late, stalled, offenders[:5]
 
-    def local_call(self) -> Optional[Callable[[], Any]]:
+    def io_call(self) -> Optional[Callable[[], Any]]:
+        # Reads /proc/self plus the engine's live collection-health map —
+        # local introspection the declarative connector requests can't model.
         def _sample():
             rss_mb = _read_rss_mb()
             cpu_seconds = _read_cpu_seconds()
@@ -126,7 +128,8 @@ class VigilSelfPlugin(Plugin):
             }
         return _sample
 
-    def parse_local(self, result: Any) -> CollectResult:
+    def parse_results(self, results: List[Any]) -> CollectResult:
+        result = results[0]
         rss_mb = result['rss_mb']
         cpu_pct = result['cpu_pct']
         uptime_seconds = result['uptime_seconds']

@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 from vigil.plugins.base.plugin_helpers import level_for as _level_for, format_bytes as _fmt_gb
 
 _COLLECT_CMD = "grep -E 'MemTotal:|MemAvailable:' /proc/meminfo"
@@ -15,8 +15,8 @@ _DEFAULT_LAYOUT = [
 
 
 class MemoryUsage(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.memory_warning   = int(config.get('memory_warning',   75))
         self.memory_threshold = int(config.get('memory_threshold', 90))
 

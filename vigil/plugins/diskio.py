@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 _SECTOR_BYTES = 512
 
@@ -62,8 +62,8 @@ _DEFAULT_LAYOUT = [
 
 
 class DiskIo(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.device: Optional[str] = config.get('device')
 
     def commands(self) -> List[Command]:
@@ -103,7 +103,7 @@ class DiskIo(Plugin):
 
     @property
     def _active_device_text(self) -> str:
-        return (self.storage.get_setting(f"diskio:{self.id}:active_device")
+        return (self.data.get_setting(f"diskio:{self.id}:active_device")
                 or self.config.get('device') or 'Detecting...')
 
     @property

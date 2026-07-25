@@ -12,7 +12,7 @@ from vigil.plugins.openbooks import (
     _APPEARANCE_SUCCESS,
     _APPEARANCE_DANGER,
 )
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional, Union
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import ActionPlan, CmdResult, Command, CollectResult
+from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
 
 _LIST_CMD = "virsh list --all"
 
@@ -34,8 +34,8 @@ def _parse_row(line: str):
 
 
 class Vms(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.uri = config.get('uri', 'qemu:///system')
         self.expect_running = set(config.get('expect_running', []) or [])
         self.offline_warning = bool(config.get('offline_warning', True))

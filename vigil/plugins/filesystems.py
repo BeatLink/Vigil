@@ -1,6 +1,6 @@
 from typing import Dict, Any, List
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 from vigil.plugins.base.plugin_helpers import format_bytes as _format_gb
 
 _EXCLUDE_TYPES = ['tmpfs', 'devtmpfs', 'squashfs', 'overlay', 'proc', 'sysfs',
@@ -61,8 +61,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Filesystems(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.warning   = int(config.get('warning',   80))
         self.threshold = int(config.get('threshold', 90))
         self.inode_warning   = int(config.get('inode_warning',   85))

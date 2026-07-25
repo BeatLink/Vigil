@@ -104,7 +104,7 @@ class TestLevelFor:
 
 
 def _result(exit_code, stdout, stderr=""):
-    from vigil.core.connectors.orchestration.types import CmdResult
+    from vigil.core.connectors.types import CmdResult
     return CmdResult(exit_code, stdout, stderr)
 
 

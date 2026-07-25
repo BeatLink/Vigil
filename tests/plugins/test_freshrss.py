@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from vigil.plugins.freshrss import Freshrss, _parse_response, _build_fetch_script
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

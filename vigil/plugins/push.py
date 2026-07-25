@@ -2,7 +2,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 from vigil.plugins.base.plugin_helpers import format_age, format_duration
 
 _DEFAULT_LAYOUT = [
@@ -14,8 +14,8 @@ _VALID_PUSH_STATUSES = {'up', 'down'}
 
 
 class Push(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.max_age = int(config.get('max_age', self.interval * 2))
         self.token = config.get('token')
         self.target = config.get('target_host', self.name)
@@ -26,7 +26,7 @@ class Push(Plugin):
         return []
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        last = self.storage.latest_metric('last_push_epoch')
+        last = self.data.latest_metric('last_push_epoch')
 
         if last is None:
             return CollectResult(logs=[("No heartbeat received yet", "WARNING")], status='failed')
@@ -42,7 +42,7 @@ class Push(Plugin):
                 status='failed',
             )
 
-        last_reported = self.storage.latest_metric('reported_up')
+        last_reported = self.data.latest_metric('reported_up')
         if last_reported is not None and last_reported.value == 0.0:
             return CollectResult(status='failed')
         return CollectResult(status='online')
@@ -65,12 +65,12 @@ class Push(Plugin):
             logs=[(f"Heartbeat received (status={status}){detail}", log_level)],
             status='online' if is_up else 'failed',
         )
-        self.storage.apply(result)
+        self.engine.apply(self, result)
         return True
 
     @property
     def _last_heartbeat_text(self) -> str:
-        last = self.storage.latest_metric('last_push_epoch')
+        last = self.data.latest_metric('last_push_epoch')
         if last is None:
             return 'Never'
         return format_age(int(time.time() - last.value))

@@ -2,7 +2,7 @@ from typing import Dict, Any, List
 from collections import Counter
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _TCP_STATES = {
@@ -43,8 +43,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Connections(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.total_warning   = int(config.get('total_warning',   500))
         self.total_threshold = int(config.get('total_threshold', 1000))
 

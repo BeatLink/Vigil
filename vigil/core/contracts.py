@@ -1,7 +1,7 @@
 """Shared interface contracts used across module boundaries.
 
 Types that belong to a single subsystem live with that subsystem (e.g.
-CollectResult in orchestration/types.py). This module holds only the
+CollectResult in connectors/types.py). This module holds only the
 contracts that cross subsystem boundaries and would otherwise be
 duck-typed identically in multiple places — see DEVELOP.md's "Interface
 contracts" section for the rationale behind each one.
@@ -13,18 +13,16 @@ from typing import (
 )
 
 # A callback that may be a plain sync function or one returning an
-# awaitable — both are valid everywhere NiceGUI/DataBus invoke a callback,
-# since `helpers.should_await` (or an equivalent check) decides at the call
-# site whether to await the result. Previously reimplemented ad hoc in
-# DataBus.emit, PluginPage._tick, safe_timer, and on_data_event.
+# awaitable — both are valid everywhere NiceGUI invokes a callback, since
+# `helpers.should_await` (or an equivalent check) decides at the call site
+# whether to await the result. Reused by PluginPage._tick, safe_timer, and
+# on_data_event.
 RefreshCallback = Callable[[], Union[None, Awaitable[None]]]
 
-# The five DataBus event kinds. Not a Literal, deliberately: DataBus.emit is
-# instructed to broadcast the exact string it's given, and adding a new
-# writer that emits a different kind should not require touching this file.
-# Callers that want closed-set safety can still write `event: EventName`
-# themselves; this exists so both emit and subscribe sites reference one
-# shared name instead of typing the string literal independently.
+# Names the data type a polling refresh callback reads (status/metric/event/
+# log_line/setting/snapshot). Advisory now that the UI polls the Database
+# Engine rather than subscribing to write notifications — kept so on_data_event
+# call sites still document which data a callback depends on.
 EventName = str
 
 
@@ -87,3 +85,19 @@ class EngineLike(Protocol):
     async def dispatch_action(self, plugin: Any, action_id: str, **kwargs) -> tuple: ...
 
     async def run_cycle_now(self, plugin: Any) -> bool: ...
+
+    # Job-control surface the UI Engine's job panel drives through the engine
+    # (these touch the live JobController, which a pure plugin no longer holds).
+    def job_is_running(self, plugin: Any) -> bool: ...
+
+    def job_current_id(self, plugin: Any) -> Optional[int]: ...
+
+    def job_recent(self, plugin: Any, limit: int = 20) -> list: ...
+
+    async def job_cancel(self, plugin: Any) -> bool: ...
+
+    def set_setting(self, key: str, value: str) -> None: ...
+
+    def apply(self, plugin: Any, result: Any) -> None: ...
+
+    def set_job_progress(self, job_id: int, summary: str) -> None: ...

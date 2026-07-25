@@ -1,7 +1,7 @@
 import re
 from typing import Any, Dict, List
 
-from vigil.core.database.config_schema import PluginConfig
+from vigil.core.settings.config_schema import PluginConfig
 
 
 class PluginConfigMixin:

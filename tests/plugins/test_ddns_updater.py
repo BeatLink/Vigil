@@ -4,7 +4,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.ddns_updater import DdnsUpdater
-from vigil.core.connectors.orchestration.types import LocalActionPlan
+from vigil.core.connectors.types import IoActionPlan
 from vigil.core.database.database import db, StatusHistory, Metric
 
 
@@ -35,73 +35,73 @@ def _cfg(**extra):
 
 
 class TestInSync:
-    async def test_matching_ip_sets_online(self, make_plugin, run_local_cycle):
+    async def test_matching_ip_sets_online(self, make_plugin, run_io_cycle):
         p = make_plugin(DdnsUpdater, _cfg())
         with patch.object(p, '_fetch_public_ip', return_value="1.2.3.4"), \
              patch.object(p, '_resolve_public_record', return_value="1.2.3.4"), \
              patch.object(p, '_push_update') as push:
-            run_local_cycle(p)
+            run_io_cycle(p)
         assert _latest_status("test-ddns") == "online"
         assert _latest_metric("test-ddns", "in_sync") == pytest.approx(1.0)
         push.assert_not_called()
 
 
 class TestDriftAndUpdate:
-    async def test_drift_triggers_update(self, make_plugin, run_local_cycle):
+    async def test_drift_triggers_update(self, make_plugin, run_io_cycle):
         p = make_plugin(DdnsUpdater, _cfg())
         with patch.object(p, '_fetch_public_ip', return_value="5.6.7.8"), \
              patch.object(p, '_resolve_public_record', return_value="1.2.3.4"), \
              patch.object(p, '_push_update', return_value=(True, "Update accepted: good")) as push:
-            run_local_cycle(p)
+            run_io_cycle(p)
         push.assert_called_once_with("https://freedns.example/update?token=secret")
         assert _latest_status("test-ddns") == "online"
         assert _latest_metric("test-ddns", "in_sync") == pytest.approx(0.0)
 
-    async def test_failed_update_sets_failed(self, make_plugin, run_local_cycle):
+    async def test_failed_update_sets_failed(self, make_plugin, run_io_cycle):
         p = make_plugin(DdnsUpdater, _cfg())
         with patch.object(p, '_fetch_public_ip', return_value="5.6.7.8"), \
              patch.object(p, '_resolve_public_record', return_value="1.2.3.4"), \
              patch.object(p, '_push_update', return_value=(False, "Update rejected")):
-            run_local_cycle(p)
+            run_io_cycle(p)
         assert _latest_status("test-ddns") == "failed"
 
-    async def test_throttled_update_sets_warning_not_failed(self, make_plugin, run_local_cycle):
+    async def test_throttled_update_sets_warning_not_failed(self, make_plugin, run_io_cycle):
         p = make_plugin(DdnsUpdater, _cfg(min_interval=99999))
         push = MagicMock()
         with patch.object(p, '_fetch_public_ip', return_value="5.6.7.8"), \
              patch.object(p, '_resolve_public_record', return_value="1.2.3.4"), \
              patch.object(p, '_push_update', push):
             p._last_update_attempt = __import__('time').monotonic()
-            run_local_cycle(p)
+            run_io_cycle(p)
         push.assert_not_called()
         assert _latest_status("test-ddns") == "warning"
 
-    async def test_missing_update_url_sets_failed(self, make_plugin, run_local_cycle):
+    async def test_missing_update_url_sets_failed(self, make_plugin, run_io_cycle):
         p = make_plugin(DdnsUpdater, _cfg(update_url=None))
         with patch.object(p, '_fetch_public_ip', return_value="5.6.7.8"), \
              patch.object(p, '_resolve_public_record', return_value="1.2.3.4"):
-            run_local_cycle(p)
+            run_io_cycle(p)
         assert _latest_status("test-ddns") == "failed"
 
 
 class TestFailureModes:
-    async def test_public_ip_lookup_failure_sets_failed(self, make_plugin, run_local_cycle):
+    async def test_public_ip_lookup_failure_sets_failed(self, make_plugin, run_io_cycle):
         p = make_plugin(DdnsUpdater, _cfg())
         with patch.object(p, '_fetch_public_ip', return_value=None):
-            run_local_cycle(p)
+            run_io_cycle(p)
         assert _latest_status("test-ddns") == "failed"
 
-    async def test_missing_domain_sets_failed(self, make_plugin, run_local_cycle):
+    async def test_missing_domain_sets_failed(self, make_plugin, run_io_cycle):
         p = make_plugin(DdnsUpdater, _cfg(domain=None))
-        run_local_cycle(p)
+        run_io_cycle(p)
         assert _latest_status("test-ddns") == "failed"
 
-    async def test_dns_lookup_failure_still_triggers_update(self, make_plugin, run_local_cycle):
+    async def test_dns_lookup_failure_still_triggers_update(self, make_plugin, run_io_cycle):
         p = make_plugin(DdnsUpdater, _cfg())
         with patch.object(p, '_fetch_public_ip', return_value="5.6.7.8"), \
              patch.object(p, '_resolve_public_record', return_value=None), \
              patch.object(p, '_push_update', return_value=(True, "Update accepted: good")) as push:
-            run_local_cycle(p)
+            run_io_cycle(p)
         push.assert_called_once()
 
 
@@ -173,9 +173,9 @@ class TestForceUpdateAction:
         p = make_plugin(DdnsUpdater, _cfg())
         with patch.object(p, '_push_update', return_value=(True, "Update accepted: good")) as push:
             plan = p.plan_action('force_update')
-            assert isinstance(plan, LocalActionPlan)
+            assert isinstance(plan, IoActionPlan)
             local_result = plan.call()
-            outcome = p.interpret_local_action('force_update', local_result)
+            outcome = p.interpret_action('force_update', local_result)
         assert outcome.success is True
         push.assert_called_once_with("https://freedns.example/update?token=secret")
 
@@ -183,7 +183,7 @@ class TestForceUpdateAction:
         p = make_plugin(DdnsUpdater, _cfg(update_url=None))
         plan = p.plan_action('force_update')
         local_result = plan.call()
-        outcome = p.interpret_local_action('force_update', local_result)
+        outcome = p.interpret_action('force_update', local_result)
         assert outcome.success is False
 
     async def test_unknown_action_returns_false(self, make_plugin):

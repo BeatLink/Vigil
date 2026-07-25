@@ -2,7 +2,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.memory_usage import MemoryUsage, _level_for, _fmt_gb
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 

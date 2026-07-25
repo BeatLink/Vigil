@@ -3,7 +3,7 @@ import shlex
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 
 def _build_fetch_script(api_url: str, timeout: int, api_key_command: Optional[str],
@@ -39,8 +39,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Blockurl(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.api_url = config.get('api_url', 'http://127.0.0.1:9001')
         self.api_key = config.get('api_key')
         self.api_key_command = config.get(

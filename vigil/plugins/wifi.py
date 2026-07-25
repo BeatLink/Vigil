@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 
 def _parse_wireless(stdout: str) -> Dict[str, Tuple[float, float]]:
@@ -38,8 +38,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Wifi(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.interface: Optional[str] = config.get('interface')
         self.quality_warning   = float(config.get('quality_warning',   40))
         self.quality_threshold = float(config.get('quality_threshold', 20))
@@ -92,7 +92,7 @@ class Wifi(Plugin):
 
     @property
     def _active_interface_text(self) -> str:
-        return self.storage.get_setting(f"wifi:{self.id}:active_interface") or self.interface or 'Detecting...'
+        return self.data.get_setting(f"wifi:{self.id}:active_interface") or self.interface or 'Detecting...'
 
     @property
     def UI_SPEC(self):

@@ -2,7 +2,7 @@ import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.folders import Folders, _sanitize
-from vigil.core.connectors.orchestration.types import CmdResult
+from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
 _GB = 1024 ** 3

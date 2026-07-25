@@ -7,7 +7,7 @@ import dns.resolver
 import requests
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult, LocalActionPlan
+from vigil.core.connectors.types import CmdResult, Command, CollectResult, IoActionPlan
 from vigil.plugins.base.plugin_helpers import format_age
 
 _IP_ECHO_SERVICES = (
@@ -24,8 +24,8 @@ _DEFAULT_LAYOUT = [
 
 
 class DdnsUpdater(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.domain = config.get('domain')
         self.record_type = str(config.get('record_type', 'A')).upper()
         self.resolver_addr = config.get('resolver', '8.8.8.8')
@@ -136,12 +136,16 @@ class DdnsUpdater(Plugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         return CollectResult()
 
-    def local_call(self) -> Optional[Callable[[], Any]]:
+    def io_call(self) -> Optional[Callable[[], Any]]:
+        # DDNS is genuinely sequential local IO (fetch public IP, resolve DNS,
+        # compare, then conditionally push with throttling), so it uses the
+        # io_call escape hatch rather than a declarative request list.
         if not self.domain:
             return lambda: {'no_domain': True}
         return self._collect_sync
 
-    def parse_local(self, result: Any) -> CollectResult:
+    def parse_results(self, results: List[Any]) -> CollectResult:
+        result = results[0]
         if result.get('no_domain'):
             return CollectResult.failed("No 'domain' configured")
 
@@ -205,9 +209,9 @@ class DdnsUpdater(Plugin):
             ok, log_message = self._push_update(update_url)
             return {'ok': ok, 'log': log_message}
 
-        return LocalActionPlan(_do_force_update)
+        return IoActionPlan(_do_force_update)
 
-    def interpret_local_action(self, action_id: str, result: Any, **kwargs):
+    def interpret_action(self, action_id: str, result: Any, **kwargs):
         if not result['ok']:
             return CollectResult.failed(result['log'])
         return CollectResult(
@@ -218,23 +222,23 @@ class DdnsUpdater(Plugin):
 
     @property
     def _public_ip_text(self) -> str:
-        return self.storage.get_setting(f"ddns:{self.id}:public_ip") or '--'
+        return self.data.get_setting(f"ddns:{self.id}:public_ip") or '--'
 
     @property
     def _dns_ip_text(self) -> str:
-        return self.storage.get_setting(f"ddns:{self.id}:dns_ip") or '--'
+        return self.data.get_setting(f"ddns:{self.id}:dns_ip") or '--'
 
     @property
     def _dns_ip_color(self) -> Optional[str]:
-        dns_ip = self.storage.get_setting(f"ddns:{self.id}:dns_ip")
+        dns_ip = self.data.get_setting(f"ddns:{self.id}:dns_ip")
         if not dns_ip:
             return None
-        public_ip = self.storage.get_setting(f"ddns:{self.id}:public_ip")
+        public_ip = self.data.get_setting(f"ddns:{self.id}:public_ip")
         return 'online' if dns_ip == public_ip else 'failed'
 
     @property
     def _last_update_text(self) -> str:
-        last_update = self.storage.latest_metric('last_update_epoch')
+        last_update = self.data.latest_metric('last_update_epoch')
         if last_update is None:
             return 'Never'
         return format_age(int(time.time() - last_update.value))

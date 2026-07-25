@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 _FAIL = "FAIL"
 
@@ -75,8 +75,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Ports(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.timeout = int(config.get('timeout', 5))
         self.checks: List[Dict[str, Any]] = config.get('checks', [])
         for check in self.checks:
@@ -131,7 +131,7 @@ class Ports(Plugin):
             return None
         up = down = 0
         for check in checks:
-            m = self.storage.latest_metric(f"{check['metric']}_up")
+            m = self.data.latest_metric(f"{check['metric']}_up")
             if m is None:
                 continue
             if m.value >= 1.0:

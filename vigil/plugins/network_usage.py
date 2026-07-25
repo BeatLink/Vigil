@@ -1,7 +1,7 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 _VIRTUAL_PREFIXES = ('lo', 'veth', 'docker', 'virbr', 'br-', 'tun', 'tap')
 
@@ -47,8 +47,8 @@ _DEFAULT_LAYOUT = [
 
 
 class NetworkUsage(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.interface: Optional[str] = config.get('interface')
         self._active_interface: Optional[str] = self.interface
 

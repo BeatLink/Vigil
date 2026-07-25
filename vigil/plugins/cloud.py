@@ -1,7 +1,7 @@
 from typing import Dict, Any, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
 _MD = "169.254.169.254"
 
@@ -42,8 +42,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Cloud(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.provider = str(config.get('provider', 'auto')).lower()
 
     def _cmds(self):
@@ -87,7 +87,7 @@ class Cloud(Plugin):
 
     def _cloud_fields(self) -> Dict[str, str]:
         import json
-        raw = self.storage.get_setting(f"cloud:{self.id}")
+        raw = self.data.get_setting(f"cloud:{self.id}")
         if not raw:
             return {}
         try:

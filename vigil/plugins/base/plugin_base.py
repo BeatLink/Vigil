@@ -1,14 +1,15 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from vigil.core.coordination.data_view import PluginDataView
+    from vigil.core.connectors.types import Request, Result
 
 from vigil.plugins.base.plugin_helpers import PluginConfigMixin, parse_duration
-from vigil.core.connectors.ssh import COLLECT_TIMEOUT as SSH_TIMEOUT
-from vigil.core.connectors.orchestration.local_io_orchestrator import LocalIOOrchestrator
-from vigil.core.connectors.orchestration.network_orchestrator import NetworkOrchestrator, SSHConnectionPool
+from vigil.core.connectors.ssh.ssh import COLLECT_TIMEOUT as SSH_TIMEOUT
 from vigil.core.contracts import ActionButtonSpec, EngineLike
-from vigil.core.database.config_schema import PluginConfig
-from vigil.core.database.storage_orchestrator import StorageOrchestrator
-from vigil.core.connectors.orchestration.types import (
+from vigil.core.settings.config_schema import PluginConfig
+from vigil.core.connectors.types import (
     ActionOutcome, ActionPlanResult, CmdResult, Command, CollectResult,
 )
 from vigil.core.ui.spec_types import UISpec
@@ -17,6 +18,11 @@ from vigil.core.ui.spec_types import UISpec
 class Plugin(PluginConfigMixin, ABC):
     engine: Optional[EngineLike] = None
 
+    # Read-only projection of the Database Engine, injected in __init__. The
+    # only handle a pure plugin holds into stored state (reads only — no IO,
+    # no writes). See vigil/core/coordination/data_view.py.
+    data: "PluginDataView"
+
     # Plugins that use the declarative render path (spec.generic_render)
     # override this as a @property returning a UISpec dict. Plugins with a
     # hand-written render_ui() may leave it unset — every UI_SPEC consumer
@@ -24,80 +30,93 @@ class Plugin(PluginConfigMixin, ABC):
     # UI_SPEC as "no declarative UI", via getattr(plugin, 'UI_SPEC', None).
     UI_SPEC: Optional[UISpec] = None
 
-    def __init__(self, name: str, config: PluginConfig, db: Any, ssh_pool: SSHConnectionPool):
+    def __init__(self, name: str, config: PluginConfig):
+        """Pure plugins take only their name and config. All IO/persistence
+        machinery (SSH/HTTP connectors, the storage writer, the read view) is
+        owned by the Coordination Engine and wired to the plugin after
+        construction via bind() — see VigilEngine.setup_modules."""
         self._init_config(name, config)
-        self.db = db
         self.timeout = parse_duration(config.get('timeout', SSH_TIMEOUT))
+        self.data = None  # PluginDataView, injected by engine.bind()
 
-        self.network = NetworkOrchestrator(config, db, self.id, self.target, self.timeout, ssh_pool)
-        self.target = self.network.target
-        self.storage = StorageOrchestrator(db, self.target, self.name, self.id)
-        self.local_io = LocalIOOrchestrator()
+    def bind(self, data: "PluginDataView") -> None:
+        """Called once by the Coordination Engine to hand the plugin its
+        read-only Database Engine projection. The engine keeps the write path
+        (StorageOrchestrator) and connectors keyed by plugin id on its side."""
+        self.data = data
 
-        from vigil.core.ui.orchestration import UIOrchestrator
-        self.ui = UIOrchestrator(self)
+    @property
+    def ui(self):
+        """UI-construction helper (host/status cards, tables) for the handful
+        of plugins with a bespoke render_ui(). Built lazily so a plugin that
+        never renders — or is collected headless in a test — pays nothing."""
+        cached = self.__dict__.get('_ui')
+        if cached is None:
+            from vigil.core.ui.orchestration import UIOrchestrator
+            cached = self.__dict__['_ui'] = UIOrchestrator(self)
+        return cached
+
+    def requests(self) -> List["Request"]:
+        """Declare this cycle's IO as a heterogeneous list of connector
+        requests (Command / HttpRequest / DnsQuery / PingRequest). Pure — no
+        IO, no side effects. The Connector Engine executes them and hands the
+        positionally-matched results to parse_results().
+
+        Default: delegate to the SSH-only commands() so existing plugins that
+        only override commands()/parse() need no change."""
+        return self.commands()
+
+    def parse_results(self, results: List["Result"]) -> CollectResult:
+        """Pure: connector results in, a CollectResult describing what to
+        persist out. No IO, no async, no self.data/self.storage calls.
+
+        Default: delegate to parse() (whose results are the Command-only
+        case), so SSH-only plugins need no change."""
+        return self.parse(results)
 
     @abstractmethod
     def commands(self) -> List[Command]:
-        """Declare what to run this cycle. Pure — no IO, no side effects.
-        Plugins that don't talk over SSH at all (local DNS/HTTP queries,
-        etc.) return [] here and implement local_call()/parse_local()
-        instead — see those methods below."""
+        """Declare what SSH commands to run this cycle. Pure — no IO, no side
+        effects. Plugins that talk over HTTP/DNS/ICMP instead override
+        requests()/parse_results() with the declarative request types and
+        return [] here."""
 
     @abstractmethod
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        """Pure: command results in, a CollectResult describing what to
+        """Pure: SSH command results in, a CollectResult describing what to
         persist out. No IO, no async, no self.storage/self.network calls."""
 
-    def local_call(self) -> Optional[Callable[[], Any]]:
-        """Optional: return a pure zero-arg closure to run off-thread via
-        LocalIOOrchestrator for plugins whose collection is local blocking
-        IO (DNS resolution, outbound HTTP) rather than an SSH command. The
-        closure itself may block/do IO — only constructing it must be pure.
-        Return None (the default) for SSH-command-driven plugins."""
-        return None
+    def io_call(self) -> Optional[Callable[[], Any]]:
+        """Escape hatch for the rare plugin whose collection is genuinely
+        sequential/conditional local IO that the declarative requests() list
+        can't express (e.g. ddns_updater: fetch public IP, resolve DNS,
+        compare, then conditionally push). Return a zero-arg closure (sync or
+        async) the Coordination Engine runs off the event loop; its return
+        value is handed to parse_results() as the single result.
 
-    def parse_local(self, result: Any) -> CollectResult:
-        """Pure: consumes local_call()'s return value (or a raised
-        exception, passed through as-is if local_call's closure lets one
-        escape — plugins should catch what they need to distinguish inside
-        the closure and encode it in the return value instead). Only
-        implemented by plugins that override local_call()."""
-        raise NotImplementedError
+        Constructing the closure must be pure; the closure itself may block/do
+        IO. Default None: use requests()/parse_results() (the 99% path)."""
+        return None
 
     def get_actions(self) -> List[ActionButtonSpec]:
         return []
 
-    def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, JobPlan, LocalActionPlan, CollectResult]]:
-        """Pure: decide what command an action requires. Return an
-        ActionPlan/JobPlan to run an SSH command, a LocalActionPlan to run
-        local blocking IO (no SSH), a CollectResult to apply a write with
-        no command run (e.g. logging a refused action), or None for a truly
-        unhandled action_id."""
+    def plan_action(self, action_id: str, **kwargs) -> ActionPlanResult:
+        """Pure: decide what an action requires. Return an ActionPlan for an
+        SSH command (including launching a detached long-running job — see
+        borg), a declarative connector request (HttpRequest/DnsQuery/
+        PingRequest), an IoActionPlan for sequential local IO, a CollectResult
+        to apply a write with no IO (e.g. logging a refused action), or None
+        for an unhandled action_id."""
         return None
 
-    def interpret_action(self, action_id: str, result: CmdResult, **kwargs) -> Union[bool, CollectResult]:
-        """Pure: given the SSH command's result, return success/failure, or
-        a CollectResult (with .success set) to also apply a write, e.g.
-        logging a failure message alongside the outcome."""
+    def interpret_action(self, action_id: str, result: Any, **kwargs) -> ActionOutcome:
+        """Pure: given the action's result (a CmdResult for SSH, an
+        HttpResult/DnsResult/PingResult for a connector request, or an
+        IoActionPlan closure's return value), return success/failure, or a
+        CollectResult (with .success set) to also apply a write, e.g. logging
+        a failure message alongside the outcome. Default assumes a CmdResult."""
         return result.exit_code == 0
-
-    def interpret_local_action(self, action_id: str, result: Any, **kwargs) -> Union[bool, CollectResult]:
-        """Pure: given a LocalActionPlan's call() return value, return
-        success/failure, or a CollectResult (with .success set)."""
-        return bool(result)
-
-    def job_on_line(self, action_id: str, **kwargs):
-        """Optional streaming line handler for JobPlan actions (e.g. live
-        backup progress). Not pure — mirrors JobController's own internal
-        buffering, which already writes as output streams in. Return None
-        (the default) if the action has no per-line handling."""
-        return None
-
-    def interpret_job(self, action_id: str, exit_code: int, **kwargs) -> Union[bool, CollectResult]:
-        """Pure: given a JobPlan's exit code, return success/failure, or a
-        CollectResult (with .success set). Default: exit_code == 0."""
-        return exit_code == 0
 
     async def on_action(self, action_id: str, **kwargs) -> bool:
         success, _ = await self.engine.dispatch_action(self, action_id, **kwargs)

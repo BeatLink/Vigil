@@ -1,7 +1,7 @@
 from typing import Any, Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.orchestration.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CmdResult, Command, CollectResult
 from vigil.plugins.base.plugin_helpers import level_for as _level_for
 
 _COLLECT_CMD = 'echo "LOAD:$(cat /proc/loadavg)"; echo "CPUS:$(nproc)"'
@@ -15,8 +15,8 @@ _DEFAULT_LAYOUT = [
 
 
 class LoadAverage(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any], db: Any, ssh_pool: Any):
-        super().__init__(name, config, db, ssh_pool)
+    def __init__(self, name: str, config: Dict[str, Any]):
+        super().__init__(name, config)
         self.load_warning   = float(config['load_warning'])   if 'load_warning'   in config else None
         self.load_threshold = float(config['load_threshold'])  if 'load_threshold'  in config else None
 
