@@ -95,7 +95,7 @@ def metric_table(page, collector: str, title: str = 'Monitor Metrics', limit: in
         ], rows=[]).classes('w-full border-none')
 
         def _read():
-            return page.plugin.data.collector_metrics_cached(collector, limit=limit)
+            return page.plugin.data.collector_metrics(collector, limit=limit)
 
         async def update():
             refresh_rows(table, await offload(_read)())
@@ -129,7 +129,7 @@ def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent L
             table.props('virtual-scroll')
 
         def _read():
-            return page.plugin.data.log_lines_cached(target, filter_prefix, limit=limit)
+            return page.plugin.data.log_lines(target, filter_prefix, limit=limit)
 
         async def update_logs():
             refresh_rows(table, await offload(_read)())
@@ -162,7 +162,7 @@ def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
             table.props('virtual-scroll')
 
         def _read():
-            return page.plugin.data.plugin_events_cached(plugin_id, prefix, target, limit=limit)
+            return page.plugin.data.plugin_events(plugin_id, prefix, target, limit=limit)
 
         async def update():
             refresh_rows(table, await offload(_read)())
@@ -189,7 +189,7 @@ def history_chart(page, title: str, collector: str, metric_name: str, limit: int
         }).classes('w-full h-72')
 
         def _read():
-            history = page.plugin.data.metric_history_cached(collector, metric_name, limit=limit)
+            history = page.plugin.data.metric_history(collector, metric_name, limit=limit)
             return (
                 [m.timestamp.strftime('%H:%M:%S') for m in history],
                 [m.value for m in history],

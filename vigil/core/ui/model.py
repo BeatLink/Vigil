@@ -153,6 +153,6 @@ class PluginPage:
 
     async def refresh_status(self) -> None:
         from .theme import STATUS_COLORS
-        state = await offload(self.plugin.data.latest_status_cached)(self.plugin.id)
+        state = await offload(self.plugin.data.latest_status)(self.plugin.id)
         self.model.status = state
         self.model.status_color = STATUS_COLORS.get(state, STATUS_COLORS['offline'])

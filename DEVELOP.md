@@ -14,7 +14,13 @@ Vigil runs as one OS process. `main()` (`vigil/__main__.py`) builds one
 dashboard share the same asyncio event loop and the same live `Plugin`
 instances — there is no IPC between "collecting" and "displaying". A plugin's
 `render_ui()` reads through `self.data` (its read-only `PluginDataView`), which
-is the same projection of the database the polling loop just wrote to.
+projects the same in-memory state the polling loop just wrote to.
+
+**State lives in memory.** Collectors write into a `StateStore`
+(`core/state/`) of plain Python objects and the UI reads from it directly;
+SQLite is a persistence sink behind that, not a read path. Nothing queries the
+database while the process runs — it is written to (asynchronously, off the
+read path) and read exactly once, at startup, to restore the store.
 
 ## Engine model
 
@@ -23,9 +29,15 @@ owns and wires together:
 
 - **Settings Engine** (`core/settings/`) — `ConfigFileManager` loads and types
   `config.yaml` (`config_schema.py`).
-- **Database Engine** (`core/database/`) — `DatabaseManager` is the single
-  reader/writer over SQLite. Models live in `models.py`, read-result dict shapes
-  in `rowtypes.py`.
+- **State Engine** (`core/state/`) — `StateStore` holds the live system of
+  record in memory: current state (statuses, snapshots, settings, jobs) whole,
+  and history (metrics, events, log lines, job output) in bounded per-stream
+  ring buffers sized by `memory:` in `config.yaml`. Record types are in
+  `records.py`.
+- **Database Engine** (`core/database/`) — `DatabaseManager` fronts the store:
+  every read is served from memory, every write updates the store and is then
+  mirrored to SQLite on a background thread. Models live in `models.py`,
+  read-result dict shapes in `rowtypes.py`.
 - **Connector Engine** (`core/connectors/`) — all external IO. One
   `ConnectorEngine` routes a plugin's heterogeneous request list
   (`Command` / `HttpRequest` / `DnsQuery` / `PingRequest`) to the right
@@ -173,48 +185,58 @@ returns output size, exit code (empty if running), liveness (`kill -0`), and any
 output past the byte offset the last poll consumed (`Job.output_seq`).
 
 Because the job lives on the target it **survives a Vigil restart**:
-`reconcile_orphaned_jobs` only fails rows with no `pid` (crashed before launch);
-any row with a pid is re-adopted by the owning plugin's next poll (pid alive →
+`reconcile_orphaned_jobs` only fails jobs with no `pid` (crashed before launch);
+any job with a pid is re-adopted by the owning plugin's next poll (pid alive →
 resume; pid/exit gone → finalize).
 
-## SQLite: writer, reader, caching, retention
+Jobs live in the store like everything else, so **job ids are assigned by the
+store**, not by SQLite's autoincrement — `create_job` returns an id
+immediately, with the row persisted asynchronously under that same id. A
+`JobRecord` is the one mutable record type (successive polls advance `pid`,
+`progress`, `state`, `output_seq` in place); readers take a rendered dict via
+`as_dict()`, so a half-applied update is never observed. Note the durability
+edge this buys: if Vigil dies between launching a job and the next flush, the
+job is lost from both memory and disk, and the detached process on the target
+has nothing left to re-adopt it.
+
+## SQLite: persistence, hydration, retention
+
+SQLite is write-mostly. It is read exactly once per process, at startup; every
+runtime read is served from the state store.
 
 **One background writer thread** (`_AsyncWriter`) owns all writes. The polling
 loop and UI run on the asyncio event loop; committing to SQLite fsyncs, which can
 block noticeably (especially on ZFS) and would stall the async server if done
 inline. Writes are enqueued (non-blocking for the caller) and batched: the thread
-commits whatever arrives within `batch_window` seconds as one transaction. This
-is a durability trade-off — a crash can lose the in-memory batch — and the UI
-observes writes on its own poll cadence, not on commit.
+commits whatever arrives within `batch_window` seconds as one transaction.
 
-**Reads run on executor threads** (`offload()` in `core/ui/components.py`) so a
-blocking query never runs inline on the loop. The read path uses the `_reader()`
-context manager, **not** peewee's `db.connection_context()`: the latter's
-`__exit__` unconditionally `close()`s, so every read on a recycled executor
-thread would re-`connect()`. `_reader()` opens the thread-local connection if
-closed but leaves it open, so successive reads on the same thread reuse the warm
-connection. (Pooled threads live for the process, so the open connections are
-freed at exit — nothing to close explicitly. Writes on the caller thread keep
-`connection_context()`.)
+Because the store — not the database — is what the UI reads, a slow disk can no
+longer make a read wait, and nothing in the running system blocks on the
+writer. The durability trade-off is the flip side: a crash loses the unflushed
+batch, and since jobs are also memory-first, a job launched and lost within
+that window leaves an unreconciled remote process (see **Jobs** below).
+`flush()` waits for the queue and exists for tests and shutdown.
 
-`read_fn` handed to `offload()` must be pure IO with no NiceGUI element access
-(it runs off the loop); element updates (`.rows = …`, `.update()`) are not
-thread-safe and must be applied after awaiting, back on the loop.
+**Hydration** (`DatabaseManager.hydrate()`) restores the store at startup:
+latest status per collector, the recent tail of each metric series, recent
+events and log lines, all snapshots and settings, and recent/unfinished jobs.
+Each history stream loads only as deep as its buffer, so startup cost is
+bounded by `memory:` rather than by how large the database has grown. A
+failure here is logged, not fatal — the store starts empty and collectors
+refill it.
 
-**Short read caches.** `_cached()` memoizes read-heavy queries
-(`latest_metric_cached`, `metric_history_cached`, `recent_events_cached`, …) for
-~1s per unique key, because the overview, every plugin page, and every expanded
-group child poll roughly once a second and frequently want the identical rows.
-Cache `max_age` should not drop below the writer's batch window — polling faster
-than a write can land surfaces nothing fresher. `recent_events()` itself is left
-uncached (the REST API shares it and expects a live read); the Events page caches
-around it at the call site.
+**Reads still run through `offload()`** in the UI (`core/ui/components.py`),
+which is now cheap insurance rather than a necessity: a store read is a dict
+lookup, but keeping the call off the loop costs nothing and preserves the rule
+that `read_fn` is pure with no NiceGUI element access. Element updates
+(`.rows = …`, `.update()`) are not thread-safe and must be applied after
+awaiting, back on the loop.
 
-**Indexing.** The hot metric read path filters on `(collector, metric_name)` and
-orders by `timestamp DESC`. `Metric` carries a composite index
-`(collector, metric_name, timestamp)` for exactly that (the leading `collector`
-prefix also serves the collector-only query). Fresh DBs get it from
-`create_tables`; existing DBs get it from `_migrate`.
+**Indexing.** `Metric` carries a composite index
+`(collector, metric_name, timestamp)`. No live read uses it; it serves
+hydration (which loads the recent tail of each series in timestamp order) and
+the retention prune. Fresh DBs get it from `create_tables`; existing DBs get it
+from `_migrate`.
 
 **Retention.** Metrics and a status row are written on every poll of every
 plugin, so both tables grow unbounded without pruning. `prune_metrics` /
@@ -236,20 +258,64 @@ number — wrong for a process list or systemd unit list, where every row matter
 A plugin with row-level data returns a `snapshot` in its `CollectResult` (written
 via `set_snapshot`) once per cycle and reads it back with `latest_snapshot`.
 
-**Log-line dedup** uses a `UNIQUE dedup_hash` (target/source/log_time/message)
-with `on_conflict_ignore`, since collectors re-fetch the same trailing lines
-every cycle — dedup is enforced by the DB with no read on the hot path.
+`set_snapshot` takes the **decoded object**, not a JSON string: the store holds
+it as-is and serialises it only on the way to disk, so a reader never pays a
+decode. (It previously took pre-serialised JSON, since the value went straight
+into a `TEXT` column.)
+
+**Log-line dedup** is enforced by the store, which keeps a hash set per target
+alongside the buffer, since collectors re-fetch the same trailing lines every
+cycle. The set ages out with the buffer (an evicted line's hash is discarded)
+so it cannot grow without bound. The DB's `UNIQUE dedup_hash` remains as a
+persistence-side backstop.
+
+**Retention vs. buffers** are separate knobs for separate resources.
+`logging.retention_days` / `logging.metric_retention_days` prune the *database
+file*; `memory:` bounds the *in-memory* buffers. The buffers are self-limiting
+(a deque drops its oldest entry on append), so the prunes never touch the store.
+
+**Memory is bounded by config, not by uptime.** Every stream has a ceiling, so
+resident state reaches a steady state and stays there — measured flat across
+12k poll cycles (~40 MB RSS for 50 monitors x 5 metrics with chatty jobs).
+Roughly: `monitors x metrics x metric_history` metric points, `event_history`
+events, `log_history` lines per target.
+
+Jobs are the exception to "just use a deque", because a job owns an output
+buffer rather than being one fixed-size entry, and they get two bounds:
+- `jobs_per_plugin` evicts a plugin's oldest **finished** jobs (running ones
+  are never evicted — their plugin is still advancing them).
+- `finished_job_output` trims a job's output to a short tail once it ends. A
+  running job keeps the full `job_output` buffer, since a plugin tails it live
+  to parse progress; afterwards the complete log lives on disk, and a caller
+  wanting an old job's full output must read it from there.
+
+Without those two, `monitors x jobs x output_lines` would stay resident to
+serve a view that is only opened on demand.
 
 ## UI refresh: polling, not push
 
-The UI polls the Database Engine; it does **not** subscribe to write
-notifications. There is no event bus — the writer commits batches and does
-nothing else. Every widget refreshes by re-reading (cached) DB state on its tick
-and applying the result only when it changed (`refresh_rows` and the inline
-equality checks in `history_chart`, the sidebar tree, `update_charts`). This
-trades sub-second push latency for a much simpler model with no cross-thread
-subscription lifecycle to leak; the ~1s read-cache TTLs mean polling faster than
-a write can land surfaces nothing fresher anyway.
+The UI polls the state store; it does **not** subscribe to write
+notifications. There is no event bus. Every widget refreshes by re-reading
+state on its tick and applying the result only when it changed (`refresh_rows`
+and the inline equality checks in `history_chart`, the sidebar tree,
+`update_charts`). This trades sub-second push latency for a much simpler model
+with no cross-thread subscription lifecycle to leak.
+
+Reads are dict lookups and slices over live objects — sub-microsecond — so
+there is no cache and no TTL anywhere: a read sees what the last collector
+wrote, immediately. (Reads formerly went to SQLite behind a 1s TTL cache,
+which is what made polling expensive enough to need caching in the first
+place.) Widgets still read through `offload()` where they did before, since a
+NiceGUI callback should not block the loop, but the work it wraps is now
+trivial.
+
+**Thread-safety.** Collectors run on asyncio worker threads while the UI reads
+from its own pool, so the store is touched from several threads. Its flat
+dicts hold immutable records and need no lock (a single dict get/set is atomic
+under the GIL); the bounded buffers take an `RLock`, because appending and
+reading them are read-modify-write sequences. Buffer readers copy out under
+that lock and return lists, so a caller never iterates a deque a collector is
+appending to.
 
 ### One timer per client
 

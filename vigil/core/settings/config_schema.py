@@ -31,6 +31,20 @@ class LoggingSettings(TypedDict, total=False):
     metric_retention_days: int
 
 
+class MemorySettings(TypedDict, total=False):
+    """How much history the in-memory state store keeps per stream. State is
+    held in Python objects and served to the UI from there, so these bound
+    how far back a chart/table can read without touching the database.
+    Distinct from `logging.retention_days`, which bounds the database file."""
+
+    metric_history: int
+    event_history: int
+    log_history: int
+    job_output: int
+    jobs_per_plugin: int
+    finished_job_output: int
+
+
 class AuthSettings(TypedDict, total=False):
     username: str
     password_file: str
@@ -84,6 +98,7 @@ class VigilConfig(TypedDict, total=False):
     theme: ThemeSettings
     exporters: ExporterSettings
     logging: LoggingSettings
+    memory: MemorySettings
     ssh_defaults: SSHConfig
     control: List[Dict[str, Any]]
     auth: AuthSettings

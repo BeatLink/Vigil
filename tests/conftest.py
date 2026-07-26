@@ -20,11 +20,12 @@ class _PluginStore:
         self._db.apply_result(self._target, self._id, self._name, result)
 
     def snapshot(self, rows):
-        import json
-        self._db.set_snapshot(self._id, json.dumps(rows))
+        # Snapshots are stored as decoded objects in the state store and
+        # serialised only on the way to disk, so this passes rows through.
+        self._db.set_snapshot(self._id, rows)
 
     def latest_metric(self, metric_name):
-        return self._db.latest_metric_cached(self._id, metric_name)
+        return self._db.latest_metric(self._id, metric_name)
 
     def latest_snapshot(self, default=None):
         return self._db.latest_snapshot(self._id, default)

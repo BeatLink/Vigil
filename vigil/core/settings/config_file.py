@@ -7,6 +7,7 @@ from vigil.core.settings.config_schema import (
     AuthSettings, DatabaseSettings, ExporterSettings, PluginConfig, SSHConfig,
     ThemeSettings, VigilConfig,
 )
+from vigil.core.state import BufferSizes
 
 class ConfigFileManager:
     def __init__(self, config_path: str):
@@ -95,6 +96,41 @@ class ConfigFileManager:
                 f"falling back to log retention ({self.log_retention_days}d)"
             )
             return self.log_retention_days
+
+    @property
+    def memory_settings(self) -> Dict[str, Any]:
+        return self.data.get('memory', {})
+
+    @property
+    def buffer_sizes(self) -> BufferSizes:
+        """How much history the in-memory state store keeps per stream.
+        Unset or unparseable values fall back to the BufferSizes defaults,
+        which already exceed everything the UI reads."""
+        defaults = BufferSizes()
+        configured = self.memory_settings
+        values: Dict[str, int] = {}
+        for field in ('metric_history', 'event_history', 'log_history',
+                      'job_output', 'jobs_per_plugin',
+                      'finished_job_output'):
+            raw = configured.get(field)
+            if raw is None:
+                continue
+            try:
+                parsed = int(raw)
+            except (TypeError, ValueError):
+                logging.warning(
+                    f"Invalid memory.{field}={raw!r}; falling back to "
+                    f"{getattr(defaults, field)}"
+                )
+                continue
+            if parsed <= 0:
+                logging.warning(
+                    f"memory.{field} must be positive (got {parsed}); falling back "
+                    f"to {getattr(defaults, field)}"
+                )
+                continue
+            values[field] = parsed
+        return BufferSizes(**values) if values else defaults
 
     @property
     def ssh_defaults(self) -> SSHConfig:

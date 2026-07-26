@@ -34,12 +34,12 @@ class Metric(BaseModel):
     metadata = TextField(null=True)
 
     class Meta:
-        # The hot read path filters on (collector, metric_name) and orders by
-        # timestamp DESC (latest_metric_cached / metric_history_cached), and
-        # collector_metrics_cached filters on collector alone — both served by
-        # this composite (the leading `collector` also covers the
-        # collector-only prefix). Without it those queries scan the ever-growing
-        # Metric table. See database._migrate() for the same index on existing DBs.
+        # No live read path queries this table — the UI reads metrics from the
+        # in-memory store. The index serves startup hydration, which loads the
+        # recent tail of each (collector, metric_name) series ordered by
+        # timestamp, and the retention prune, which deletes by timestamp.
+        # Without it hydration scans the whole Metric table once per series.
+        # See database._migrate() for the same index on existing DBs.
         indexes = ((("collector", "metric_name", "timestamp"), False),)
 
 

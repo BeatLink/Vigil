@@ -16,6 +16,22 @@ logging:
   metric_retention_days: 30   # Days to keep metrics & status history (powers charts);
                               # 0 disables. Omit to reuse retention_days above.
 
+# In-memory state (optional).
+# Live state is held in Python objects and served to the UI from there; the
+# database is only written to (for persistence) and read once at startup.
+# These bound how much history each stream keeps in memory — i.e. how far back
+# a chart or table can read without a restart. The defaults already exceed
+# everything the UI requests, so most deployments never need to set these.
+# Raise them only to plot longer windows; each entry is a small object, so the
+# cost is roughly (monitors x metrics x metric_history) objects resident.
+# memory:
+#   metric_history: 300       # Points kept per (monitor, metric) series
+#   event_history: 2000       # Events kept globally
+#   log_history: 500          # Log lines kept per target
+#   job_output: 5000          # Output lines kept per job
+#   jobs_per_plugin: 25       # Finished jobs kept per monitor (running ones never evicted)
+#   finished_job_output: 200  # Output lines kept once a job ends (full output stays on disk)
+
 # Metric export (optional).
 # Prometheus is always available (pull) at GET /metrics — no config needed.
 # InfluxDB is a push exporter: enable it here to periodically ship metrics.

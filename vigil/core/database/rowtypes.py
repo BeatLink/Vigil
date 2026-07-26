@@ -1,15 +1,16 @@
 """TypedDict shapes for DatabaseManager's dict-returning read methods.
 
-Two different sources produce these dicts and their fields diverge
-slightly as a result:
-  - `_job_to_dict` and `job_output`/`plugin_events_cached`/`recent_events*`
-    build a dict by hand with a fixed, deliberate key set (safe to type
-    exactly).
-  - `collector_metrics_cached`/`log_lines_cached`/`recent_metrics_raw_cached`
-    /`recent_events_raw_cached` return peewee's `Model.__data__` directly —
-    every column on that model, verbatim, including ones no caller reads
-    (e.g. Metric.metadata). These types document the columns a caller can
-    rely on; peewee may include more.
+These reads are served from the in-memory state store, so the dicts are
+rendered from the store's records (see `core/state/records.py`) rather than
+from database rows. Two shapes exist:
+  - `JobRecord.as_dict()` and `job_output`/`plugin_events`/`recent_events`
+    build a dict by hand with a fixed, deliberate key set (typed exactly).
+  - `collector_metrics`/`log_lines`/`recent_metrics_raw`/`recent_events_raw`
+    return a record's `as_row()`, which reproduces the column-keyed shape
+    peewee's `Model.__data__` used to provide — so the UI's table readers,
+    which index rows by column name, are unchanged by the move off SQLite.
+    The one difference is `id`: in-memory records have no rowid, and nothing
+    reads it, so it is absent.
 """
 
 from typing import Any, List, Optional, Tuple, TypedDict
@@ -55,7 +56,7 @@ class EventDict(TypedDict):
 
 
 class PluginEventDict(TypedDict):
-    """Returned by DatabaseManager.plugin_events_cached — a narrower shape
+    """Returned by DatabaseManager.plugin_events — a narrower shape
     than EventDict (no `target`; `message` has the plugin-name prefix
     stripped)."""
 

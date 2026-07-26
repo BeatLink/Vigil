@@ -1,3 +1,24 @@
+"""Database Engine — memory-first reads, SQLite as the persistence sink.
+
+The system of record is the in-memory ``StateStore`` (``core/state/``).
+Collectors write into it and the UI reads from it; every method here that
+returns data serves it from live Python objects, never a query.
+
+SQLite's only two jobs are:
+  * ``hydrate()`` — one bulk load at startup, restoring the store from disk.
+  * persistence — every write is mirrored to disk on a background thread so
+    the state survives a restart.
+
+Nothing in the running system reads from SQLite. That means a slow disk, a
+locked database, or a checkpoint stall can no longer make the UI wait, which
+is what the old per-read TTL cache existed to paper over. The cache is gone
+with the query path that needed it.
+
+``DatabaseManager`` keeps its previous method names and return shapes so the
+UI, plugins, and exporters are unchanged by the move — what changed is where
+the data comes from.
+"""
+
 import json
 import logging
 import hashlib
@@ -10,6 +31,17 @@ from peewee import *
 
 if TYPE_CHECKING:
     from vigil.core.connectors.types import CollectResult
+
+from vigil.core.state import (
+    BufferSizes,
+    EventRecord,
+    JobRecord,
+    JobOutputRecord,
+    LogLineRecord,
+    MetricRecord,
+    StateStore,
+    StatusRecord,
+)
 
 from .models import (
     ALL_MODELS,
@@ -40,23 +72,23 @@ from contextlib import contextmanager
 
 @contextmanager
 def _reader():
-    """Read-path connection scope that opens the thread-local SQLite connection
-    if it's closed but — unlike peewee's ``db.connection_context()`` — does NOT
-    close it on exit.
-
-    Reads run on a pool of executor threads (see ui/components.offload), and
-    ``connection_context().__exit__`` unconditionally calls ``db.close()``, so
-    every read would connect + close a fresh connection on its worker thread.
-    peewee's SqliteDatabase keeps connections thread-local, so leaving the
-    connection open lets the next read on that same thread reuse the warm one.
-    The pooled threads live for the process, so the open connections are freed
-    at process exit — nothing to close explicitly."""
+    """Connection scope for the startup hydration reads, which run once on the
+    main thread. Opens the thread-local connection if closed and leaves it
+    open — peewee's ``connection_context()`` would close it on exit."""
     if db.is_closed():
         db.connect()
     yield
 
 
 class _AsyncWriter:
+    """Serialises persistence onto one background thread, batching whatever
+    arrives inside ``batch_window`` into a single transaction.
+
+    Now that no read path touches SQLite, this thread is the only thing that
+    does, and nothing waits on it — writes are submitted and forgotten. The
+    batching amortises fsync across a poll cycle's worth of metrics rather
+    than paying it per row."""
+
     def __init__(self, batch_window: float = 1.0):
         self._q: "queue.Queue[Optional[Callable[[], None]]]" = queue.Queue()
         self._thread: Optional[threading.Thread] = None
@@ -128,53 +160,19 @@ def flush_writes(timeout: Optional[float] = None):
     _writer.flush(timeout)
 
 
-def _job_to_dict(job: "Job") -> JobDict:
-    end = job.finished or datetime.now()
-    return {
-        "id": job.id,
-        "plugin_id": job.plugin_id,
-        "target": job.target,
-        "kind": job.kind,
-        "state": job.state,
-        "command": job.command,
-        "started": job.started.isoformat(sep=" ", timespec="seconds"),
-        "finished": (
-            job.finished.isoformat(sep=" ", timespec="seconds")
-            if job.finished
-            else None
-        ),
-        "duration": max(0, int((end - job.started).total_seconds())),
-        "exit_code": job.exit_code,
-        "progress": job.progress,
-        "error": job.error,
-        "running": job.state == "running",
-        "pid": job.pid,
-        "workdir": job.workdir,
-        "output_seq": job.output_seq or 0,
-    }
-
-
 class DatabaseManager:
-    def __init__(self, db_path: str = "vigil.db", write_batch_seconds: float = 1.0):
+    def __init__(
+        self,
+        db_path: str = "vigil.db",
+        write_batch_seconds: float = 1.0,
+        buffers: Optional[BufferSizes] = None,
+        store: Optional[StateStore] = None,
+    ):
         self.db_path = db_path
+        self.store = store or StateStore(buffers)
         _writer.batch_window = write_batch_seconds
         self._connect_and_init()
-        self._statuses_cache: Optional[Dict[str, str]] = None
-        self._statuses_cache_at: float = 0.0
-        self._metric_cache: Dict[tuple, Any] = {}
-        self._metric_cache_at: Dict[tuple, float] = {}
-        self._read_cache: Dict[tuple, Any] = {}
-        self._read_cache_at: Dict[tuple, float] = {}
-
-    def _cached(self, key: tuple, max_age: float, fetch: Callable[[], Any]) -> Any:
-        now = time.monotonic()
-        cached_at = self._read_cache_at.get(key)
-        if cached_at is not None and (now - cached_at) < max_age:
-            return self._read_cache[key]
-        result = fetch()
-        self._read_cache[key] = result
-        self._read_cache_at[key] = now
-        return result
+        self.hydrate()
 
     def _connect_and_init(self):
         try:
@@ -224,10 +222,10 @@ class DatabaseManager:
                 db.execute_sql(ddl)
                 logging.info(f"Migrated: added job.{col}")
 
-        # Composite index for the hot metric read path (collector + metric_name
-        # filter, timestamp ordering). create_tables() adds it on fresh DBs; this
-        # backfills it on databases created before the index existed. The name
-        # matches peewee's generated name so the two paths converge on one index.
+        # Composite index on metric (collector, metric_name, timestamp). The
+        # live read path no longer queries SQLite, but startup hydration loads
+        # recent history per series, and the retention prunes scan by
+        # timestamp — both still benefit.
         metric_indexes = {idx.name for idx in db.get_indexes("metric")}
         if "metric_collector_metric_name_timestamp" not in metric_indexes:
             db.execute_sql(
@@ -239,6 +237,166 @@ class DatabaseManager:
                 "(collector, metric_name, timestamp)"
             )
 
+    # ------------------------------------------------------------------
+    # Startup hydration — the only read path from SQLite
+    # ------------------------------------------------------------------
+    def hydrate(self) -> None:
+        """Restore the store from disk. Runs once, before the engine starts
+        polling; after this the process never reads SQLite again.
+
+        Each history stream loads only as much as its buffer holds, so startup
+        cost is bounded by the configured buffer sizes rather than by how large
+        the database has grown."""
+        try:
+            with _reader():
+                self._hydrate_statuses()
+                self._hydrate_metrics()
+                self._hydrate_events()
+                self._hydrate_log_lines()
+                self._hydrate_snapshots()
+                self._hydrate_settings()
+                self._hydrate_jobs()
+            logging.info("State store hydrated from database")
+        except OperationalError as e:
+            # An unreadable database on a fresh install is not fatal — the
+            # store simply starts empty and collectors repopulate it.
+            logging.error(f"Failed to hydrate state from {self.db_path}: {e}")
+
+    def _hydrate_statuses(self) -> None:
+        newest = StatusHistory.select(fn.MAX(StatusHistory.id).alias("max_id")).group_by(
+            StatusHistory.collector_id
+        )
+        rows = StatusHistory.select().where(StatusHistory.id.in_(newest))
+        self.store.statuses.update(
+            {
+                row.collector_id: StatusRecord(
+                    collector_id=row.collector_id,
+                    state=row.state,
+                    timestamp=row.timestamp,
+                )
+                for row in rows
+            }
+        )
+
+    def _hydrate_metrics(self) -> None:
+        depth = self.store.buffers.metric_history
+        series_keys = Metric.select(Metric.collector, Metric.metric_name).distinct()
+        for key in series_keys:
+            rows = (
+                Metric.select()
+                .where(
+                    (Metric.collector == key.collector)
+                    & (Metric.metric_name == key.metric_name)
+                )
+                .order_by(Metric.timestamp.desc())
+                .limit(depth)
+            )
+            self.store.load_metrics(
+                MetricRecord(
+                    target=row.target,
+                    collector=row.collector,
+                    metric_name=row.metric_name,
+                    value=row.value,
+                    metadata=row.metadata,
+                    timestamp=row.timestamp,
+                )
+                for row in reversed(list(rows))
+            )
+
+    def _hydrate_events(self) -> None:
+        rows = (
+            Event.select()
+            .order_by(Event.timestamp.desc())
+            .limit(self.store.buffers.event_history)
+        )
+        self.store.load_events(
+            EventRecord(
+                level=row.level,
+                message=row.message,
+                target=row.target,
+                source_id=row.source_id,
+                timestamp=row.timestamp,
+            )
+            for row in reversed(list(rows))
+        )
+
+    def _hydrate_log_lines(self) -> None:
+        depth = self.store.buffers.log_history
+        targets = LogLine.select(LogLine.target).distinct()
+        for entry in targets:
+            rows = (
+                LogLine.select()
+                .where(LogLine.target == entry.target)
+                .order_by(LogLine.timestamp.desc())
+                .limit(depth)
+            )
+            self.store.load_log_lines(
+                LogLineRecord(
+                    target=row.target,
+                    source=row.source,
+                    level=row.level,
+                    message=row.message,
+                    dedup_hash=row.dedup_hash,
+                    timestamp=row.timestamp,
+                )
+                for row in reversed(list(rows))
+            )
+
+    def _hydrate_snapshots(self) -> None:
+        for row in PluginSnapshot.select():
+            try:
+                self.store.snapshots[row.plugin_id] = json.loads(row.data)
+            except (ValueError, TypeError):
+                logging.warning(f"Discarding unreadable snapshot for {row.plugin_id}")
+
+    def _hydrate_settings(self) -> None:
+        self.store.settings.update({row.key: row.value for row in Setting.select()})
+
+    def _hydrate_jobs(self) -> None:
+        """Only unfinished jobs and the recent tail are restored — a finished
+        job from last week has no live consumer, and the job panel reads the
+        most recent handful."""
+        rows = Job.select().order_by(Job.started.desc()).limit(200)
+        jobs = [
+            JobRecord(
+                id=row.id,
+                plugin_id=row.plugin_id,
+                target=row.target,
+                kind=row.kind,
+                state=row.state,
+                command=row.command,
+                started=row.started,
+                finished=row.finished,
+                exit_code=row.exit_code,
+                progress=row.progress,
+                error=row.error,
+                pid=row.pid,
+                workdir=row.workdir,
+                output_seq=row.output_seq or 0,
+            )
+            for row in rows
+        ]
+        output: Dict[int, List[JobOutputRecord]] = {}
+        running_ids = [job.id for job in jobs if job.state == "running"]
+        if running_ids:
+            for row in (
+                JobOutput.select()
+                .where(JobOutput.job.in_(running_ids))
+                .order_by(JobOutput.seq)
+            ):
+                output.setdefault(row.job_id, []).append(
+                    JobOutputRecord(
+                        seq=row.seq,
+                        stream=row.stream,
+                        message=row.message,
+                        timestamp=row.timestamp,
+                    )
+                )
+        self.store.load_jobs(jobs, output)
+
+    # ------------------------------------------------------------------
+    # Metrics
+    # ------------------------------------------------------------------
     def insert_metric(
         self,
         target: str,
@@ -247,247 +405,76 @@ class DatabaseManager:
         value: float,
         metadata: Optional[str] = None,
     ):
+        record = self.store.add_metric(target, collector, metric_name, value, metadata)
         _writer.submit(
             lambda: Metric.create(
-                target=target,
-                collector=collector,
-                metric_name=metric_name,
-                value=value,
-                metadata=metadata,
+                target=record.target,
+                collector=record.collector,
+                metric_name=record.metric_name,
+                value=record.value,
+                metadata=record.metadata,
+                timestamp=record.timestamp,
             )
         )
 
-    def insert_status(self, collector_id: str, state: str):
-        _writer.submit(
-            lambda: StatusHistory.create(collector_id=collector_id, state=state)
-        )
+    def latest_metric(self, collector: str, metric_name: str) -> Optional[MetricRecord]:
+        return self.store.latest_metric(collector, metric_name)
 
-    def flush(self, timeout: Optional[float] = None):
-        _writer.flush(timeout)
+    def metric_history(
+        self, collector: str, metric_name: str, limit: int = 30
+    ) -> List[MetricRecord]:
+        return self.store.metric_history(collector, metric_name, limit=limit)
 
-    def latest_statuses(self, max_age: float = 2.0) -> Dict[str, str]:
-        now = time.monotonic()
-        if (
-            self._statuses_cache is not None
-            and (now - self._statuses_cache_at) < max_age
-        ):
-            return self._statuses_cache
-        with _reader():
-            newest = StatusHistory.select(
-                fn.MAX(StatusHistory.id).alias("max_id")
-            ).group_by(StatusHistory.collector_id)
-            query = StatusHistory.select(
-                StatusHistory.collector_id, StatusHistory.state
-            ).where(StatusHistory.id.in_(newest))
-            result = {row.collector_id: row.state for row in query}
-        self._statuses_cache = result
-        self._statuses_cache_at = now
-        return result
+    def collector_metrics(
+        self, collector: str, limit: int = 15
+    ) -> List[MetricModelDict]:
+        return [m.as_row() for m in self.store.collector_metrics(collector, limit=limit)]
 
     def latest_metrics(self) -> List[MetricRowDict]:
-        with _reader():
-            newest = Metric.select(fn.MAX(Metric.id).alias("max_id")).group_by(
-                Metric.collector, Metric.metric_name
+        return [
+            {
+                "target": m.target,
+                "collector": m.collector,
+                "metric_name": m.metric_name,
+                "value": m.value,
+                "timestamp": m.timestamp.isoformat(sep=" ", timespec="seconds"),
+            }
+            for m in self.store.latest_metrics()
+        ]
+
+    def recent_metrics_raw(self, limit: int = 20) -> List[MetricModelDict]:
+        return [m.as_row() for m in self.store.recent_metrics(limit=limit)]
+
+    # ------------------------------------------------------------------
+    # Status
+    # ------------------------------------------------------------------
+    def insert_status(self, collector_id: str, state: str):
+        record = StatusRecord(
+            collector_id=collector_id, state=state, timestamp=datetime.now()
+        )
+        self.store.statuses[collector_id] = record
+        _writer.submit(
+            lambda: StatusHistory.create(
+                collector_id=record.collector_id,
+                state=record.state,
+                timestamp=record.timestamp,
             )
-            query = Metric.select(
-                Metric.target,
-                Metric.collector,
-                Metric.metric_name,
-                Metric.value,
-                Metric.timestamp,
-            ).where(Metric.id.in_(newest))
-            return [
-                {
-                    "target": m.target,
-                    "collector": m.collector,
-                    "metric_name": m.metric_name,
-                    "value": m.value,
-                    "timestamp": m.timestamp.isoformat(sep=" ", timespec="seconds"),
-                }
-                for m in query
-            ]
-
-    def latest_metric_cached(
-        self, collector: str, metric_name: str, max_age: float = 1.0
-    ):
-        def _fetch():
-            with _reader():
-                return (
-                    Metric.select()
-                    .where(
-                        (Metric.collector == collector)
-                        & (Metric.metric_name == metric_name)
-                    )
-                    .order_by(Metric.timestamp.desc())
-                    .first()
-                )
-
-        return self._cached(("metric", collector, metric_name), max_age, _fetch)
-
-    def metric_history_cached(
-        self, collector: str, metric_name: str, limit: int = 30, max_age: float = 1.0
-    ):
-        def _fetch():
-            with _reader():
-                rows = (
-                    Metric.select()
-                    .where(
-                        (Metric.collector == collector)
-                        & (Metric.metric_name == metric_name)
-                    )
-                    .order_by(Metric.timestamp.desc())
-                    .limit(limit)
-                )
-                return list(reversed(rows))
-
-        return self._cached(
-            ("metric_history", collector, metric_name, limit), max_age, _fetch
         )
 
-    def collector_metrics_cached(
-        self, collector: str, limit: int = 15, max_age: float = 1.0
-    ) -> List[MetricModelDict]:
-        def _fetch():
-            with _reader():
-                query = (
-                    Metric.select()
-                    .where(Metric.collector == collector)
-                    .order_by(Metric.timestamp.desc())
-                    .limit(limit)
-                )
-                return [m.__data__ for m in query]
+    def latest_statuses(self) -> Dict[str, str]:
+        return {cid: rec.state for cid, rec in self.store.statuses.items()}
 
-        return self._cached(("collector_metrics", collector, limit), max_age, _fetch)
+    def latest_status(self, collector_id: str) -> str:
+        record = self.store.statuses.get(collector_id)
+        return record.state if record else "offline"
 
-    def log_lines_cached(
-        self,
-        target: str,
-        filter_prefix: str = "",
-        limit: int = 15,
-        max_age: float = 1.0,
-    ) -> List[LogLineModelDict]:
-        def _fetch():
-            with _reader():
-                condition = LogLine.target == target
-                if filter_prefix:
-                    condition &= LogLine.source == filter_prefix
-                query = (
-                    LogLine.select()
-                    .where(condition)
-                    .order_by(LogLine.timestamp.desc())
-                    .limit(limit)
-                )
-                return [e.__data__ for e in query]
+    def latest_status_time(self, collector_id: str):
+        record = self.store.statuses.get(collector_id)
+        return record.timestamp if record else None
 
-        return self._cached(
-            ("log_lines", target, filter_prefix, limit), max_age, _fetch
-        )
-
-    def plugin_events_cached(
-        self,
-        plugin_id: str = "",
-        prefix: str = "",
-        target: str = "",
-        limit: int = 100,
-        max_age: float = 1.0,
-    ) -> List[PluginEventDict]:
-        def _fetch():
-            with _reader():
-                if plugin_id:
-                    condition = Event.source_id == plugin_id
-                else:
-                    condition = Event.message.startswith(prefix)
-                    if target:
-                        condition &= Event.target == target
-                query = (
-                    Event.select()
-                    .where(condition)
-                    .order_by(Event.timestamp.desc())
-                    .limit(limit)
-                )
-                return [
-                    {
-                        "timestamp": e.timestamp.isoformat(sep=" ", timespec="seconds"),
-                        "level": e.level,
-                        "message": (
-                            e.message[len(prefix) :]
-                            if prefix and e.message.startswith(prefix)
-                            else e.message
-                        ),
-                    }
-                    for e in query
-                ]
-
-        return self._cached(
-            ("plugin_events", plugin_id, prefix, target, limit), max_age, _fetch
-        )
-
-    def recent_metrics_raw_cached(
-        self, limit: int = 20, max_age: float = 1.0
-    ) -> List[MetricModelDict]:
-        def _fetch():
-            with _reader():
-                query = Metric.select().order_by(Metric.timestamp.desc()).limit(limit)
-                return [m.__data__ for m in query]
-
-        return self._cached(("recent_metrics_raw", limit), max_age, _fetch)
-
-    def recent_events_raw_cached(
-        self, limit: int = 20, max_age: float = 1.0
-    ) -> List[EventModelDict]:
-        def _fetch():
-            with _reader():
-                query = Event.select().order_by(Event.timestamp.desc()).limit(limit)
-                return [e.__data__ for e in query]
-
-        return self._cached(("recent_events_raw", limit), max_age, _fetch)
-
-    def recent_events_cached(
-        self,
-        limit: int = 200,
-        level: Optional[str] = None,
-        target: Optional[str] = None,
-        search: Optional[str] = None,
-        max_age: float = 1.0,
-    ) -> List[EventDict]:
-        key = ("recent_events", limit, level, target, search)
-        return self._cached(
-            key,
-            max_age,
-            lambda: self.recent_events(
-                limit=limit, level=level, target=target, search=search
-            ),
-        )
-
-    def latest_status_cached(self, collector_id: str, max_age: float = 1.0):
-        def _fetch():
-            with _reader():
-                row = (
-                    StatusHistory.select()
-                    .where(StatusHistory.collector_id == collector_id)
-                    .order_by(StatusHistory.timestamp.desc())
-                    .first()
-                )
-                return row.state if row else "offline"
-
-        return self._cached(("status", collector_id), max_age, _fetch)
-
-    def latest_status_time_cached(self, collector_id: str, max_age: float = 1.0):
-        """The timestamp of the most recent status row (or None) — for UIs
-        that show 'last checked' distinct from the status value itself."""
-
-        def _fetch():
-            with _reader():
-                row = (
-                    StatusHistory.select()
-                    .where(StatusHistory.collector_id == collector_id)
-                    .order_by(StatusHistory.timestamp.desc())
-                    .first()
-                )
-                return row.timestamp if row else None
-
-        return self._cached(("status_time", collector_id), max_age, _fetch)
-
+    # ------------------------------------------------------------------
+    # Events
+    # ------------------------------------------------------------------
     def insert_event(
         self,
         level: str,
@@ -495,9 +482,14 @@ class DatabaseManager:
         target: Optional[str] = None,
         source_id: Optional[str] = None,
     ):
+        record = self.store.add_event(level, message, target, source_id)
         _writer.submit(
             lambda: Event.create(
-                level=level, message=message, target=target, source_id=source_id
+                level=record.level,
+                message=record.message,
+                target=record.target,
+                source_id=record.source_id,
+                timestamp=record.timestamp,
             )
         )
 
@@ -508,24 +500,44 @@ class DatabaseManager:
         target: Optional[str] = None,
         search: Optional[str] = None,
     ) -> List[EventDict]:
-        with _reader():
-            query = Event.select().order_by(Event.timestamp.desc())
-            if level:
-                query = query.where(Event.level == level)
-            if target:
-                query = query.where(Event.target == target)
-            if search:
-                query = query.where(Event.message.contains(search))
-            return [
-                {
-                    "timestamp": e.timestamp.isoformat(sep=" ", timespec="seconds"),
-                    "level": e.level,
-                    "target": e.target or "",
-                    "message": e.message,
-                }
-                for e in query.limit(limit)
-            ]
+        return [
+            {
+                "timestamp": e.timestamp.isoformat(sep=" ", timespec="seconds"),
+                "level": e.level,
+                "target": e.target or "",
+                "message": e.message,
+            }
+            for e in self.store.recent_events(
+                limit=limit, level=level, target=target, search=search
+            )
+        ]
 
+    def recent_events_raw(self, limit: int = 20) -> List[EventModelDict]:
+        return [e.as_row() for e in self.store.recent_events(limit=limit)]
+
+    def plugin_events(
+        self,
+        plugin_id: str = "",
+        prefix: str = "",
+        target: str = "",
+        limit: int = 100,
+    ) -> List[PluginEventDict]:
+        return [
+            {
+                "timestamp": e.timestamp.isoformat(sep=" ", timespec="seconds"),
+                "level": e.level,
+                "message": (
+                    e.message[len(prefix) :]
+                    if prefix and e.message.startswith(prefix)
+                    else e.message
+                ),
+            }
+            for e in self.store.plugin_events(plugin_id, prefix, target, limit=limit)
+        ]
+
+    # ------------------------------------------------------------------
+    # Log lines
+    # ------------------------------------------------------------------
     def insert_log_line(
         self,
         target: str,
@@ -536,19 +548,39 @@ class DatabaseManager:
     ):
         key = f"{target}\x1f{source}\x1f{log_time or ''}\x1f{message}"
         dedup_hash = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()
+        record = self.store.add_log_line(target, source, level, message, dedup_hash)
+        if record is None:
+            # Already in the buffer — the DB's unique index would reject it too.
+            return
         _writer.submit(
             lambda: (
                 LogLine.insert(
-                    target=target,
-                    source=source,
-                    level=level,
-                    message=message,
-                    dedup_hash=dedup_hash,
+                    target=record.target,
+                    source=record.source,
+                    level=record.level,
+                    message=record.message,
+                    dedup_hash=record.dedup_hash,
+                    timestamp=record.timestamp,
                 )
                 .on_conflict_ignore()
                 .execute()
             )
         )
+
+    def log_lines(
+        self, target: str, filter_prefix: str = "", limit: int = 15
+    ) -> List[LogLineModelDict]:
+        return [
+            line.as_row()
+            for line in self.store.recent_log_lines(target, filter_prefix, limit=limit)
+        ]
+
+    # ------------------------------------------------------------------
+    # Retention — a disk-only concern now
+    # ------------------------------------------------------------------
+    # The in-memory buffers are self-limiting (a deque drops its oldest entry
+    # on append), so these prunes exist purely to stop the database file
+    # growing without bound. They never touch the store.
 
     def prune_logs(self, retention_days: int) -> int:
         if retention_days is None or retention_days <= 0:
@@ -566,10 +598,6 @@ class DatabaseManager:
         return 0
 
     def prune_metrics(self, retention_days: int) -> int:
-        """Delete Metric rows older than the retention window. Unlike logs and
-        jobs, metrics are inserted on every poll of every plugin, so without
-        this the table (and every dashboard query that scans it) grows without
-        bound. 0/None disables pruning (keep forever), matching prune_logs."""
         if retention_days is None or retention_days <= 0:
             return 0
         cutoff = datetime.now() - timedelta(days=retention_days)
@@ -583,11 +611,8 @@ class DatabaseManager:
         return 0
 
     def prune_status(self, retention_days: int) -> int:
-        """Delete StatusHistory rows older than the retention window. Like
-        metrics, a status row is written on every poll, so the table grows
-        unbounded without pruning. The most recent row per collector is kept
-        regardless of age so latest_status* never loses a plugin's current
-        state to pruning. 0/None disables (keep forever)."""
+        """The newest row per collector is kept regardless of age so a restart
+        can still hydrate every monitor's last known state."""
         if retention_days is None or retention_days <= 0:
             return 0
         cutoff = datetime.now() - timedelta(days=retention_days)
@@ -612,147 +637,6 @@ class DatabaseManager:
         _writer.submit(_do_prune)
         return 0
 
-    def create_job(
-        self,
-        plugin_id: str,
-        target: str,
-        kind: str,
-        command: str,
-        workdir: Optional[str] = None,
-    ) -> int:
-        with db.connection_context():
-            return Job.create(
-                plugin_id=plugin_id,
-                target=target,
-                kind=kind,
-                command=command,
-                state="running",
-                workdir=workdir,
-            ).id
-
-    def set_job_pid(self, job_id: int, pid: int) -> None:
-        with db.connection_context():
-            Job.update(pid=pid).where(Job.id == job_id).execute()
-
-    def bump_job_output_seq(self, job_id: int, new_seq: int) -> None:
-        """Persist how far a poll has consumed the target's output file, so the
-        next poll only appends newly-arrived bytes/lines."""
-        with db.connection_context():
-            Job.update(output_seq=new_seq).where(Job.id == job_id).execute()
-
-    def append_job_output(self, job_id: int, lines, stream: str = "stdout") -> None:
-        lines = [ln for ln in lines if ln is not None]
-        if not lines:
-            return
-        with db.connection_context():
-            start = (
-                JobOutput.select(fn.COALESCE(fn.MAX(JobOutput.seq), -1))
-                .where(JobOutput.job == job_id)
-                .scalar()
-            ) + 1
-            with db.atomic():
-                JobOutput.insert_many(
-                    [
-                        {
-                            "job": job_id,
-                            "seq": start + i,
-                            "stream": stream,
-                            "message": ln,
-                        }
-                        for i, ln in enumerate(lines)
-                    ]
-                ).execute()
-
-    def set_job_progress(self, job_id: int, progress: str) -> None:
-        with db.connection_context():
-            Job.update(progress=progress).where(Job.id == job_id).execute()
-
-    def finish_job(
-        self,
-        job_id: int,
-        state: str,
-        exit_code: Optional[int] = None,
-        error: Optional[str] = None,
-    ) -> None:
-        with db.connection_context():
-            Job.update(
-                state=state, exit_code=exit_code, error=error, finished=datetime.now()
-            ).where(Job.id == job_id).execute()
-
-    def get_job(self, job_id: int) -> Optional[JobDict]:
-        with _reader():
-            job = Job.get_or_none(Job.id == job_id)
-            return _job_to_dict(job) if job else None
-
-    def recent_jobs(
-        self,
-        plugin_id: Optional[str] = None,
-        limit: int = 20,
-        kind: Optional[str] = None,
-    ) -> List[JobDict]:
-        with _reader():
-            query = Job.select().order_by(Job.started.desc())
-            if plugin_id:
-                query = query.where(Job.plugin_id == plugin_id)
-            if kind:
-                query = query.where(Job.kind == kind)
-            return [_job_to_dict(j) for j in query.limit(limit)]
-
-    def running_jobs(self, plugin_id: Optional[str] = None) -> List[JobDict]:
-        with _reader():
-            query = Job.select().where(Job.state == "running")
-            if plugin_id:
-                query = query.where(Job.plugin_id == plugin_id)
-            return [_job_to_dict(j) for j in query.order_by(Job.started.desc())]
-
-    def job_output(
-        self, job_id: int, after_seq: int = -1, limit: int = 500
-    ) -> List[JobOutputDict]:
-        with _reader():
-            query = (
-                JobOutput.select()
-                .where((JobOutput.job == job_id) & (JobOutput.seq > after_seq))
-                .order_by(JobOutput.seq)
-                .limit(limit)
-            )
-            return [
-                {
-                    "seq": o.seq,
-                    "timestamp": o.timestamp.isoformat(sep=" ", timespec="seconds"),
-                    "stream": o.stream,
-                    "message": o.message,
-                }
-                for o in query
-            ]
-
-    def reconcile_orphaned_jobs(self) -> int:
-        """Jobs run detached on the target and survive a Vigil restart, so a
-        'running' row is no longer force-failed here — the owning plugin's next
-        poll re-adopts it (pid alive → resume; pid/exit gone → finalize). Only
-        rows with no pid recorded (crashed between create_job and launch, so
-        nothing is actually running remotely) are failed."""
-        with _reader():
-            return (
-                Job.update(
-                    state="failed",
-                    finished=datetime.now(),
-                    error="Vigil restarted before this job started on the target",
-                )
-                .where((Job.state == "running") & (Job.pid.is_null()))
-                .execute()
-            )
-
-    def running_jobs_with_pid(self, plugin_id: Optional[str] = None) -> List[JobDict]:
-        """Running jobs that were launched on a target (have a pid), for a
-        restarted engine to re-adopt via polling."""
-        with _reader():
-            query = Job.select().where(
-                (Job.state == "running") & (Job.pid.is_null(False))
-            )
-            if plugin_id:
-                query = query.where(Job.plugin_id == plugin_id)
-            return [_job_to_dict(j) for j in query.order_by(Job.started.desc())]
-
     def prune_jobs(self, retention_days: int) -> int:
         if retention_days is None or retention_days <= 0:
             return 0
@@ -770,38 +654,183 @@ class DatabaseManager:
         _writer.submit(_do_prune)
         return 0
 
+    # ------------------------------------------------------------------
+    # Jobs
+    # ------------------------------------------------------------------
+    # Job ids are assigned by the store, so create_job returns immediately
+    # instead of waiting on SQLite's autoincrement. Persistence mirrors the
+    # store-assigned id into the row's primary key, keeping the two in step
+    # across a restart.
+
+    def create_job(
+        self,
+        plugin_id: str,
+        target: str,
+        kind: str,
+        command: str,
+        workdir: Optional[str] = None,
+    ) -> int:
+        record = self.store.create_job(plugin_id, target, kind, command, workdir)
+        _writer.submit(
+            lambda: Job.insert(
+                id=record.id,
+                plugin_id=record.plugin_id,
+                target=record.target,
+                kind=record.kind,
+                command=record.command,
+                state=record.state,
+                started=record.started,
+                workdir=record.workdir,
+            )
+            .on_conflict_replace()
+            .execute()
+        )
+        return record.id
+
+    def _update_job(self, job_id: int, **fields: Any) -> None:
+        if self.store.update_job(job_id, **fields) is None:
+            return
+        _writer.submit(lambda: Job.update(**fields).where(Job.id == job_id).execute())
+
+    def set_job_pid(self, job_id: int, pid: int) -> None:
+        self._update_job(job_id, pid=pid)
+
+    def bump_job_output_seq(self, job_id: int, new_seq: int) -> None:
+        """How far a poll has consumed the target's output file, so the next
+        poll only appends newly-arrived bytes/lines."""
+        self._update_job(job_id, output_seq=new_seq)
+
+    def set_job_progress(self, job_id: int, progress: str) -> None:
+        self._update_job(job_id, progress=progress)
+
+    def finish_job(
+        self,
+        job_id: int,
+        state: str,
+        exit_code: Optional[int] = None,
+        error: Optional[str] = None,
+    ) -> None:
+        self._update_job(
+            job_id,
+            state=state,
+            exit_code=exit_code,
+            error=error,
+            finished=datetime.now(),
+        )
+
+    def append_job_output(self, job_id: int, lines, stream: str = "stdout") -> None:
+        records = self.store.append_job_output(job_id, lines, stream)
+        if not records:
+            return
+        _writer.submit(
+            lambda: JobOutput.insert_many(
+                [
+                    {
+                        "job": job_id,
+                        "seq": r.seq,
+                        "stream": r.stream,
+                        "message": r.message,
+                        "timestamp": r.timestamp,
+                    }
+                    for r in records
+                ]
+            )
+            .on_conflict_ignore()
+            .execute()
+        )
+
+    def get_job(self, job_id: int) -> Optional[JobDict]:
+        return self.store.get_job(job_id)
+
+    def recent_jobs(
+        self,
+        plugin_id: Optional[str] = None,
+        limit: int = 20,
+        kind: Optional[str] = None,
+    ) -> List[JobDict]:
+        return self.store.recent_jobs(plugin_id=plugin_id, limit=limit, kind=kind)
+
+    def running_jobs(self, plugin_id: Optional[str] = None) -> List[JobDict]:
+        return self.store.running_jobs(plugin_id=plugin_id)
+
+    def running_jobs_with_pid(self, plugin_id: Optional[str] = None) -> List[JobDict]:
+        """Running jobs launched on a target (they have a pid), for a restarted
+        engine to re-adopt via polling."""
+        return self.store.running_jobs(plugin_id=plugin_id, with_pid=True)
+
+    def job_output(
+        self, job_id: int, after_seq: int = -1, limit: int = 500
+    ) -> List[JobOutputDict]:
+        return [
+            {
+                "seq": o.seq,
+                "timestamp": o.timestamp.isoformat(sep=" ", timespec="seconds"),
+                "stream": o.stream,
+                "message": o.message,
+            }
+            for o in self.store.job_output(job_id, after_seq=after_seq, limit=limit)
+        ]
+
+    def reconcile_orphaned_jobs(self) -> int:
+        """Jobs run detached on the target and survive a Vigil restart, so a
+        'running' job is not force-failed here — the owning plugin's next poll
+        re-adopts it (pid alive → resume; pid/exit gone → finalize). Only jobs
+        with no pid recorded (crashed between create_job and launch, so nothing
+        is actually running remotely) are failed."""
+        error = "Vigil restarted before this job started on the target"
+        failed = self.store.reconcile_orphaned_jobs(error)
+        if not failed:
+            return 0
+        finished = datetime.now()
+        _writer.submit(
+            lambda: Job.update(
+                state="failed", finished=finished, error=error
+            )
+            .where(Job.id.in_(failed))
+            .execute()
+        )
+        return len(failed)
+
+    # ------------------------------------------------------------------
+    # Settings and snapshots
+    # ------------------------------------------------------------------
     def get_setting(self, key: str, default: Optional[str] = None) -> Optional[str]:
-        with _reader():
-            try:
-                return Setting.get(Setting.key == key).value
-            except DoesNotExist:
-                return default
+        return self.store.settings.get(key, default)
 
     def set_setting(self, key: str, value: str):
+        self.store.settings[key] = value
         _writer.submit(
             lambda: Setting.insert(key=key, value=value).on_conflict_replace().execute()
         )
 
-    def set_snapshot(self, plugin_id: str, data: str):
+    def set_snapshot(self, plugin_id: str, data: Any):
+        """``data`` is the decoded object. It is stored as-is and serialised
+        only on the way to disk, so readers never pay a JSON decode."""
+        self.store.snapshots[plugin_id] = data
+        payload = json.dumps(data)
         _writer.submit(
             lambda: PluginSnapshot.insert(
-                plugin_id=plugin_id, data=data, updated=datetime.now()
+                plugin_id=plugin_id, data=payload, updated=datetime.now()
             )
             .on_conflict_replace()
             .execute()
         )
 
-    def get_snapshot(self, plugin_id: str) -> Optional[str]:
-        with _reader():
-            row = PluginSnapshot.get_or_none(PluginSnapshot.plugin_id == plugin_id)
-            return row.data if row else None
+    def latest_snapshot(self, plugin_id: str, default: Any = None) -> Any:
+        return self.store.snapshots.get(plugin_id, default)
 
-    # --- Plugin-scoped write/read surface -----------------------------------
-    #
+    def flush(self, timeout: Optional[float] = None):
+        """Wait for queued persistence to reach disk. Only tests and shutdown
+        need this — the running system never waits on the writer."""
+        _writer.flush(timeout)
+
+    # ------------------------------------------------------------------
+    # Plugin-scoped write surface
+    # ------------------------------------------------------------------
     # A plugin's pure parse_results()/plan_action() returns a single
     # CollectResult; the engine persists it here with one apply_result() call,
-    # passing the plugin's identity (which the engine holds) rather than binding
-    # it into a per-plugin object. The scoped reads back PluginDataView.
+    # passing the plugin's identity (which the engine holds) rather than
+    # binding it into a per-plugin object. Reads come back via PluginDataView.
 
     def write_event(
         self,
@@ -820,8 +849,8 @@ class DatabaseManager:
         self, target: str, plugin_id: str, plugin_name: str, result: "CollectResult"
     ) -> None:
         """Fan a CollectResult out to the per-datatype writes. The one place
-        that translates the plugin-facing CollectResult contract into
-        table-level calls."""
+        that translates the plugin-facing CollectResult contract into store
+        updates (each of which mirrors itself to disk)."""
         for name, value in result.metrics.items():
             self.insert_metric(
                 target, plugin_id, name, value, result.metadata.get(name)
@@ -833,15 +862,6 @@ class DatabaseManager:
         if result.status is not None:
             self.insert_status(plugin_id, result.status)
         if result.snapshot is not None:
-            self.set_snapshot(plugin_id, json.dumps(result.snapshot))
+            self.set_snapshot(plugin_id, result.snapshot)
         for key, value in result.settings.items():
             self.set_setting(key, value)
-
-    def latest_snapshot(self, plugin_id: str, default: Any = None) -> Any:
-        raw = self.get_snapshot(plugin_id)
-        if raw is None:
-            return default
-        try:
-            return json.loads(raw)
-        except (ValueError, TypeError):
-            return default

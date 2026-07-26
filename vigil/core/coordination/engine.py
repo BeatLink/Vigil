@@ -55,7 +55,11 @@ class VigilEngine:
         else:
             self.db_path = self.config_loader.database_settings.get('path', 'vigil.db')
         try:
-            self.db = VigilDatabase(self.db_path, write_batch_seconds=self.config_loader.write_batch_seconds)
+            self.db = VigilDatabase(
+                self.db_path,
+                write_batch_seconds=self.config_loader.write_batch_seconds,
+                buffers=self.config_loader.buffer_sizes,
+            )
             self.db.insert_event("INFO", "Vigil Engine initialized.", "vigil_core")
             orphaned = self.db.reconcile_orphaned_jobs()
             if orphaned:

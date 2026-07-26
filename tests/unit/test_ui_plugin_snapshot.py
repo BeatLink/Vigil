@@ -40,7 +40,5 @@ class TestLatestSnapshot:
         db_manager.flush()
         assert plugin.storage.latest_snapshot(default=[]) == []
 
-    def test_malformed_json_falls_back_to_default(self, plugin, db_manager):
-        db_manager.set_snapshot("probe", "{not valid json")
-        db_manager.flush()
+    def test_unwritten_snapshot_falls_back_to_default(self, plugin, db_manager):
         assert plugin.storage.latest_snapshot(default=[]) == []

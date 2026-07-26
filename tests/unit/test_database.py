@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta
+import json
 import pytest
 from vigil.core.database.database import (
-    DatabaseManager, Metric, Event, Setting, StatusHistory, LogLine, PluginSnapshot, db,
+    DatabaseManager, Metric, Event, Job, Setting, StatusHistory, LogLine,
+    PluginSnapshot, db,
 )
 from vigil.core.connectors.types import CollectResult
 
@@ -398,29 +400,126 @@ class TestApplyResult:
         assert mgr.latest_snapshot("never", default=[]) == []
         assert mgr.latest_snapshot("never") is None
 
-    def test_latest_snapshot_falls_back_on_bad_json(self, mgr):
-        mgr.set_snapshot("bad", "{not json")
-        mgr.flush()
-        assert mgr.latest_snapshot("bad", default=[]) == []
-
 
 class TestSnapshot:
-    def test_get_snapshot_returns_none_when_never_written(self, mgr):
-        assert mgr.get_snapshot("never-written") is None
+    """Snapshots are held as decoded objects in the state store and serialised
+    only on the way to disk, so these assert object round-tripping rather than
+    the JSON-string handling the old query-backed reader did."""
+
+    def test_latest_snapshot_returns_none_when_never_written(self, mgr):
+        assert mgr.latest_snapshot("never-written") is None
 
     def test_set_snapshot_upserts_not_appends(self, mgr):
-        mgr.set_snapshot("p", '["first"]')
+        mgr.set_snapshot("p", ["first"])
         mgr.flush()
-        mgr.set_snapshot("p", '["second"]')
+        mgr.set_snapshot("p", ["second"])
         mgr.flush()
         with db.connection_context():
             count = PluginSnapshot.select().where(PluginSnapshot.plugin_id == "p").count()
         assert count == 1
-        assert mgr.get_snapshot("p") == '["second"]'
+        assert mgr.latest_snapshot("p") == ["second"]
 
     def test_snapshots_are_scoped_by_plugin_id(self, mgr):
-        mgr.set_snapshot("a", '["from-a"]')
-        mgr.set_snapshot("b", '["from-b"]')
+        mgr.set_snapshot("a", ["from-a"])
+        mgr.set_snapshot("b", ["from-b"])
         mgr.flush()
-        assert mgr.get_snapshot("a") == '["from-a"]'
-        assert mgr.get_snapshot("b") == '["from-b"]'
+        assert mgr.latest_snapshot("a") == ["from-a"]
+        assert mgr.latest_snapshot("b") == ["from-b"]
+
+    def test_snapshot_persists_as_json_and_reloads(self, mgr):
+        """The store holds the object; SQLite holds its JSON. A fresh manager
+        over the same file must hydrate back to the original object."""
+        rows = [{"pid": 1, "name": "sshd"}]
+        mgr.set_snapshot("probe", rows)
+        mgr.flush()
+        with db.connection_context():
+            stored = PluginSnapshot.get(PluginSnapshot.plugin_id == "probe").data
+        assert json.loads(stored) == rows
+
+        reloaded = DatabaseManager(mgr.db_path)
+        assert reloaded.latest_snapshot("probe") == rows
+
+
+class TestHydration:
+    """SQLite's only read path. A restart must reconstruct the store from
+    disk, since the store is the system of record while running."""
+
+    def _restart(self, mgr):
+        mgr.flush()
+        db.close()
+        return DatabaseManager(mgr.db_path)
+
+    def test_metrics_and_history_survive_restart(self, mgr):
+        for value in (1.0, 2.0, 3.0):
+            mgr.insert_metric("h", "cpu", "usage", value)
+        m2 = self._restart(mgr)
+        assert m2.latest_metric("cpu", "usage").value == 3.0
+        assert [m.value for m in m2.metric_history("cpu", "usage")] == [1.0, 2.0, 3.0]
+
+    def test_only_the_newest_status_per_collector_is_restored(self, mgr):
+        mgr.insert_status("cpu", "online")
+        mgr.insert_status("cpu", "failed")
+        mgr.insert_status("disk", "online")
+        m2 = self._restart(mgr)
+        assert m2.latest_statuses() == {"cpu": "failed", "disk": "online"}
+
+    def test_events_survive_restart_newest_first(self, mgr):
+        for i in range(3):
+            mgr.insert_event("INFO", f"m{i}")
+        m2 = self._restart(mgr)
+        assert [e["message"] for e in m2.recent_events()] == ["m2", "m1", "m0"]
+
+    def test_settings_survive_restart(self, mgr):
+        mgr.set_setting("k", "v")
+        assert self._restart(mgr).get_setting("k") == "v"
+
+    def test_log_lines_survive_restart_with_dedup_intact(self, mgr):
+        mgr.insert_log_line("h", "nginx", "INFO", "line", log_time="t1")
+        m2 = self._restart(mgr)
+        assert len(m2.log_lines("h", limit=0)) == 1
+        # The restored dedup state must still suppress a re-collected line.
+        m2.insert_log_line("h", "nginx", "INFO", "line", log_time="t1")
+        assert len(m2.log_lines("h", limit=0)) == 1
+
+    def test_running_job_survives_restart(self, mgr):
+        job_id = mgr.create_job("p", "h", "backup", "cmd", workdir="/tmp/x")
+        mgr.set_job_pid(job_id, 4242)
+        mgr.append_job_output(job_id, ["a", "b"])
+        m2 = self._restart(mgr)
+        restored = m2.get_job(job_id)
+        assert restored["state"] == "running"
+        assert restored["pid"] == 4242
+        assert [o["message"] for o in m2.job_output(job_id)] == ["a", "b"]
+
+    def test_new_job_ids_do_not_collide_with_restored_ones(self, mgr):
+        first = mgr.create_job("p", "h", "k", "cmd")
+        m2 = self._restart(mgr)
+        assert m2.create_job("p", "h", "k", "cmd") > first
+
+    def test_hydration_respects_buffer_limits(self, mgr):
+        from vigil.core.state import BufferSizes
+        for value in range(50):
+            mgr.insert_metric("h", "cpu", "usage", float(value))
+        mgr.flush()
+        db.close()
+        m2 = DatabaseManager(mgr.db_path, buffers=BufferSizes(metric_history=5))
+        history = m2.metric_history("cpu", "usage", limit=0)
+        assert len(history) == 5
+        # The newest points are the ones kept, and still oldest-to-newest.
+        assert [m.value for m in history] == [45.0, 46.0, 47.0, 48.0, 49.0]
+
+
+class TestReconcileOrphanedJobs:
+    def test_pidless_job_is_failed_and_persisted(self, mgr):
+        job_id = mgr.create_job("p", "h", "k", "cmd")
+        assert mgr.reconcile_orphaned_jobs() == 1
+        assert mgr.get_job(job_id)["state"] == "failed"
+        mgr.flush()
+        with db.connection_context():
+            assert Job.get(Job.id == job_id).state == "failed"
+
+    def test_job_with_pid_is_left_running(self, mgr):
+        job_id = mgr.create_job("p", "h", "k", "cmd")
+        mgr.set_job_pid(job_id, 99)
+        assert mgr.reconcile_orphaned_jobs() == 0
+        assert mgr.get_job(job_id)["state"] == "running"

@@ -219,7 +219,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
               ''' % (_LEVEL_COLORS['ERROR'], _LEVEL_COLORS['WARNING'], _LEVEL_COLORS['INFO']))
 
           async def refresh_events():
-              rows = await offload(engine.db.recent_events_cached)(
+              rows = await offload(engine.db.recent_events)(
                   limit=500,
                   level=ev_filter['level'],
                   target=(ev_filter['target'] or None),
@@ -433,7 +433,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
                   m_table = ui.table(columns=metric_columns, rows=[]).classes('w-full')
 
                   async def update_m():
-                      refresh_rows(m_table, await offload(engine.db.recent_metrics_raw_cached)(limit=20))
+                      refresh_rows(m_table, await offload(engine.db.recent_metrics_raw)(limit=20))
                   on_data_event(update_m)
 
               with card('flex-1 min-w-[320px]'):
@@ -447,7 +447,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
                   e_table = ui.table(columns=event_columns, rows=[]).classes('w-full')
 
                   async def update_e():
-                      refresh_rows(e_table, await offload(engine.db.recent_events_raw_cached)(limit=20))
+                      refresh_rows(e_table, await offload(engine.db.recent_events_raw)(limit=20))
                   on_data_event(update_e)
 
       def render_plugin_detail(plugin: Any):
