@@ -85,6 +85,44 @@ class TestGpuCollection:
         assert _latest_status() == "failed"
 
 
+class TestGpuWedgedDriver:
+    def _timeout(self, c):
+        return CmdResult(-1, "", "Timed out after 15.0s")
+
+    async def test_single_timeout_failed_and_still_probes(self, plugin, run_cycle):
+        run_cycle(plugin, self._timeout)
+        assert _latest_status() == "failed"
+        assert plugin.commands()
+
+    async def test_repeated_timeouts_suspend_the_probe(self, plugin, run_cycle):
+        run_cycle(plugin, self._timeout)
+        run_cycle(plugin, self._timeout)
+        assert _latest_status() == "offline"
+        assert plugin.commands() == []
+
+    async def test_suspended_cycle_reports_offline(self, plugin, run_cycle):
+        run_cycle(plugin, self._timeout)
+        run_cycle(plugin, self._timeout)
+        result = run_cycle(plugin, self._timeout)
+        assert _latest_status() == "offline"
+        assert "wedged" in result.logs[0][0]
+
+    async def test_success_clears_the_timeout_count(self, plugin, run_cycle):
+        run_cycle(plugin, self._timeout)
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output([(0, 10, 1000, 8000, 45)]), ""))
+        run_cycle(plugin, self._timeout)
+        assert _latest_status() == "failed"
+        assert plugin.commands()
+
+    async def test_probe_resumes_after_the_suspend_window(self, plugin, run_cycle, monkeypatch):
+        run_cycle(plugin, self._timeout)
+        run_cycle(plugin, self._timeout)
+        assert plugin.commands() == []
+        monkeypatch.setattr(plugin, "_suspended_until", 0.0)
+        run_cycle(plugin, lambda c: CmdResult(0, _make_output([(0, 10, 1000, 8000, 45)]), ""))
+        assert _latest_status() == "online"
+
+
 class TestGpuActions:
     async def test_on_action_returns_none(self, plugin):
         assert plugin.plan_action("anything") is None

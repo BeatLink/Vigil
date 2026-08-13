@@ -11,6 +11,8 @@ from vigil.core.connectors import ssh_connector as jobs
 from vigil.plugins.base.plugin_helpers import parse_duration, format_duration, format_age
 
 
+_POLL_BASE_DIR_VAR = "__vigil_poll_base"
+
 _DEFAULT_LAYOUT = [
     ['host_card', 'repo_card', 'maxage_card', 'state_card'],
     ['size_card', 'dedup_card', 'count_card', 'age_card'],
@@ -150,13 +152,21 @@ class Borg(Plugin):
         if persistent_cache and self.cache_dir:
             env.append("BORG_BASE_DIR=" + shlex.quote(self.cache_dir))
         else:
-            env.append("BORG_BASE_DIR=\"$(mktemp -d)\"")
+            env.append(f'BORG_BASE_DIR="${_POLL_BASE_DIR_VAR}"')
         return env
 
     def _build(self, args: List[str], persistent_cache: bool = False) -> str:
         prefix = ["sudo", "-n"] if self.require_sudo else []
         env = self._env_prefix(persistent_cache=persistent_cache)
-        return " ".join(prefix + env + [shlex.quote(a) for a in args])
+        command = " ".join(prefix + env + [shlex.quote(a) for a in args])
+        if persistent_cache and self.cache_dir:
+            return command
+        # The trap is what keeps the throwaway dir throwaway, since borg builds a full chunks cache in it on every poll
+        return (
+            f"{_POLL_BASE_DIR_VAR}=$(mktemp -d); "
+            f"trap 'rm -rf \"${_POLL_BASE_DIR_VAR}\"' EXIT; "
+            f"{command}"
+        )
 
     def _list_command(self) -> str:
         return self._build([

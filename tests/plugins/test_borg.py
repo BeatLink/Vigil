@@ -196,7 +196,7 @@ class TestCommand:
     def test_passphrase_passed_as_env_not_argv(self, make_plugin):
         p = make_plugin(Borg, {**BASE_CFG, "passphrase": "s3cret"})
         cmd = p._list_command()
-        assert cmd.startswith("BORG_PASSPHRASE=")
+        assert "BORG_PASSPHRASE=" in cmd
         assert cmd.index("BORG_PASSPHRASE=") < cmd.index("borg list")
 
     def test_passphrase_command_uses_passcommand(self, make_plugin):
@@ -285,7 +285,7 @@ class TestCommand:
     def test_require_sudo_prefixes_command(self, make_plugin):
         p = make_plugin(Borg, {**BASE_CFG, "require_sudo": True})
         cmd = p._list_command()
-        assert cmd.startswith("sudo -n ")
+        assert cmd.index("sudo -n ") < cmd.index("borg list")
 
     def test_require_sudo_keeps_env_after_sudo(self, make_plugin):
         p = make_plugin(Borg, {**BASE_CFG, "require_sudo": True, "passphrase": "s3cret"})
@@ -393,6 +393,15 @@ class TestBackupCommand:
 
     def test_poll_still_uses_throwaway_base_dir(self, make_plugin):
         assert "$(mktemp -d)" in make_plugin(Borg, BACKUP_CFG)._list_command()
+
+    def test_poll_removes_throwaway_base_dir(self, make_plugin):
+        for cmd in (make_plugin(Borg, BACKUP_CFG)._list_command(),
+                    make_plugin(Borg, BACKUP_CFG)._info_command()):
+            assert "trap 'rm -rf" in cmd
+            assert cmd.index("mktemp -d") < cmd.index("BORG_BASE_DIR=")
+
+    def test_backup_does_not_remove_persistent_cache_dir(self, make_plugin):
+        assert "rm -rf" not in make_plugin(Borg, BACKUP_CFG)._backup_command()
 
     def test_backup_uses_long_lock_wait(self, make_plugin):
         assert "--lock-wait 600" in make_plugin(Borg, BACKUP_CFG)._backup_command()

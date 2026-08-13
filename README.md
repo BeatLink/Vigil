@@ -628,11 +628,15 @@ Monitors NVIDIA GPU utilization, VRAM usage, and temperature over SSH via a sing
 
 If `nvidia-smi` isn't installed or no NVIDIA GPU is present, the monitor reports **offline** rather than failed, so it degrades gracefully on mixed fleets.
 
+A wedged NVIDIA driver — typically a dGPU that failed to restore from suspend — leaves `nvidia-smi` in uninterruptible sleep, where the connector's terminate/kill has no effect. Left alone, every interval would strand another unkillable process on the target until it reboots. After `timeout_trip` consecutive timeouts the monitor therefore stops issuing the command entirely and reports **offline** for `suspend_seconds`, then retries once; a successful collection clears the count.
+
 | Option           | Description                                              |
 |------------------|----------------------------------------------------------|
 | `util_warning` / `util_threshold`   | GPU utilization % bounds (default: `85` / `95`)   |
 | `mem_warning` / `mem_threshold`     | VRAM usage % bounds (default: `85` / `95`)        |
 | `temp_warning` / `temp_threshold`   | Temperature °C bounds (default: `80` / `90`)      |
+| `timeout_trip`   | Consecutive timeouts before the probe suspends (default: `2`) |
+| `suspend_seconds` | How long the probe stays suspended (default: `1800`)    |
 | `ssh_config`     | SSH connection details — target must have `nvidia-smi`   |
 
 **Metrics**: `gpu_util`, `gpu_mem_pct`, `gpu_temp` (busiest GPU); `gpu<idx>_util`, `gpu<idx>_mem_pct`, `gpu<idx>_temp` (per GPU)

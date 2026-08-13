@@ -1,3 +1,4 @@
+import time
 from typing import Any, Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
@@ -8,6 +9,13 @@ _COLLECT_CMD = (
     "nvidia-smi --query-gpu=index,utilization.gpu,memory.used,memory.total,temperature.gpu "
     "--format=csv,noheader,nounits"
 )
+
+# A wedged NVIDIA driver leaves nvidia-smi in uninterruptible sleep, where the connector's
+# terminate/kill has no effect, so every poll strands another process until the host reboots.
+# Repeated timeouts therefore suspend the probe instead of adding one stuck process per interval.
+_COLLECT_CMD_TIMEOUT = 15.0
+_TIMEOUT_TRIP = 2
+_SUSPEND_SECONDS = 1800.0
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'util_card', 'mem_card', 'temp_card'],
@@ -26,6 +34,10 @@ class Gpu(Plugin):
         self.mem_threshold  = int(config.get('mem_threshold',  95))
         self.temp_warning   = int(config.get('temp_warning',   80))
         self.temp_threshold = int(config.get('temp_threshold', 90))
+        self.timeout_trip     = int(config.get('timeout_trip',     _TIMEOUT_TRIP))
+        self.suspend_seconds  = float(config.get('suspend_seconds', _SUSPEND_SECONDS))
+        self._consecutive_timeouts = 0
+        self._suspended_until = 0.0
 
         from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
         self._util_color_rule_name = f'gpu_util_{self.id}'
@@ -42,10 +54,31 @@ class Gpu(Plugin):
             threshold_color(warning=self.temp_warning, threshold=self.temp_threshold))
 
     def commands(self) -> List[Command]:
-        return [Command(_COLLECT_CMD)]
+        if time.monotonic() < self._suspended_until:
+            return []
+        return [Command(_COLLECT_CMD, timeout=_COLLECT_CMD_TIMEOUT)]
+
+    def _suspended_result(self) -> CollectResult:
+        """Reports the tripped breaker as offline, the same status an absent GPU gets."""
+        minutes = self.suspend_seconds / 60.0
+        return CollectResult.failed(
+            f"nvidia-smi timed out {self._consecutive_timeouts}x and could not be killed — the "
+            f"driver is wedged and only a reboot clears it; probe suspended for {minutes:.0f}m",
+            level="WARNING", status='offline')
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        if not results:
+            return self._suspended_result()
+
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
+
+        if ret != 0 and 'timed out after' in stderr.lower():
+            self._consecutive_timeouts += 1
+            if self._consecutive_timeouts >= self.timeout_trip:
+                self._suspended_until = time.monotonic() + self.suspend_seconds
+                return self._suspended_result()
+            return CollectResult.failed(f"Collection failed: {stderr}")
+        self._consecutive_timeouts = 0
 
         combined = f"{stdout}\n{stderr}".lower()
         if ret != 0 and ('command not found' in combined or 'not found' in combined
