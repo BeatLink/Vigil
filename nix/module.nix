@@ -72,7 +72,7 @@ in
 
     package = mkOption {
       type = types.package;
-      default = self.packages.${pkgs.system}.default;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       defaultText = literalExpression "vigil (from flake)";
       description = "The Vigil package to use.";
     };
