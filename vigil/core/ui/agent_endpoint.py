@@ -52,6 +52,9 @@ def register_agent_endpoint(app: Any, registry: AgentRegistry) -> None:
             await websocket.send_text(proto.encode(
                 proto.welcome([s.to_wire() for s in conn.streams])
             ))
+            # Only now is this agent's transport usable, so this is the point
+            # at which its monitors can meaningfully collect.
+            registry.notify_connected(agent_id)
 
             await _serve(websocket, registry, conn, agent_id)
         except WebSocketDisconnect:

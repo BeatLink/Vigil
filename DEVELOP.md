@@ -199,6 +199,14 @@ and pushes an `event` frame the moment something happens.
 `parse_event()` and persists the result through the same batched
 `db.apply_result` the polling cycle uses — no IO on the event path.
 
+When an agent finishes its handshake the engine collects every monitor bound to
+it immediately (`_on_agent_connected`). Monitors start their schedule when Vigil
+does, but the agent takes a moment to dial in, so a monitor's first cycle
+normally runs before its transport exists and records a failure. For a 30s
+monitor that is invisible; for the hourly SMART and ZFS checks it meant an hour
+of reporting failed after every restart, which is long enough to be mistaken for
+a real fault.
+
 Two conventions matter here:
 
 1. **The poll keeps owning status.** Both plugins that stream today (`oom`,

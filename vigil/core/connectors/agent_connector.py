@@ -186,6 +186,7 @@ class AgentRegistry:
         self._agents: Dict[str, AgentConnection] = {}
         self._tokens: Dict[str, str] = {}
         self._event_sink: Optional[Callable[[str, str, float, Dict[str, Any]], None]] = None
+        self._connect_sink: Optional[Callable[[str], None]] = None
 
     def configure(self, agents_cfg: List[Dict[str, Any]]) -> None:
         """Build the connection objects from config.yaml's ``agents:`` list.
@@ -261,6 +262,25 @@ class AgentRegistry:
         ``(agent_id, stream_id, timestamp, payload)``. The Coordination Engine
         owns it; the registry stays free of plugin knowledge."""
         self._event_sink = sink
+
+    def set_connect_sink(self, sink: Callable[[str], None]) -> None:
+        """Install the callback fired when an agent finishes its handshake.
+
+        Monitors on an agent start their schedule the moment Vigil does, but
+        the agent needs a moment to dial in — so a monitor's first cycle
+        usually lands before its transport exists. For a 30s monitor that is
+        invisible; for an hourly one it means an hour of reporting failed after
+        every restart. The Coordination Engine uses this to re-run those
+        monitors as soon as the agent is actually reachable."""
+        self._connect_sink = sink
+
+    def notify_connected(self, agent_id: str) -> None:
+        if self._connect_sink is None:
+            return
+        try:
+            self._connect_sink(agent_id)
+        except Exception as e:
+            logging.error(f"agent {agent_id!r}: connect handler failed: {e}")
 
     def dispatch_event(self, agent_id: str, stream_id: str,
                        timestamp: float, payload: Dict[str, Any]) -> None:

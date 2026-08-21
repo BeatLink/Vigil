@@ -81,6 +81,7 @@ class VigilEngine:
         self.connectors = ConnectorEngine()
         self.connectors.agents.configure(self.config_loader.agents)
         self.connectors.agents.set_event_sink(self._on_agent_event)
+        self.connectors.agents.set_connect_sink(self._on_agent_connected)
 
     def _wire_plugin(self, plugin: Plugin, plugin_cfg: Dict) -> None:
         """Build the engine-owned IO for a plugin and hand it the read-only data
@@ -135,6 +136,35 @@ class VigilEngine:
             return
         if result is not None:
             self._apply(plugin, result)
+
+    def _on_agent_connected(self, agent_id: str) -> None:
+        """Collect every monitor on an agent as soon as that agent dials in.
+
+        Monitors start their schedule when Vigil does, but an agent takes a
+        moment to connect, so a monitor's first cycle normally runs before its
+        transport exists and records a failure. Without this the monitor stays
+        wrong until its next tick — a full hour for the hourly SMART and ZFS
+        checks after every restart, which is long enough to be mistaken for a
+        real fault.
+
+        Runs on the agent's socket task, so each cycle is a separate task
+        rather than blocking the handshake."""
+        monitors = [p for p in self._flatten(self.plugins)
+                    if getattr(self._net_for(p), 'conn', None) is not None
+                    and getattr(self._net_for(p).conn, 'agent_id', None) == agent_id]
+        if not monitors:
+            return
+        logging.info(
+            f"agent {agent_id!r} connected: collecting its {len(monitors)} monitor(s) now"
+        )
+        for plugin in monitors:
+            asyncio.create_task(self._collect_on_connect(plugin))
+
+    async def _collect_on_connect(self, plugin: Plugin) -> None:
+        try:
+            await self.run_cycle_now(plugin)
+        except Exception as e:
+            logging.error(f"{plugin.name}: collection on agent connect failed: {e}")
 
     def _apply(self, plugin: Plugin, result) -> None:
         """Persist a plugin's CollectResult. The engine owns the write path and
