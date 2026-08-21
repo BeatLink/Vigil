@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional, Union
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.plugins.base.plugin_helpers import parse_duration, format_duration, format_age
+from vigil_agent.protocol import StreamSpec
 
 _DEFAULT_UNIT_FILE_WRITE_PATHS = (
     '/etc/systemd/system',
@@ -52,6 +53,31 @@ class SystemdService(Plugin):
         if self.max_age is not None:
             return [Command(self._oneshot_state_cmd()), journal_cmd]
         return [Command(f"systemctl is-active {self.service_name}"), journal_cmd]
+
+    def subscriptions(self) -> List[StreamSpec]:
+        """On an agent-backed host, follow this unit's journal live. The poll
+        still runs and remains the authority on the unit's active state; this
+        streams the unit's log lines as they are written, so the log view stops
+        being a snapshot of the last `lines` entries taken `interval` ago and a
+        crash-restart loop between two polls is no longer invisible."""
+        if not self.service_name:
+            return []
+        return [StreamSpec(
+            id=self.id,
+            kind='journal',
+            params={'unit': self.service_name},
+        )]
+
+    def parse_event(self, stream_id: str, payload: Dict[str, Any],
+                    timestamp: float) -> Optional[CollectResult]:
+        message = str(payload.get('message', '')).strip()
+        if not message:
+            return None
+        level = 'ERROR' if any(k in message.upper() for k in ('ERROR', 'FAIL', 'CRITICAL')) else 'INFO'
+        log_time = time.strftime('%Y-%m-%dT%H:%M:%S', time.localtime(timestamp))
+        # Log lines only: the unit's status stays owned by the poll, so a
+        # single noisy log line can never flip a healthy service to failed.
+        return CollectResult(log_lines=[(message, level, log_time)])
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         if self.max_age is not None:

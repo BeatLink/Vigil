@@ -44,9 +44,13 @@
                     nicegui
                     dnspython
                     # Native async SSH transport (see
-                    # vigil/core/connectors/ssh.py) — Vigil's only
-                    # way of talking to monitored hosts.
+                    # vigil/core/connectors/ssh_connector.py) — the agentless
+                    # way of reaching a monitored host.
                     asyncssh
+                    # The agent transport's client half (vigil_agent/client.py).
+                    # The server side needs nothing extra: nicegui already
+                    # brings FastAPI/uvicorn, which serve the agent WebSocket.
+                    websockets
                 ];
 
                 vigil-pkg = pkgs.python312Packages.buildPythonApplication {

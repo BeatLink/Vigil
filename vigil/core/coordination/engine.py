@@ -1,10 +1,16 @@
 """Coordination Engine.
 
 The application's central coordinator. It owns the other engines — Settings
-(config loader), Database, Connector (SSH today; HTTP/DNS/ICMP being added),
+(config loader), Database, Connector (agent / SSH / HTTP / DNS / ICMP),
 Exporter — and the plugin registry, and drives the per-monitor polling loop.
 Plugins stay pure: they declare Commands/ActionPlans/CollectResults and this
 engine (and the sub-engines it owns) performs all IO and persistence.
+
+Collection has two paths. The polling loop runs each monitor's declared
+requests on its own `interval`, as it always has. Alongside it, monitors on an
+agent-backed target can subscribe to event streams the agent watches locally
+and pushes the instant they change; those arrive through _on_agent_event and
+are persisted the same way, without waiting for the next cycle.
 
 The class is named ``VigilEngine`` for continuity (``core/contracts.py``'s
 ``EngineLike`` and the test suite reference it); "Coordination Engine" is its
@@ -28,7 +34,7 @@ from vigil.core.coordination.data_view import PluginDataView
 from vigil.core.settings.config_file import ConfigFileManager as VigilConfig
 from vigil.core.database.database import DatabaseManager as VigilDatabase
 from vigil.core.exporters import ExporterEngine
-from vigil.core.connectors import ConnectorEngine, SSHContext
+from vigil.core.connectors import ConnectorEngine, ExecContext
 
 STARTUP_JITTER_SECONDS = 3.0
 
@@ -48,8 +54,11 @@ class VigilEngine:
         # Engine-owned per-plugin IO/persistence, keyed by plugin id. Pure
         # plugins never hold these; the engine wires them in setup_modules and
         # uses them on the collection/action paths. _net holds each plugin's
-        # SSHContext handle (the pooled connection lives in self.connectors).
-        self._net: Dict[str, "SSHContext"] = {}
+        # ExecContext handle (the connection itself lives in self.connectors).
+        self._net: Dict[str, "ExecContext"] = {}
+        # Monitors reachable by a pushed event, keyed by the stream id the
+        # agent will send back (which is the plugin's own id).
+        self._event_targets: Dict[str, Plugin] = {}
         if db_path_override:
             self.db_path = db_path_override
         else:
@@ -70,18 +79,62 @@ class VigilEngine:
 
         self.exporters = ExporterEngine(self.db, self.config_loader.exporters)
         self.connectors = ConnectorEngine()
+        self.connectors.agents.configure(self.config_loader.agents)
+        self.connectors.agents.set_event_sink(self._on_agent_event)
 
     def _wire_plugin(self, plugin: Plugin, plugin_cfg: Dict) -> None:
         """Build the engine-owned IO for a plugin and hand it the read-only data
         view. Keeps pure plugins free of db/network. Persistence needs no
         per-plugin object: the engine holds the plugin's (target, id, name) and
         writes via db.apply_result on the collection/action path."""
-        net = self.connectors.ssh_context(plugin_cfg, collect_timeout=plugin.timeout)
-        # The SSH pool resolves the effective target host; keep the plugin's
+        net = self.connectors.exec_context(plugin_cfg, collect_timeout=plugin.timeout)
+        # The transport resolves the effective target host; keep the plugin's
         # target in sync so its labels/reads match what's collected.
         plugin.target = net.target
         self._net[plugin.id] = net
         plugin.bind(PluginDataView(self.db, plugin.id, plugin.target, plugin.name))
+        if net.is_agent:
+            self._wire_subscriptions(plugin, net)
+
+    def _wire_subscriptions(self, plugin: Plugin, net: "ExecContext") -> None:
+        """Register a plugin's declared event streams with its agent, so the
+        agent starts watching them the moment it connects. Streams are keyed by
+        the plugin id, which is how an inbound event finds its way back here."""
+        try:
+            specs = plugin.subscriptions()
+        except Exception as e:
+            logging.error(f"{plugin.name}: subscriptions() failed: {e}")
+            return
+        if not specs:
+            return
+        for spec in specs:
+            net.conn.register_stream(spec)
+            self._event_targets[spec.id] = plugin
+        logging.info(
+            f"{plugin.name}: subscribed to {len(specs)} agent event stream(s) "
+            f"on {net.conn.agent_id!r}"
+        )
+
+    def _on_agent_event(self, agent_id: str, stream_id: str,
+                        timestamp: float, payload: Dict) -> None:
+        """Apply one pushed event. Runs on the agent's socket task, off the
+        polling schedule entirely — this is the path that makes detection
+        latency independent of a monitor's `interval`.
+
+        The plugin's parse_event() is pure and the write is the same batched
+        db.apply_result the polling cycle uses, so an event costs one parse and
+        one buffered write with no IO of its own."""
+        plugin = self._event_targets.get(stream_id)
+        if plugin is None:
+            logging.debug(f"agent {agent_id!r}: event for unknown stream {stream_id!r}")
+            return
+        try:
+            result = plugin.parse_event(stream_id, payload, timestamp)
+        except Exception as e:
+            logging.error(f"{plugin.name}: parse_event failed for {stream_id!r}: {e}")
+            return
+        if result is not None:
+            self._apply(plugin, result)
 
     def _apply(self, plugin: Plugin, result) -> None:
         """Persist a plugin's CollectResult. The engine owns the write path and
@@ -108,7 +161,8 @@ class VigilEngine:
         merged['ssh_config'] = {**defaults, **plugin_cfg['ssh_config']}
         return merged
 
-    def setup_modules(self, plugins_cfg: Optional[List[Dict]] = None) -> List[Plugin]:
+    def setup_modules(self, plugins_cfg: Optional[List[Dict]] = None,
+                      inherited_agent: Optional[str] = None) -> List[Plugin]:
         current_level_plugins = []
         target_cfg = plugins_cfg if plugins_cfg is not None else self.config_loader.plugins
 
@@ -116,6 +170,8 @@ class VigilEngine:
             name = plugin_cfg.get('name')
             p_type = plugin_cfg.get('type')
             plugin_cfg = self._apply_ssh_defaults(plugin_cfg)
+            if inherited_agent and not plugin_cfg.get('agent'):
+                plugin_cfg = {**plugin_cfg, 'agent': inherited_agent}
             try:
                 module_path = f"vigil.plugins.{p_type}"
                 module = importlib.import_module(module_path)
@@ -127,7 +183,10 @@ class VigilEngine:
                         self._wire_plugin(plugin_instance, plugin_cfg)
 
                         if 'children' in plugin_cfg:
-                            plugin_instance.children = self.setup_modules(plugin_cfg['children'])
+                            plugin_instance.children = self.setup_modules(
+                                plugin_cfg['children'],
+                                inherited_agent=plugin_cfg.get('agent'),
+                            )
 
                         current_level_plugins.append(plugin_instance)
                         logging.info(f"Loaded plugin '{name}' of type '{p_type}'")

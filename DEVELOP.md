@@ -56,9 +56,10 @@ small contract rather than the concrete class.
 
 A `Plugin` exposes **only pure functions and data** — no IO, no persistence
 handles. It is constructed with just `(name, config)`. The engine's
-`_wire_plugin()` builds the plugin's engine-owned IO (an `SSHContext` for its
+`_wire_plugin()` builds the plugin's engine-owned IO (an `ExecContext` for its
 target, kept in `engine._net[id]`) and injects a read-only `PluginDataView` as
-`plugin.data`. The plugin holds neither a database handle nor a connection.
+`plugin.data`. The plugin holds neither a database handle nor a connection, and
+never learns whether its `ExecContext` wraps an agent or an SSH connection.
 
 Collection is:
 
@@ -72,6 +73,9 @@ Collection is:
   the request list can't express (e.g. `ddns_updater`: fetch public IP → resolve
   DNS → compare → maybe push). It returns a zero-arg closure the engine runs off
   the event loop.
+- `subscriptions() -> List[StreamSpec]` then `parse_event(stream_id, payload,
+  timestamp) -> Optional[CollectResult]` — the push path, for targets reached by
+  an agent. Also both pure. See [Agent transport](#agent-transport).
 
 A plugin never persists anything itself. Its `parse_results()` returns one
 `CollectResult` describing everything to write (metrics, logs, log lines,
@@ -149,14 +153,75 @@ when config omits it) would silently overwrite each other's status/metrics/logs
 every cycle, since everything is keyed by `id`. Startup detects and logs this
 once, loudly.
 
+## Agent transport
+
+`core/connectors/agent_connector.py` is the server half of the agent link; the
+daemon itself is the separate `vigil_agent` package.
+
+The whole design rests on one decision: `AgentConnection.execute()` has the same
+signature and the same `(exit_code, stdout, stderr)` failure mapping as
+`SSHConnection.execute()`. That is why moving a host onto an agent is a config
+key and not a plugin rewrite — `ExecContext` holds either object, and no plugin
+is transport-aware.
+
+**Direction.** The agent dials the server, never the reverse. The monitored host
+opens no listening port and needs no certificate of its own, and a host behind
+NAT works untouched. The cost is that the server cannot reach an agent that has
+not dialled in; a monitor on an absent agent fails with an explicit message,
+which is the same shape as a refused SSH dial.
+
+**Why WebSocket and not MQTT or SNMP.** SNMP and REST are both pull, so neither
+removes the polling floor that motivated the agent. MQTT would add a broker as a
+new single point of failure inside the monitoring path, and its pub/sub model
+means hand-building request/response correlation for the exec RPC that makes
+existing plugins work. A WebSocket rides the dashboard's existing port, auth and
+TLS, and costs no new server dependency — NiceGUI already brings FastAPI and
+uvicorn. MQTT remains the right answer for *exporting* to Home Assistant, which
+is a separate concern from the transport.
+
+**Concurrency.** Commands are frames multiplexed on one socket, so there is no
+analogue of `MaxSessions` and no semaphore. The agent dispatches each `exec`
+into its own task, so a 30-second `borg` check cannot delay a 1-second sample on
+the same connection.
+
+**Process groups.** `vigil_agent/executor.py` runs each command with
+`start_new_session=True` and kills the whole process group on timeout. This
+closes a real gap in the SSH path, where killing the remote command left
+anything it had spawned running on the target.
+
+**Events.** A plugin's `subscriptions()` returns `StreamSpec`s keyed by its own
+plugin id; the engine registers them on the agent's connection and the endpoint
+sends the full set in the welcome frame (full set, never a delta, so a
+reconnecting agent converges without the server tracking what it knows). The
+agent runs one supervised coroutine per stream from `vigil_agent/watchers.py`
+and pushes an `event` frame the moment something happens.
+`VigilEngine._on_agent_event` routes it back by stream id to the plugin's pure
+`parse_event()` and persists the result through the same batched
+`db.apply_result` the polling cycle uses — no IO on the event path.
+
+Two conventions matter here:
+
+1. **The poll keeps owning status.** Both plugins that stream today (`oom`,
+   `systemd_service`) return log lines from `parse_event()` and leave `status`
+   to `parse_results()`. Otherwise one noisy journal line could flip a healthy
+   monitor, and a disconnected agent would look like a healthy one.
+2. **A raising plugin must not take down the socket.** `_on_agent_event`
+   catches, logs and continues, because it runs on the agent's receive task.
+
+**Protocol location.** `vigil_agent/protocol.py` is canonical and
+`vigil/core/connectors/agent_protocol.py` re-exports it. It lives in the agent
+package because the agent is the constrained side: a monitored host installs
+`vigil-agent` and must not pull in nicegui, peewee and dnspython to do it. One
+definition, not two copies to keep in step.
+
 ## SSH transport
 
 `core/connectors/ssh_connector.py` uses asyncssh rather than shelling out to the
 system `ssh` client: one native connection per physical target, each command a
 channel on it rather than a forked process. `ConnectorEngine` pools one
 `SSHConnection` per `(host, port, username, key_path)`; a plugin's per-target
-handle is a small `SSHContext` value, so the engine itself stays a stateless
-singleton.
+handle is a small `ExecContext` value, so the engine itself stays a stateless
+singleton. (`SSHContext` remains as an alias for that type.)
 
 Three behaviors of the old subprocess design are reproduced deliberately, each
 verified against a real sshd:
@@ -170,7 +235,9 @@ verified against a real sshd:
    use, reject any later mismatch.
 3. **Per-host channel limits.** Vigil bounds its own per-host concurrency
    (`_MAX_CONCURRENT_PER_HOST = 8`, a semaphore) below sshd's default
-   `MaxSessions` of 10.
+   `MaxSessions` of 10. This ceiling is intrinsic to SSH — a host with many
+   monitors either raises `MaxSessions` or moves to the agent transport, which
+   has no equivalent limit.
 
 ## Job control
 

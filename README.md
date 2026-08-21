@@ -1,6 +1,8 @@
 # Vigil
 
-Vigil is a web-based network and systems monitor for Linux systems, homelabs, and small networks. Inspired by Uptime Kuma, Prometheus, Grafana, and Loki, it provides a centralized dashboard to configure and manage diverse infrastructure from a single pane of glass — without requiring agents on remote hosts.
+Vigil is a web-based network and systems monitor for Linux systems, homelabs, and small networks. Inspired by Uptime Kuma, Prometheus, Grafana, and Loki, it provides a centralized dashboard to configure and manage diverse infrastructure from a single pane of glass.
+
+Hosts you control run the **Vigil agent**, which connects outward to Vigil and streams events as they happen. Hosts you can't install software on — routers, switches, NAS firmware, appliances — are still monitored agentlessly over SSH, HTTP, DNS and ICMP. The same monitors run over either.
 
 Unlike most network and system monitors, Vigil is designed to be highly extensible and capable of performing actions on monitored targets, not just observing them.
 
@@ -8,7 +10,8 @@ Unlike most network and system monitors, Vigil is designed to be highly extensib
 
 ## Features
 
-- **Pull-Based & Agentless**: Uses a pull-based design over SSH, HTTP, DNS, and ICMP to collect events, logs, and metrics — no software needed on target nodes.
+- **Two Transports, One Plugin Set**: Reach a host through the **Vigil agent** — a small daemon that dials out to Vigil and pushes events the instant they happen — or **agentlessly** over SSH, HTTP, DNS, and ICMP. Every monitor works over either; switching a host is one config key.
+- **Event-Driven Collection**: Agent-backed monitors subscribe to live streams (journal follow, path watches, sub-second local sampling), so detection latency stops being a function of the poll interval.
 - **Web Dashboard**: Real-time interactive visualizations built with NiceGUI and ECharts, featuring latency history, status distribution, and log views.
 - **Alerting & Notifications**: Sends alerts to various channels when events or metric thresholds are detected. *(WIP)*
 - **Target Control**: Trigger actions on monitored targets (e.g. restarting systemd services) directly from the UI.
@@ -27,6 +30,7 @@ A plugin's contract is:
 
 - **Declare** — `requests()` returns a list of connector requests (`Command` / `HttpRequest` / `DnsQuery` / `PingRequest`); an SSH-only plugin overrides the `commands()` shorthand instead. Both are pure.
 - **Interpret** — `parse_results()` (or `parse()` for the SSH shorthand) turns the connector results into a single `CollectResult` describing everything to persist (metrics, logs, status, an optional snapshot). Pure — no IO.
+- **Subscribe** (optional) — `subscriptions()` declares event streams an agent should watch on the target, and `parse_event()` turns each pushed frame into a `CollectResult`. Both pure; ignored for targets reached over SSH.
 - **Act** (optional) — `plan_action()` / `interpret_action()` describe control actions (restart a service, force a backup) the same declarative way.
 - **Present** (optional) — a declarative `UI_SPEC` dict renders the plugin's dashboard page; only genuinely bespoke plugins hand-write `render_ui()`.
 
@@ -35,8 +39,9 @@ The engine executes the declared IO, persists the returned `CollectResult`, and 
 ### Data Flow
 
 1. **Initialization**: `vigil/__main__.py` builds one `VigilEngine` (`core/coordination/engine.py`), which loads `config.yaml` and instantiates plugins (`setup_modules`). Group plugins act as containers for nested monitors.
-2. **Wiring**: for each plugin the engine builds its engine-owned SSH handle and injects a read-only `PluginDataView` as `plugin.data`. The plugin holds no database or connection object.
-3. **Polling**: each monitor runs its own async loop at its own `interval`. Per cycle the engine runs the plugin's declared requests through the **Connector Engine**, then calls the plugin's pure `parse_results()`.
+2. **Wiring**: for each plugin the engine builds its engine-owned `ExecContext` — an agent connection or a pooled SSH connection, chosen by config — and injects a read-only `PluginDataView` as `plugin.data`. The plugin holds no database or connection object, and never learns which transport it is running over.
+3. **Polling**: each monitor runs its own async loop at its own `interval`. Per cycle the engine runs the plugin's declared requests through the **Connector Engine** — which routes each `Command` to that target's agent or its SSH connection — then calls the plugin's pure `parse_results()`.
+3b. **Events**: monitors on an agent-backed target also declare `subscriptions()`. The agent watches those sources locally and pushes a frame the instant one changes; the engine hands it to the plugin's pure `parse_event()` and persists the result immediately, outside the polling schedule.
 4. **Persistence**: the engine writes the resulting `CollectResult` via `db.apply_result(...)` into SQLite (Peewee ORM). A background writer thread batches commits off the event loop.
 5. **Visualization**: the NiceGUI dashboard polls the database on one shared per-client timer and renders the sidebar tree plus each plugin's detail page. It reads only through `plugin.data` / the database — never through a plugin's IO.
 6. **Export**: metrics are exposed to Prometheus (pull, `/metrics`) and optionally pushed to InfluxDB.
@@ -48,7 +53,7 @@ vigil/
 ├── __main__.py              # Entry point: build engine, load plugins, start GUI
 ├── core/
 │   ├── coordination/        # VigilEngine (Coordination Engine) + PluginDataView
-│   ├── connectors/          # All IO: SSH + HTTP/DNS/ICMP sub-connectors, request types
+│   ├── connectors/          # All IO: agent + SSH + HTTP/DNS/ICMP sub-connectors, request types
 │   ├── database/            # DatabaseManager (SQLite/Peewee), models, read-result types
 │   ├── settings/            # config.yaml loader + typed schema
 │   ├── exporters/           # Prometheus pull + InfluxDB push
@@ -56,6 +61,12 @@ vigil/
 └── plugins/
     ├── base/                # Plugin ABC + shared config/helper mixins
     └── *.py                 # One module per monitor type (uptime, systemd_service, …)
+
+vigil_agent/                 # The daemon that runs on a monitored host
+├── protocol.py              # Wire format, shared with the server
+├── client.py                # Outbound WebSocket, reconnect, frame dispatch
+├── executor.py              # Local command execution
+└── watchers.py              # Event sources (journal / path / sample)
 ```
 
 See [DEVELOP.md](DEVELOP.md) for the architectural rationale — the pure-plugin contract, the collection lifecycle, the SQLite writer/reader model, and the declarative UI spec.
@@ -65,7 +76,7 @@ See [DEVELOP.md](DEVELOP.md) for the architectural rationale — the pure-plugin
 | Concern        | Technology                          |
 |----------------|--------------------------------------|
 | Language       | Python 3.9+                          |
-| Connectivity   | AsyncSSH (SSH), `requests` (HTTP), dnspython (DNS) |
+| Connectivity   | WebSocket (agent), AsyncSSH (SSH), `requests` (HTTP), dnspython (DNS) |
 | Configuration  | YAML                                 |
 | Concurrency    | `asyncio`                            |
 | Storage        | SQLite via Peewee ORM                |
@@ -978,6 +989,123 @@ Each named widget within a plugin can be overridden:
 
 ---
 
+### Agent
+
+The Vigil agent is a small daemon that runs on a monitored host, dials **outward** to
+Vigil over a WebSocket, and holds that connection open. It needs no inbound port, no
+certificate of its own, and no firewall rule — it reuses the dashboard's port, so a host
+behind NAT works with no extra setup.
+
+Two things travel on that one connection:
+
+- **Commands** — the same shell command strings the SSH transport carried. Every monitor
+  works over an agent unmodified, because both transports return the same
+  `(exit_code, stdout, stderr)`.
+- **Events** — sources the agent watches locally and pushes the instant they change. This
+  is what a polled transport cannot do at any interval.
+
+#### Server config
+
+Declare each agent that may connect, then point monitors at it by id:
+
+```yaml
+agents:
+  - id: "web-01"
+    token: "a-long-random-string"
+    host: "web-01.example.com"   # label only; Vigil never dials the agent
+
+plugins:
+  - name: "Web Servers"
+    type: "group"
+    agent: "web-01"              # inherited by every child below
+    children:
+      - name: "Nginx"
+        type: "systemd_service"
+        service_name: "nginx.service"
+      - name: "Disk"
+        type: "disk_space"
+```
+
+| Field   | Description                                                                 |
+|---------|-----------------------------------------------------------------------------|
+| `id`    | Agent identity; a monitor's `agent:` key refers to this                      |
+| `token` | Shared secret the agent authenticates with. An agent with no token declared here can never connect |
+| `host`  | Display label for the target. Optional — defaults to the id                  |
+
+`agent:` on a group is inherited by every monitor beneath it, so moving a whole host
+between transports is one line. A monitor with both `agent:` and `ssh_config:` uses the
+agent; drop the `agent:` key to fall back to SSH.
+
+#### Installing the agent
+
+```bash
+pip install vigil            # ships the `vigil-agent` command
+```
+
+```yaml
+# /etc/vigil-agent.yaml
+url: "ws://vigil.example.com:8080/api/agent/ws"   # wss:// behind TLS
+id: "web-01"
+token: "a-long-random-string"
+```
+
+```bash
+vigil-agent --config /etc/vigil-agent.yaml
+```
+
+Every setting can come from the environment instead (`VIGIL_AGENT_URL`, `VIGIL_AGENT_ID`,
+`VIGIL_AGENT_TOKEN`, `VIGIL_AGENT_HOSTNAME`), so a systemd unit or container can supply the
+token without writing it to disk.
+
+The agent reconnects on its own with exponential backoff and jitter, so a server restart
+needs no action on the host. A monitor whose agent is not currently connected reports
+failed with an explicit message — the same way a refused SSH dial behaves — and recovers
+by itself.
+
+#### Event streams
+
+A plugin declares the streams it wants via `subscriptions()`; the server sends that set to
+the agent on connect, and the agent watches them locally. Three watcher kinds ship today:
+
+| Kind      | What it does                                                | Params |
+|-----------|-------------------------------------------------------------|--------|
+| `journal` | Follows the systemd journal and pushes matching entries as they are written | `unit`, `identifier`, `priority`, `kernel`, `grep` |
+| `path`    | Pushes when a path's mtime or size changes                   | `path`, `interval` (default `0.25`) |
+| `sample`  | Runs a command locally on a fast interval and pushes its output | `command`, `interval` (default `1.0`), `on_change` |
+
+`path` and `sample` still sample — but *locally*, where a `stat()` or a fork costs
+microseconds rather than an SSH round trip. That is what makes per-second resolution
+practical without the target's `sshd` ever seeing it.
+
+Two plugins use this today:
+
+- **`oom`** follows the kernel journal for the OOM killer's own message. The polled
+  `/proc/vmstat` counter still runs and remains the authority on totals, but a kill is now
+  reported the moment it happens and carries the process name — which the counter cannot.
+- **`systemd_service`** follows its unit's journal, so the log view is live rather than a
+  snapshot of the last *n* lines taken up to `interval` ago, and a crash-restart loop
+  between two polls is no longer invisible.
+
+In both cases the **poll still owns status**. A streamed log line adds detail; it never
+flips a monitor's state on its own.
+
+#### Agent vs SSH
+
+| | Agent | SSH |
+|---|---|---|
+| Software on target | `vigil-agent` | none |
+| Concurrency per host | unbounded (frames on one socket) | capped by the target's `MaxSessions` |
+| Per-command cost | one local fork | SSH channel + fork |
+| Detection latency | immediate, for subscribed streams | one `interval` |
+| Works on appliances | no | yes |
+| Privilege | whatever the commands need (same `sudo` rules) | whatever the commands need |
+
+The agent does **not** change the privilege story: `smartctl` needs root either way, and
+the same `NOPASSWD` rules apply. Run the agent as an unprivileged user with the same narrow
+sudo grants the SSH user had rather than as root.
+
+---
+
 ### SSH Config
 
 All SSH-based plugins (`systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`) accept an `ssh_config` block:
@@ -1014,7 +1142,9 @@ most 10 total in flight at once), so a host running its `sshd` at the
 OpenSSH default is safe by construction — extra monitors queue rather than
 fail. Hosts with many monitors, or where jobs may overlap with a burst of
 polling, benefit from raising `MaxSessions` in that host's own `sshd_config`
-(e.g. `MaxSessions 50`) to reduce queuing.
+(e.g. `MaxSessions 50`) to reduce queuing — or from running the
+[agent](#agent) on that host, where commands are frames multiplexed on one
+socket and no session ceiling applies.
 
 ---
 
@@ -1023,7 +1153,8 @@ polling, benefit from raising `MaxSessions` in that host's own `sshd_config`
 ### Prerequisites
 
 - Python 3.9+
-- SSH access to target machines (SSH key auth recommended)
+- For agent-backed targets: `vigil-agent` installed on the host, able to reach Vigil's port outbound
+- For agentless targets: SSH access to the target machine (SSH key auth recommended)
 
 ### Installation
 

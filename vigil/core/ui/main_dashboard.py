@@ -34,6 +34,12 @@ def init_gui(engine: EngineLike, port: int = 8080):
     except Exception as e:
         logging.error(f"Failed to register REST API: {e}")
 
+    try:
+        from vigil.core.ui.agent_endpoint import register_agent_endpoint
+        register_agent_endpoint(app, engine.connectors.agents)
+    except Exception as e:
+        logging.error(f"Failed to register the agent endpoint: {e}")
+
     @ui.page('/')
     def index_page():
       ui.query('body').style(f'background-color: {BACKGROUND_MUTED}')

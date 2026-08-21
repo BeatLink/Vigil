@@ -21,6 +21,15 @@ class SSHConfig(TypedDict, total=False):
     password: str
 
 
+class AgentSettings(TypedDict, total=False):
+    """One entry in the top-level `agents:` list. The agent dials into the
+    dashboard's port over a WebSocket and authenticates with `token`; `host`
+    is only a display/label value, since the server never dials the agent."""
+    id: str
+    token: str
+    host: str
+
+
 class DatabaseSettings(TypedDict, total=False):
     path: str
     write_batch_seconds: float
@@ -86,12 +95,14 @@ class PluginConfig(TypedDict, total=False):
     interval: Any               # int seconds, or a duration string like '5m' — see parse_duration
     timeout: Any
     target_host: str
+    agent: str                  # id of the agent to reach this target through, instead of SSH
     ssh_config: SSHConfig
     children: List["PluginConfig"]  # group plugins only
     layout: Any                 # List[LayoutRow] | Dict[str, dict] — see spec_types.UISpec['layout']
 
 
 class VigilConfig(TypedDict, total=False):
+    agents: List[AgentSettings]
     database: DatabaseSettings
     plugins: List[PluginConfig]
     alerting: List[Dict[str, Any]]

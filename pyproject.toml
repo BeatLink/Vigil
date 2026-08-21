@@ -20,10 +20,15 @@ dependencies = [
     # asyncssh connection per host, removing the fork/exec cost and the
     # collector's old thread-pool/semaphore ceiling.
     "asyncssh>=2.14.0",
+    # The agent transport's client half (see vigil_agent/client.py). The
+    # server side needs nothing extra: NiceGUI already brings FastAPI and
+    # uvicorn, which serve the agent WebSocket on the dashboard's own port.
+    "websockets>=12.0",
 ]
 
 [project.scripts]
 vigil = "vigil.__main__:main"
+vigil-agent = "vigil_agent.__main__:main"
 
 [project.optional-dependencies]
 dev = [
@@ -37,7 +42,7 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["vigil*"]
+include = ["vigil*", "vigil_agent*"]
 
 [tool.setuptools.package-data]
 vigil = ["core/ui/static/*"]

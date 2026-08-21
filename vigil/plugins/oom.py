@@ -2,6 +2,7 @@ from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil_agent.protocol import StreamSpec
 
 
 def _extract_counter(block: str, key: str) -> Optional[int]:
@@ -41,6 +42,29 @@ class Oom(Plugin):
 
     def commands(self) -> List[Command]:
         return [Command("cat /proc/vmstat")]
+
+    def subscriptions(self) -> List[StreamSpec]:
+        """On an agent-backed host, follow the kernel journal for the OOM
+        killer's own message. The polled /proc/vmstat counter still runs and
+        remains the authority on totals; this only makes a kill visible the
+        moment it happens instead of up to `interval` later, and carries the
+        process name, which the counter cannot."""
+        return [StreamSpec(
+            id=self.id,
+            kind='journal',
+            params={'kernel': True, 'grep': 'Out of memory'},
+        )]
+
+    def parse_event(self, stream_id: str, payload: Dict[str, Any],
+                    timestamp: float) -> Optional[CollectResult]:
+        message = str(payload.get('message', '')).strip()
+        if not message:
+            return None
+        self._since_kill = 0
+        return CollectResult(
+            logs=[(f"OOM killer fired: {message}", "ERROR")],
+            status='warning' if self.is_warning else 'failed',
+        )
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr

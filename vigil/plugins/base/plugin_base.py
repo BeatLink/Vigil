@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 if TYPE_CHECKING:
     from vigil.core.coordination.data_view import PluginDataView
     from vigil.core.connectors.types import Request, Result
+    from vigil.core.connectors.agent_protocol import StreamSpec
 
 from vigil.plugins.base.plugin_helpers import PluginConfigMixin, parse_duration
 from vigil.core.connectors.ssh_connector import COLLECT_TIMEOUT as SSH_TIMEOUT
@@ -96,6 +97,29 @@ class Plugin(PluginConfigMixin, ABC):
 
         Constructing the closure must be pure; the closure itself may block/do
         IO. Default None: use requests()/parse_results() (the 99% path)."""
+        return None
+
+    def subscriptions(self) -> List["StreamSpec"]:
+        """Declare the event streams this monitor wants pushed to it, for
+        targets reached by an agent. Pure — no IO.
+
+        Each returned StreamSpec names an agent-side watcher (``kind``) and its
+        parameters; the agent watches that source locally and sends a frame the
+        instant something changes, so detection latency stops being a function
+        of `interval`. The engine ignores these for a monitor that has no
+        agent, which is what lets a plugin declare both a poll path and a push
+        path and run correctly over either transport.
+
+        Default: no streams — the monitor is poll-only."""
+        return []
+
+    def parse_event(self, stream_id: str, payload: Dict[str, Any],
+                    timestamp: float) -> Optional[CollectResult]:
+        """Pure: turn one pushed event into a CollectResult to persist, or
+        None to ignore it. Called out of band from the polling cycle, once per
+        inbound frame, so it must stay cheap as well as pure.
+
+        `stream_id` identifies which of this plugin's subscriptions fired."""
         return None
 
     def get_actions(self) -> List[ActionButtonSpec]:
