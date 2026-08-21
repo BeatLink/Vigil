@@ -24,6 +24,7 @@ can usefully run at once.
 import asyncio
 import logging
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from vigil.core.connectors import agent_protocol as proto
@@ -196,18 +197,38 @@ class AgentRegistry:
                 logging.error(f"agents: entry with no `id` ignored: {entry!r}")
                 continue
             agent_id = str(agent_id)
-            token = entry.get('token')
+            token = self._resolve_token(agent_id, entry)
             if not token:
                 logging.error(
-                    f"agent {agent_id!r} has no `token` and will refuse every "
-                    f"connection — set one and give the agent the same value"
+                    f"agent {agent_id!r} has no usable token and will refuse "
+                    f"every connection — set `token` or `token_file`"
                 )
             else:
-                self._tokens[agent_id] = str(token)
+                self._tokens[agent_id] = token
             self._agents[agent_id] = AgentConnection(
                 agent_id, host=str(entry.get('host') or agent_id)
             )
             logging.info(f"Registered agent {agent_id!r}")
+
+    @staticmethod
+    def _resolve_token(agent_id: str, entry: Dict[str, Any]) -> Optional[str]:
+        """Take the token from `token_file` if given, else `token`.
+
+        `token_file` is the deployment-friendly form and the one to prefer: the
+        secret stays with the secret manager and never enters config.yaml,
+        which under Nix (and any config-generating deployment) is world
+        readable. Read once at startup, like auth's `password_file`."""
+        token_file = entry.get('token_file')
+        if token_file:
+            try:
+                return Path(str(token_file)).read_text(encoding='utf-8').strip() or None
+            except OSError as e:
+                logging.error(
+                    f"agent {agent_id!r}: could not read token_file {token_file}: {e}"
+                )
+                return None
+        token = entry.get('token')
+        return str(token) if token else None
 
     def get(self, agent_id: str) -> Optional[AgentConnection]:
         return self._agents.get(agent_id)

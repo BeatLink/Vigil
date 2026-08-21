@@ -945,7 +945,7 @@ Declare each agent that may connect, then point monitors at it by id:
 ```yaml
 agents:
   - id: "web-01"
-    token: "a-long-random-string"
+    token_file: "/run/secrets/vigil_agent_web01"   # or `token:` inline
     host: "web-01.example.com"   # label only; Vigil never dials the agent
 
 plugins:
@@ -963,8 +963,11 @@ plugins:
 | Field   | Description                                                                 |
 |---------|-----------------------------------------------------------------------------|
 | `id`    | Agent identity; a monitor's `agent:` key refers to this                      |
-| `token` | Shared secret the agent authenticates with. An agent with no token declared here can never connect |
+| `token` | Shared secret the agent authenticates with, inline                            |
+| `token_file` | Path to a file holding that secret, read once at startup. Prefer this wherever `config.yaml` is generated — under Nix it lands world-readable in the store |
 | `host`  | Display label for the target. Optional — defaults to the id                  |
+
+An agent with neither `token` nor a readable `token_file` can never connect.
 
 `agent:` on a group is inherited by every monitor beneath it, so moving a whole host
 between transports is one line. A monitor with both `agent:` and `ssh_config:` uses the

@@ -123,12 +123,17 @@ in
     };
 
     path = mkOption {
-      type = types.listOf types.package;
+      type = types.listOf (types.either types.package types.str);
       default = [ ];
-      example = literalExpression "[ pkgs.smartmontools ]";
+      example = literalExpression ''[ pkgs.smartmontools "/run/current-system/sw" ]'';
       description = ''
-        Extra packages on the agent's PATH. The commands monitors send are
-        plain shell, so anything they invoke must be resolvable here.
+        Extra entries on the agent's PATH. The commands monitors send are plain
+        shell, so anything they invoke must be resolvable here.
+
+        Strings are allowed so a deployment can pass
+        `"/run/current-system/sw"`, giving the agent the same PATH an SSH login
+        to this host would have seen — the closest match to the agentless
+        behaviour when migrating existing monitors.
       '';
     };
 
