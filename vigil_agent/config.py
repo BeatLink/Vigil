@@ -15,6 +15,17 @@ from typing import Optional
 DEFAULT_PATH = "/etc/vigil-agent.yaml"
 
 
+def _read_token(token_file: str) -> Optional[str]:
+    """Read a token from a file, trimming the trailing newline an editor or a
+    secret manager will have added. An unreadable file is a hard failure rather
+    than a silent fall-through to no token, which would otherwise show up as a
+    confusing authentication rejection at the server."""
+    try:
+        return Path(token_file).read_text(encoding='utf-8').strip()
+    except OSError as e:
+        raise SystemExit(f"vigil-agent: could not read token_file {token_file}: {e}")
+
+
 @dataclass
 class AgentConfig:
     url: str
@@ -47,6 +58,13 @@ class AgentConfig:
         agent_id = os.environ.get('VIGIL_AGENT_ID') or data.get('id')
         token = os.environ.get('VIGIL_AGENT_TOKEN') or data.get('token')
         hostname = os.environ.get('VIGIL_AGENT_HOSTNAME') or data.get('hostname')
+
+        # token_file is the deployment-friendly form: the token stays in a file
+        # the secret manager owns, so it never enters a config file, a unit's
+        # environment, or (under NixOS) the world-readable Nix store.
+        token_file = os.environ.get('VIGIL_AGENT_TOKEN_FILE') or data.get('token_file')
+        if not token and token_file:
+            token = _read_token(token_file)
 
         missing = [n for n, v in (('url', url), ('id', agent_id), ('token', token)) if not v]
         if missing:

@@ -126,5 +126,9 @@
         ) // {
             nixosModules.vigil = import ./nix/module.nix self;
             nixosModules.default = import ./nix/module.nix self;
+            # The monitored-host half. Enabled on every host Vigil watches
+            # through an agent; the server module above is enabled only on the
+            # machine running the dashboard.
+            nixosModules.agent = import ./nix/agent-module.nix self;
         };
 }

@@ -126,19 +126,14 @@ theme:
 | [`zfs_health`](#zfs_health)             | ZFS pool health state                 | SSH (`zpool list`)                               | `pools_total`, `pools_ok`, `pools_degraded`     | — |
 | [`zfs_pool`](#zfs_pool)                 | ZFS pool capacity                     | SSH (`zpool list`)                               | `usage_pct`                                     | — |
 | [`disk_space`](#disk_space)             | Filesystem usage for a path           | SSH (`df`)                                       | `used_pct`, `size_gb`, `used_gb`, `avail_gb`    | — |
-| [`cpu_usage`](#cpu_usage)               | CPU utilization                       | SSH (`/proc/stat`, 2-sample)                     | `cpu_pct`                                       | — |
-| [`memory_usage`](#memory_usage)         | RAM usage                             | SSH (`/proc/meminfo`)                            | `memory_pct`, `memory_used_gb`, `memory_total_gb` | — |
-| [`temperature`](#temperature)           | Max thermal-zone temperature          | SSH (`/sys/class/thermal`)                       | `temp_c`                                        | — |
-| [`load_average`](#load_average)         | Load average (normalized by cores)    | SSH (`/proc/loadavg`, `nproc`)                   | `load_pct_1m`, `load_pct_5m`, `load_pct_15m`    | — |
+| [`system_stats`](#system_stats)         | CPU, memory, load, temperature, interrupts, GPU and OOM kills | SSH (`/proc/*`, `/sys/class/thermal`, `nvidia-smi`) | per enabled module — see below | — |
 | [`processes`](#processes)               | Running processes by CPU              | SSH (`ps`)                                       | `process_count`, `top_cpu_pct` *(ephemeral)*    | SIGTERM, SIGKILL |
 | [`network_usage`](#network_usage)       | Network interface throughput          | SSH (`/proc/net/dev`, 2-sample)                  | `rx_kbps`, `tx_kbps`                            | — |
 | [`diskio`](#diskio)                     | Per-disk read/write throughput        | SSH (`/proc/diskstats`, 2-sample)                | `read_kbps`, `write_kbps`                       | — |
-| [`interrupts`](#interrupts)             | Interrupt & context-switch rates      | SSH (`/proc/stat`, 2-sample)                     | `irq_per_sec`, `ctxt_per_sec`                   | — |
 | [`connections`](#connections)           | TCP connection counts by state        | SSH (`/proc/net/tcp`)                            | `total` + per-state (`established`, `listen`, …) | — |
 | [`wifi`](#wifi)                         | WiFi link quality & signal            | SSH (`/proc/net/wireless`)                       | `link_quality`, `signal_dbm`                    | — |
 | [`ports`](#ports)                       | TCP port / URL reachability           | SSH (`/dev/tcp`, `curl`)                         | `<check>_up`, `<check>_latency_ms`              | — |
 | [`borg`](#borg)                         | Borg backup freshness                 | SSH (`borg list`)                                | `archive_count`, `last_backup_epoch`            | — |
-| [`gpu`](#gpu)                           | NVIDIA GPU util / VRAM / temperature  | SSH (`nvidia-smi`)                               | `gpu_util`, `gpu_mem_pct`, `gpu_temp` (+ per-GPU) | — |
 | [`containers`](#containers)             | Docker / Podman container states      | SSH (`docker`/`podman ps`)                       | `containers_total`, `containers_running`, `containers_stopped` | Restart (per expected container) |
 | [`raid`](#raid)                         | Linux software RAID (mdadm) health    | SSH (`/proc/mdstat`)                             | `arrays_total`, `arrays_ok`, `arrays_degraded`  | — |
 | [`command`](#command)                   | Arbitrary command (generic check)     | SSH (any command)                                | `exit_code` (+ `value` in pattern mode)         | — |
@@ -154,7 +149,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `interrupts`, `connections`, `wifi`, `ports`, `cpu_usage`, `memory_usage`, `temperature`, `load_average`, `processes`, `borg`, `gpu`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `connections`, `wifi`, `ports`, `system_stats`, `processes`, `borg`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -471,102 +466,72 @@ Monitors disk space usage for a path or mountpoint over SSH via `df`. Works on a
 
 ---
 
-### `cpu_usage`
-Monitors CPU utilization over SSH. Takes two `/proc/stat` snapshots one second apart in a single SSH command and computes the usage delta — no agents or extra tools required.
+### `system_stats`
+Collects the basic health signals of a host — CPU, memory, load average, temperature, interrupts, GPU and kernel OOM kills — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Every module is opt-in**: only the ones named in `modules` run, and one that is off costs no command, no metric and no widget.
 
-| Option          | Description                                      |
-|-----------------|--------------------------------------------------|
-| `cpu_warning`   | CPU % that triggers `warning` (default: `70`)   |
-| `cpu_threshold` | CPU % that triggers `failed`  (default: `85`)   |
-| `interval`      | Polling frequency (default: `60`)                |
-| `ssh_config`    | SSH connection details — see [SSH Config](#ssh-config) below |
+| Option    | Description                                                                 |
+|-----------|-----------------------------------------------------------------------------|
+| `modules` | Which modules to run, and their options — a mapping of module name → options, or a plain list of names to take their defaults. Nothing runs until a module is named here, and a named module can be turned back off with `false` (or `enabled: false`) without deleting its options. |
+| `interval`| Polling frequency (default: `60`)                                            |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below              |
 
-**Metrics**: `cpu_pct`
+| Module   | Collected via | Options | Metrics |
+|----------|---------------|---------|---------|
+| `cpu`    | two `/proc/stat` samples 1s apart, in one command | `warning` (default `70`), `threshold` (default `85`) — CPU % per state | `cpu_pct` |
+| `memory` | `/proc/meminfo` (`MemAvailable`, so cache is not counted as used) | `warning` (default `75`), `threshold` (default `90`) — memory % per state | `memory_pct`, `memory_used_gb`, `memory_total_gb` |
+| `load`   | `/proc/loadavg` + `nproc`, normalized by core count | `warning`, `threshold` — 1m load as % of cores (both optional; omit to collect load without affecting status) | `load_pct_1m`, `load_pct_5m`, `load_pct_15m` |
+| `temperature` | `/sys/class/thermal/thermal_zone*` | `warning` (default `70`), `threshold` (default `80`) — °C per state | `temp_c` (hottest zone); `temp_zone_<type>` (per zone) |
+| `interrupts` | two `/proc/stat` samples 1s apart (its own, not the `cpu` module's) | `warning` (default `20000`), `threshold` (default `50000`) — interrupts/sec per state | `irq_per_sec`, `ctxt_per_sec` |
+| `gpu`    | `nvidia-smi` | `util_warning`/`util_threshold` (`85`/`95`), `mem_warning`/`mem_threshold` (`85`/`95`), `temp_warning`/`temp_threshold` (`80`/`90`), `timeout_trip` (`2`), `suspend_seconds` (`1800`) | `gpu_util`, `gpu_mem_pct`, `gpu_temp` (busiest card); `gpu<idx>_util`, `gpu<idx>_mem_pct`, `gpu<idx>_temp` (per card) |
+| `oom`    | `/proc/vmstat`'s `oom_kill` counter | `alert_for` (default `3`) — collections a kill keeps the monitor in `warning` afterwards; `is_warning` (default `false`) — report a kill as `warning` instead of `failed` | `oom_kills_total`, `oom_kills_new` |
+
+The overall status is the worst status of the enabled modules (`online` < `offline` < `warning` < `failed`, so a module that cannot measure never outranks one measuring a bad number), and each module logs its own line every cycle. A failed command is contained to its own module — the rest still collect. A host with no thermal zones (a VM, typically) leaves the `temperature` module online with no metric rather than reporting a problem it cannot see.
+
+On an agent-backed host the `oom` module also follows the kernel journal, so a kill is reported the moment it happens — see [Agent](#agent).
+
+A wedged NVIDIA driver — typically a dGPU that failed to restore from suspend — leaves `nvidia-smi` in uninterruptible sleep, where the connector's terminate/kill has no effect. Left alone, every interval would strand another unkillable process on the target until it reboots. After `timeout_trip` consecutive timeouts the `gpu` module therefore stops issuing the command entirely and reports **offline** for `suspend_seconds`, then retries once; a successful collection clears the count.
 
 ```yaml
-- name: "Heimdall CPU"
-  id: "heimdall-cpu"
-  type: "cpu_usage"
+- name: "Heimdall System"
+  id: "heimdall-system"
+  type: "system_stats"
   interval: 1m
-  cpu_warning: 70
-  cpu_threshold: 85
+  modules:
+    cpu:
+      warning: 70
+      threshold: 85
+    memory:
+      warning: 75
+      threshold: 90
+    load:
+      warning: 70     # warn when 1m load exceeds 70% of available cores
+      threshold: 100
+    oom:
+      alert_for: 3
   ssh_config:
     host: "heimdall.example.com"
 ```
 
----
-
-### `memory_usage`
-Monitors memory usage over SSH via `/proc/meminfo`. Uses `MemAvailable` (not `MemFree`) so filesystem cache is not counted as used. Single SSH read — no sleep required.
-
-| Option              | Description                                           |
-|---------------------|-------------------------------------------------------|
-| `memory_warning`    | Memory % that triggers `warning` (default: `75`)     |
-| `memory_threshold`  | Memory % that triggers `failed`  (default: `90`)     |
-| `interval`          | Polling frequency (default: `60`)                     |
-| `ssh_config`        | SSH connection details — see [SSH Config](#ssh-config) below |
-
-**Metrics**: `memory_pct`, `memory_used_gb`, `memory_total_gb`
-
 ```yaml
-- name: "Heimdall Memory"
-  id: "heimdall-memory"
-  type: "memory_usage"
-  interval: 1m
-  memory_warning: 75
-  memory_threshold: 90
+# A named subset, all on their defaults
+- name: "Heimdall System"
+  id: "heimdall-system"
+  type: "system_stats"
+  modules: ["memory", "oom"]
   ssh_config:
     host: "heimdall.example.com"
 ```
 
----
-
-### `temperature`
-Monitors system temperature over SSH via `/sys/class/thermal/thermal_zone*/temp`. Reports the maximum temperature across all thermal zones. Gracefully stays `online` with no metric when no thermal zones are present (e.g. VMs).
-
-| Option           | Description                                            |
-|------------------|--------------------------------------------------------|
-| `temp_warning`   | °C that triggers `warning` (default: `70`)            |
-| `temp_threshold` | °C that triggers `failed`  (default: `80`)            |
-| `interval`       | Polling frequency (default: `60`)                      |
-| `ssh_config`     | SSH connection details — see [SSH Config](#ssh-config) below |
-
-**Metrics**: `temp_c`
-
 ```yaml
-- name: "Heimdall Temperature"
-  id: "heimdall-temperature"
-  type: "temperature"
-  interval: 1m
-  temp_warning: 70
-  temp_threshold: 80
+# One module only — anything not named is simply off
+- name: "Ragnarok GPU"
+  id: "ragnarok-gpu"
+  type: "system_stats"
+  modules:
+    gpu:
+      temp_threshold: 88
   ssh_config:
-    host: "heimdall.example.com"
-```
-
----
-
-### `load_average`
-Monitors system load averages over SSH via `/proc/loadavg`. Load values are normalized by CPU core count (via `nproc`) and stored as a percentage — 100% means the system is exactly at capacity. Falls back to treating core count as 1 if `nproc` is unavailable. Thresholds are optional — when unset, load is collected and displayed but does not affect status.
-
-| Option           | Description                                                                  |
-|------------------|------------------------------------------------------------------------------|
-| `load_warning`   | 1m load as % of cores that triggers `warning` (optional — omit to disable)  |
-| `load_threshold` | 1m load as % of cores that triggers `failed`  (optional — omit to disable)  |
-| `interval`       | Polling frequency (default: `60`)                                             |
-| `ssh_config`     | SSH connection details — see [SSH Config](#ssh-config) below                 |
-
-**Metrics**: `load_pct_1m`, `load_pct_5m`, `load_pct_15m`
-
-```yaml
-- name: "Heimdall Load"
-  id: "heimdall-load"
-  type: "load_average"
-  interval: 1m
-  load_warning: 70    # warn when 1m load exceeds 70% of available cores
-  load_threshold: 100 # fail when 1m load exceeds 100% of available cores
-  ssh_config:
-    host: "heimdall.example.com"
+    host: "ragnarok.example.com"   # target needs nvidia-smi
 ```
 
 ---
@@ -630,36 +595,6 @@ The interface to monitor can be specified explicitly or auto-detected. In auto-d
   interface: "eth0"
   ssh_config:
     host: "ragnarok.example.com"
-```
-
----
-
-### `gpu`
-Monitors NVIDIA GPU utilization, VRAM usage, and temperature over SSH via a single `nvidia-smi --query-gpu` call. Handles multiple GPUs per host — each gets its own per-GPU metrics, and the overall status is the worst level across utilization, memory, and temperature for any GPU.
-
-If `nvidia-smi` isn't installed or no NVIDIA GPU is present, the monitor reports **offline** rather than failed, so it degrades gracefully on mixed fleets.
-
-A wedged NVIDIA driver — typically a dGPU that failed to restore from suspend — leaves `nvidia-smi` in uninterruptible sleep, where the connector's terminate/kill has no effect. Left alone, every interval would strand another unkillable process on the target until it reboots. After `timeout_trip` consecutive timeouts the monitor therefore stops issuing the command entirely and reports **offline** for `suspend_seconds`, then retries once; a successful collection clears the count.
-
-| Option           | Description                                              |
-|------------------|----------------------------------------------------------|
-| `util_warning` / `util_threshold`   | GPU utilization % bounds (default: `85` / `95`)   |
-| `mem_warning` / `mem_threshold`     | VRAM usage % bounds (default: `85` / `95`)        |
-| `temp_warning` / `temp_threshold`   | Temperature °C bounds (default: `80` / `90`)      |
-| `timeout_trip`   | Consecutive timeouts before the probe suspends (default: `2`) |
-| `suspend_seconds` | How long the probe stays suspended (default: `1800`)    |
-| `ssh_config`     | SSH connection details — target must have `nvidia-smi`   |
-
-**Metrics**: `gpu_util`, `gpu_mem_pct`, `gpu_temp` (busiest GPU); `gpu<idx>_util`, `gpu<idx>_mem_pct`, `gpu<idx>_temp` (per GPU)
-
-```yaml
-- name: "GPU"
-  id: "server-gpu"
-  type: "gpu"
-  interval: 1m
-  temp_threshold: 88
-  ssh_config:
-    host: "server.example.com"
 ```
 
 ---
@@ -890,11 +825,11 @@ Groups can be nested to arbitrary depth. Inner groups inherit their own `grid_co
       type: "group"
       grid_columns: 4   # 4 columns — one card per stat (CPU / Mem / Temp / Load)
       children:
-        - name: "Ragnarok CPU"
-          type: "cpu_usage"
+        - name: "Ragnarok System"
+          type: "system_stats"
           ...
-        - name: "Ragnarok Memory"
-          type: "memory_usage"
+        - name: "Ragnarok Disk"
+          type: "disk_space"
           ...
 
 # Child spanning multiple columns
@@ -939,10 +874,7 @@ Each named widget within a plugin can be overridden:
 |--------------------|------------------------------------------------------------------------------|
 | `uptime`           | `host_card`, `status_card`, `latency_card`, `chart`, `logs`                 |
 | `systemd_service`  | `host_card`, `service_card`, `status_card`, `time_card`, `logs` *(continuous)* / `host_card`, `service_card`, `maxage_card`, `state_card`, `history`, `logs` *(oneshot)* |
-| `cpu_usage`        | `host_card`, `cpu_card`, `chart`, `logs`                                    |
-| `memory_usage`     | `host_card`, `mem_pct_card`, `mem_used_card`, `chart`, `logs`               |
-| `temperature`      | `host_card`, `temp_card`, `chart`, `logs`                                   |
-| `load_average`     | `host_card`, `load_1m_card`, `load_5m_card`, `load_15m_card`, `chart`, `logs` |
+| `system_stats`     | `host_card`, the enabled modules' cards (`cpu_card`, `mem_pct_card`, `mem_used_card`, `load_1m_card`, `load_5m_card`, `load_15m_card`, `temp_card`, `sensors`, `irq_card`, `ctxt_card`, `gpu_util_card`, `gpu_mem_card`, `gpu_temp_card`, `gpus`, `oom_total_card`, `oom_recent_card`) and charts (`cpu_chart`, `memory_chart`, `load_chart`, `temp_chart`, `irq_chart`, `ctxt_chart`, `gpu_chart`, `oom_chart`), `events` |
 | `processes`        | `host_card`, `count_card`, `top_cpu_card`, `table`, `logs`                  |
 | `network_usage`    | `host_card`, `iface_card`, `rx_card`, `tx_card`, `rx_chart`, `tx_chart`, `logs` |
 | `smart_disk`       | `host_card`, `total_card`, `ok_card`, `failed_card`, `logs`                 |
@@ -955,16 +887,18 @@ Each named widget within a plugin can be overridden:
 ```yaml
 # Make the chart taller and hide the logs panel
 - name: "Ragnarok CPU"
-  type: "cpu_usage"
+  type: "system_stats"
+  modules: ["cpu"]
   layout:
-    chart:
+    cpu_chart:
       height: "500px"
     logs:
       visible: false
 
 # Custom 3-column grid: stat cards left, chart occupies right two columns
 - name: "Heimdall Memory"
-  type: "memory_usage"
+  type: "system_stats"
+  modules: ["memory"]
   layout:
     grid_columns: 3
     host_card:
@@ -1046,16 +980,42 @@ pip install vigil            # ships the `vigil-agent` command
 # /etc/vigil-agent.yaml
 url: "ws://vigil.example.com:8080/api/agent/ws"   # wss:// behind TLS
 id: "web-01"
-token: "a-long-random-string"
+token_file: "/run/secrets/vigil_agent_token"      # or `token:` inline
 ```
+
+| Field        | Description                                                          |
+|--------------|----------------------------------------------------------------------|
+| `url`        | The server's agent endpoint. `wss://` when the dashboard is behind TLS |
+| `id`         | Must match an `id` in the server's `agents:` list                     |
+| `token`      | The shared secret, inline                                             |
+| `token_file` | Path to a file holding the token, read at runtime. Prefer this: the secret stays with your secret manager and never enters a config file, a unit's environment, or a Nix store path |
+| `hostname`   | Hostname reported to the server. Defaults to the machine's own         |
 
 ```bash
 vigil-agent --config /etc/vigil-agent.yaml
 ```
 
 Every setting can come from the environment instead (`VIGIL_AGENT_URL`, `VIGIL_AGENT_ID`,
-`VIGIL_AGENT_TOKEN`, `VIGIL_AGENT_HOSTNAME`), so a systemd unit or container can supply the
-token without writing it to disk.
+`VIGIL_AGENT_TOKEN`, `VIGIL_AGENT_TOKEN_FILE`, `VIGIL_AGENT_HOSTNAME`), so a systemd unit or
+container can supply the token without writing it to disk.
+
+On NixOS the flake exports `nixosModules.agent` for the monitored host, alongside the
+existing `nixosModules.default` for the server:
+
+```nix
+services.vigil-agent = {
+  enable = true;
+  url = "ws://vigil.example.com:8080/api/agent/ws";
+  id = "web-01";
+  tokenFile = config.sops.secrets.vigil_agent_token.path;
+  extraGroups = [ "systemd-journal" ];      # for journal streams and unit logs
+  path = [ pkgs.smartmontools ];            # tools the monitors' commands invoke
+};
+```
+
+The agent runs unprivileged as `vigil-agent`. Grant that user the same scoped `NOPASSWD`
+sudo rules the SSH user had — a narrow grant per command is a better posture than running
+the agent as root.
 
 The agent reconnects on its own with exponential backoff and jitter, so a server restart
 needs no action on the host. A monitor whose agent is not currently connected reports
@@ -1079,7 +1039,7 @@ practical without the target's `sshd` ever seeing it.
 
 Two plugins use this today:
 
-- **`oom`** follows the kernel journal for the OOM killer's own message. The polled
+- **`system_stats`**'s `oom` module follows the kernel journal for the OOM killer's own message. The polled
   `/proc/vmstat` counter still runs and remains the authority on totals, but a kill is now
   reported the moment it happens and carries the process name — which the counter cannot.
 - **`systemd_service`** follows its unit's journal, so the log view is live rather than a
@@ -1317,12 +1277,8 @@ exporters:
 - [x] Disk space monitor (any path/mountpoint via `df`, threshold alerting)
 - [x] ZFS pool health monitor (DEGRADED/FAULTED detection)
 - [x] SMART disk health monitor
-- [x] CPU usage monitor (via `/proc/stat` two-sample delta, warning/failed thresholds)
-- [x] Memory usage monitor (via `/proc/meminfo`, warning/failed thresholds)
-- [x] Temperature monitor (via `/sys/class/thermal`, graceful degradation on VMs)
-- [x] Load average monitor (via `/proc/loadavg` normalized by `nproc`, optional thresholds)
+- [x] System stats monitor (CPU, memory, load average, temperature, interrupts, NVIDIA GPU and OOM kills as one monitor, opt-in per-module configuration)
 - [x] Network usage monitor (RX/TX throughput via `/proc/net/dev`, auto-detect or explicit interface)
-- [x] GPU monitor (NVIDIA util/VRAM/temperature via `nvidia-smi`)
 - [x] Container monitor (Docker/Podman, with per-container restart)
 - [x] Software RAID (mdadm) health monitor
 - [x] Generic command monitor (arbitrary check, exit-code or regex-extracted value)
