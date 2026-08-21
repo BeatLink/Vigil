@@ -116,3 +116,30 @@ class TestBlindChecksAreNotHealthy:
         from vigil.plugins.smart_disk import _SMART_SCRIPT
         assert "test result: *PASSED" in _SMART_SCRIPT
         assert "UNKNOWN $d" in _SMART_SCRIPT
+
+
+class TestNonPhysicalDevices:
+    """zram, ZFS zvols and loop/md/dm nodes are reported as type "disk" by
+    lsblk but have no SMART. Probing them turned a healthy host permanently
+    red once unreadable disks stopped counting as healthy."""
+
+    def test_virtual_devices_are_filtered_before_probing(self):
+        from vigil.plugins.smart_disk import _SMART_SCRIPT
+        assert "grep -Ev '^(zram|zd|loop|md|dm-|sr|fd|ram)'" in _SMART_SCRIPT
+
+    def test_an_unsupported_device_is_skipped_not_counted(self, plugin):
+        result = plugin.parse([CmdResult(0, "PASS /dev/sda\nSKIP /dev/zd0", "")])
+
+        assert result.status == 'online'
+        assert result.metrics['disks_total'] == 1
+        assert result.metrics['disks_unknown'] == 0
+
+    def test_skips_alone_look_like_no_disks(self, plugin):
+        result = plugin.parse([CmdResult(0, "SKIP /dev/zram0\nSKIP /dev/zd0", "")])
+        assert result.status == 'offline'
+
+    def test_a_genuine_privilege_error_is_still_not_skipped(self, plugin):
+        """The SKIP branch must not become a way for real errors to hide."""
+        result = plugin.parse([CmdResult(0, "UNKNOWN /dev/sda sudo: setuid bit", "")])
+        assert result.status == 'failed'
+        assert result.metrics['disks_unknown'] == 1

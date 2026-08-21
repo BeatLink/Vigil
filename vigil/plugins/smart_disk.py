@@ -11,7 +11,12 @@ from vigil.core.connectors.types import CmdResult, Command, CollectResult
 # disk-health monitor must never give when it is blind.
 _SMART_SCRIPT = (
     "command -v smartctl >/dev/null 2>&1 || { echo 'ERROR smartctl not found'; exit 1; }; "
-    "disks=$(lsblk -dn -o NAME,TYPE 2>/dev/null | awk '$2==\"disk\"{print \"/dev/\"$1}'); "
+    # lsblk calls zram devices, ZFS zvols, loop/md/device-mapper nodes "disk"
+    # too, and none of them have SMART. They are skipped here rather than
+    # probed: a virtual device that cannot answer is not a disk in unknown
+    # health, and counting it as one turns a healthy host permanently red.
+    "disks=$(lsblk -dn -o NAME,TYPE 2>/dev/null | awk '$2==\"disk\"{print $1}' "
+    "  | grep -Ev '^(zram|zd|loop|md|dm-|sr|fd|ram)' | sed 's|^|/dev/|'); "
     "[ -z \"$disks\" ] && exit 0; "
     "for d in $disks; do "
     "  transport=$(lsblk -no TRAN \"$d\" 2>/dev/null || echo ''); "
@@ -22,6 +27,8 @@ _SMART_SCRIPT = (
     "  fi; "
     "  if echo \"$result\" | grep -iq 'test result: *PASSED'; then echo \"PASS $d\"; "
     "  elif echo \"$result\" | grep -iqE 'test result: *FAILED|SMART Health Status: *FAIL'; then echo \"FAIL $d\"; "
+    "  elif echo \"$result\" | grep -iqE 'does not support SMART|Unable to detect device type|Operation not supported'; then "
+    "    echo \"SKIP $d\"; "
     "  else echo \"UNKNOWN $d $(echo \"$result\" | tr '\\n' ' ' | cut -c1-160)\"; fi; "
     "done"
 )
@@ -47,7 +54,11 @@ class SmartDisk(Plugin):
         logs = []
         for line in stdout.splitlines():
             parts = line.strip().split(None, 1)
-            if len(parts) != 2 or parts[0] not in ('PASS', 'FAIL', 'UNKNOWN'):
+            if len(parts) != 2 or parts[0] not in ('PASS', 'FAIL', 'UNKNOWN', 'SKIP'):
+                continue
+            if parts[0] == 'SKIP':
+                # Reported SMART as unsupported: a virtual or pass-through
+                # device, not a disk whose health is in doubt.
                 continue
             result, rest = parts
             if result == 'FAIL':
