@@ -138,7 +138,8 @@ in
         Strings are allowed so a deployment can pass
         `"/run/current-system/sw"`, giving the agent the same PATH an SSH login
         to this host would have seen — the closest match to the agentless
-        behaviour when migrating existing monitors.
+        behaviour when migrating existing monitors. Pass the prefix, not its
+        bin/: systemd appends /bin and /sbin to each entry.
       '';
     };
 
@@ -171,14 +172,19 @@ in
       # commands invoke must be on PATH. systemd and coreutils cover the common
       # monitors; anything else comes from `path`.
       #
-      # /run/wrappers/bin comes first and is not optional: NixOS's setuid
-      # binaries live there, and the plain `sudo` in the system profile is not
+      # /run/wrappers comes first and is not optional: NixOS's setuid binaries
+      # live in its bin/, and the plain `sudo` in the system profile is not
       # setuid. Without this, every monitor that runs `sudo` (smartctl, borg,
       # systemctl actions) fails with "must be owned by uid 0 and have the
       # setuid bit set" — a shell over SSH picked this up from the login
       # profile, but a systemd unit's PATH does not.
+      #
+      # Note the value is the prefix, not the bin/ directory: systemd.services
+      # .<name>.path appends /bin and /sbin to each entry, so "/run/wrappers/bin"
+      # would yield the non-existent /run/wrappers/bin/bin and silently leave
+      # the non-setuid sudo first on PATH.
       path = [
-        "/run/wrappers/bin"
+        "/run/wrappers"
         pkgs.coreutils
         pkgs.systemd
         pkgs.procps
