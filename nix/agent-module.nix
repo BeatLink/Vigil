@@ -170,7 +170,15 @@ in
       # The agent runs whatever shell the server sends, so the tools those
       # commands invoke must be on PATH. systemd and coreutils cover the common
       # monitors; anything else comes from `path`.
+      #
+      # /run/wrappers/bin comes first and is not optional: NixOS's setuid
+      # binaries live there, and the plain `sudo` in the system profile is not
+      # setuid. Without this, every monitor that runs `sudo` (smartctl, borg,
+      # systemctl actions) fails with "must be owned by uid 0 and have the
+      # setuid bit set" — a shell over SSH picked this up from the login
+      # profile, but a systemd unit's PATH does not.
       path = [
+        "/run/wrappers/bin"
         pkgs.coreutils
         pkgs.systemd
         pkgs.procps
