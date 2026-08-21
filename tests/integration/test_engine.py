@@ -117,7 +117,7 @@ class TestSSHDefaultsMerge:
             "database": {"path": db_path},
             "ssh_defaults": {"username": "beatlink", "key_path": "/run/vigil.key"},
             "plugins": [{
-                "name": "CPU", "id": "cpu", "type": "cpu_usage",
+                "name": "CPU", "id": "cpu", "type": "system_stats",
                 "ssh_config": {"host": "server.technet"},
             }],
         })
@@ -137,7 +137,7 @@ class TestSSHDefaultsMerge:
             "database": {"path": db_path},
             "ssh_defaults": {"username": "beatlink"},
             "plugins": [{
-                "name": "CPU", "id": "cpu", "type": "cpu_usage",
+                "name": "CPU", "id": "cpu", "type": "system_stats",
                 "ssh_config": {"host": "server.technet", "username": "root"},
             }],
         })

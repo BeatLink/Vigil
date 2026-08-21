@@ -82,20 +82,25 @@ plugins:
     type: "group"
     grid_columns: 4
     children:
-      - name: "CPU"
-        id: "server-cpu"
-        type: "cpu_usage"
+      - name: "System"
+        id: "server-system"
+        type: "system_stats"
         interval: 1m
-        cpu_warning: 70
-        cpu_threshold: 85
-        ssh_config:
-          host: "server.example.com"
-      - name: "Memory"
-        id: "server-memory"
-        type: "memory_usage"
-        interval: 1m
-        memory_warning: 75
-        memory_threshold: 90
+        modules:                 # every module is opt-in; an undeclared one is off
+          cpu:
+            warning: 70          # CPU % (warn / fail)
+            threshold: 85
+          memory:
+            warning: 75          # memory % (warn / fail)
+            threshold: 90
+          load:
+            warning: 70          # 1m load as % of cores (warn / fail)
+            threshold: 100
+          temperature:
+            warning: 70          # °C (warn / fail)
+            threshold: 80
+          oom:
+            alert_for: 3         # collections a kill keeps the monitor alerting
         ssh_config:
           host: "server.example.com"
       - name: "/"
@@ -167,10 +172,12 @@ plugins:
           host: "server.example.com"
       - name: "Interrupts"
         id: "server-interrupts"
-        type: "interrupts"
+        type: "system_stats"
         interval: 1m
-        irq_warning: 20000     # interrupts/sec
-        irq_threshold: 50000
+        modules:
+          interrupts:
+            warning: 20000     # interrupts/sec
+            threshold: 50000
         ssh_config:
           host: "server.example.com"
       - name: "Connections"
@@ -214,14 +221,16 @@ plugins:
     children:
       - name: "GPU"
         id: "server-gpu"
-        type: "gpu"
+        type: "system_stats"
         interval: 1m
-        util_warning: 85       # GPU util % (warn / fail)
-        util_threshold: 95
-        mem_warning: 85        # VRAM % (warn / fail)
-        mem_threshold: 95
-        temp_warning: 80       # °C (warn / fail)
-        temp_threshold: 90
+        modules:
+          gpu:
+            util_warning: 85   # GPU util % (warn / fail)
+            util_threshold: 95
+            mem_warning: 85    # VRAM % (warn / fail)
+            mem_threshold: 95
+            temp_warning: 80   # °C (warn / fail)
+            temp_threshold: 90
         ssh_config:
           host: "server.example.com"   # target needs nvidia-smi
       - name: "Docker"

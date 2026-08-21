@@ -190,8 +190,8 @@ class TestEventRouting:
         return engine
 
     def test_an_event_is_parsed_and_persisted(self, make_plugin, db_manager):
-        from vigil.plugins.oom import Oom
-        plugin = make_plugin(Oom)
+        from vigil.plugins.system_stats import SystemStats
+        plugin = make_plugin(SystemStats, {'modules': ['oom']})
         engine = self._engine(db_manager, plugin)
 
         engine._on_agent_event('node-a', plugin.id, 1234.0,
@@ -201,13 +201,13 @@ class TestEventRouting:
         assert any('redis' in m for m in messages)
 
     def test_an_event_for_an_unknown_stream_is_dropped(self, make_plugin, db_manager):
-        from vigil.plugins.oom import Oom
-        engine = self._engine(db_manager, make_plugin(Oom))
+        from vigil.plugins.system_stats import SystemStats
+        engine = self._engine(db_manager, make_plugin(SystemStats, {'modules': ['oom']}))
         engine._on_agent_event('node-a', 'no-such-stream', 1234.0, {})  # must not raise
 
     def test_a_plugin_that_raises_does_not_kill_the_socket(self, make_plugin, db_manager):
-        from vigil.plugins.oom import Oom
-        plugin = make_plugin(Oom)
+        from vigil.plugins.system_stats import SystemStats
+        plugin = make_plugin(SystemStats, {'modules': ['oom']})
         engine = self._engine(db_manager, plugin)
         plugin.parse_event = MagicMock(side_effect=RuntimeError("plugin bug"))
 
@@ -216,8 +216,8 @@ class TestEventRouting:
 
 class TestPluginSubscriptions:
     def test_oom_subscribes_to_the_kernel_journal(self, make_plugin):
-        from vigil.plugins.oom import Oom
-        plugin = make_plugin(Oom)
+        from vigil.plugins.system_stats import SystemStats
+        plugin = make_plugin(SystemStats, {'modules': ['oom']})
         spec = plugin.subscriptions()[0]
         assert (spec.id, spec.kind) == (plugin.id, 'journal')
         assert spec.params['kernel'] is True
@@ -239,3 +239,4 @@ class TestPluginSubscriptions:
     def test_a_poll_only_plugin_declares_no_streams(self, make_plugin):
         from vigil.plugins.uptime import Uptime
         assert make_plugin(Uptime).subscriptions() == []
+

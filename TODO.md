@@ -43,7 +43,7 @@ Nothing here is committed work — this is the candidate list.
 ### 1b. Extensions to existing plugins
 
 - [ ] **GPU: AMD and Intel** — LNXlink `gpu` covers NVIDIA, AMD, and Intel.
-      [gpu.py](vigil/plugins/gpu.py) is `nvidia-smi`-only and reports offline on anything else
+      the `gpu` module of [system_stats.py](vigil/plugins/system_stats.py) is `nvidia-smi`-only and reports offline on anything else
       ([README.md:629](README.md#L629)). Add `amdgpu_top`/`sysfs` and `intel_gpu_top` paths.
 - [ ] **Containers: update-available detection and prune** — LNXlink `docker` checks whether a newer
       image exists and can prune. [containers.py](vigil/plugins/containers.py) counts running/stopped
@@ -52,6 +52,24 @@ Nothing here is committed work — this is the candidate list.
 - [ ] *(Already on roadmap)* Per-core CPU breakdown — LNXlink's `cpu` exposes load 1m/5m/15m as
       attributes; Vigil already splits these into `load_pct_*` metrics, so only the per-core split
       is outstanding.
+
+### 1b2. Further plugin consolidation
+
+`system_stats` now covers the cheap per-host `/proc` and `/sys` signals as opt-in modules
+(cpu, memory, load, temperature, interrupts, gpu, oom), each with its own thresholds, cards
+and charts. Two more consolidations follow the same shape:
+
+- [ ] **Networking module** — fold [network_usage.py](vigil/plugins/network_usage.py),
+      [connections.py](vigil/plugins/connections.py) and [wifi.py](vigil/plugins/wifi.py) into one
+      networking monitor built on the same `_Module` contract.
+- [ ] **Filesystem module** — fold [diskio.py](vigil/plugins/diskio.py),
+      [filesystems.py](vigil/plugins/filesystems.py), [smart_disk.py](vigil/plugins/smart_disk.py),
+      [raid.py](vigil/plugins/raid.py) and [zfs_health.py](vigil/plugins/zfs_health.py) similarly.
+      `smartctl` wants a far longer interval than a `/proc` read, so this needs per-module
+      intervals or a separate monitor — a plugin currently has one interval for all its modules.
+- [ ] **Shared delta sampling** — `cpu`, `interrupts`, `diskio` and `network_usage` each take their
+      own 1s sample, so enabling several costs one sleep apiece. A single snapshot-sleep-snapshot
+      command whose output the delta modules slice would collapse them to one.
 
 ### 1c. Control actions
 
