@@ -1,0 +1,185 @@
+/* Halon — Layer 1: the only place in the dashboard where a literal color
+ * appears. Values are §3.1 (color) and §4.1 (typography, space, geometry) of
+ * Halon's THEME-DESIGN-GUIDE.md, copied verbatim; the shadow tokens are §5.
+ * halon.css and every Python call site may reference these names and nothing
+ * else. The dark block re-declares twenty-two colors and nothing more; a
+ * manual toggle writing data-theme onto <html> wins over the system
+ * preference in both directions.
+ */
+
+:root {
+    --font-family-interface:
+        system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+        "Noto Sans", Cantarell, "Helvetica Neue", Arial, sans-serif,
+        "Apple Color Emoji", "Segoe UI Emoji";
+    --font-family-monospace:
+        ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+        "DejaVu Sans Mono", monospace;
+
+    /* Spacing — a 4px scale. Nothing may use a value that is not on it. */
+    --space-1: 2px;
+    --space-2: 4px;
+    --space-3: 6px;
+    --space-4: 8px;
+    --space-5: 12px;
+    --space-6: 16px;
+    --space-7: 24px;
+    --space-8: 32px;
+
+    /* Geometry — one control height, so everything on a row aligns */
+    --control-height: 32px;
+    --control-padding-x: 14px;
+    --icon-button-size: 30px;
+    --row-height: 28px;
+    --frame-height: 34px;
+    --border-width: 1px;
+    --focus-ring-width: 3px;
+
+    --radius-small: 4px;
+    --radius-row: 6px;
+    --radius-default: 8px;
+    --radius-window: 10px;
+    --radius-pill: 9999px;
+
+    --text-label: 11px;
+    --text-caption: 12px;
+    --text-control: 13px;
+    --text-prose: 14px;
+    --text-h3: 15px;
+    --text-h2: 19px;
+    --text-h1: 26px;
+
+    --line-height-body: 1.55;
+    --line-height-ui: 1.2;
+    --measure: 68ch;
+
+    /* Surfaces */
+    --surface-root: #f1f5f9;
+    --surface-default: #ffffff;
+    --surface-secondary: #f1f5f9;
+    --surface-navigation: var(--surface-secondary);
+    --surface-navigation-hover: #e2e8f0;
+    --surface-overlay: rgba(15, 23, 42, 0.45);
+
+    /* Text on surfaces */
+    --text-heading: #0f172a;
+    --text-body: #1a1a2e;
+    --text-secondary: #475569;
+    --text-tertiary: #64748b;
+    --text-on-navigation: #475569;
+
+    /* Text on fills */
+    --text-on-fill: #ffffff;
+    --text-on-light: #0f172a;
+
+    /* Lines */
+    --border-default: #e2e8f0;
+    --border-hover: #cbd5e1;
+    --border-control: #8792a3;
+    --border-focus: var(--accent);
+
+    /* Interaction */
+    --accent: #2563eb;
+    --focus-ring: rgba(37, 99, 235, 0.15);
+
+    /* Status */
+    --status-success: #047857;
+    --status-warning: #f59e0b;
+    --status-warning-text: #c2410c;
+    --status-danger: #dc2626;
+    --badge-experimental: #7c3aed;
+
+    /* Solid fills that keep their lightness in both schemes. Quasar pairs its
+     * palette fills with a fixed white (or black, for warning) in an
+     * !important cascade layer that no author rule can override, so these
+     * three stay dark and the amber stays light — the §3.5 escape hatch for a
+     * fill that is genuinely the same lightness in both schemes. White clears
+     * AA on all three; black clears 8.31 on the amber. */
+    --fill-accent: #2563eb;
+    --fill-success: #047857;
+    --fill-danger: #dc2626;
+    --fill-warning: #f59e0b;
+
+    /* Elevation — slate-900 at low alpha, never neutral black */
+    --shadow-item: 0 1px 2px rgba(15, 23, 42, 0.12);
+    --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.08), 0 1px 2px rgba(15, 23, 42, 0.06);
+    --shadow-tab: 0 1px 3px rgba(15, 23, 42, 0.15);
+    --shadow-floating: 0 2px 8px rgba(15, 23, 42, 0.20);
+    --shadow-modal: 0 8px 32px rgba(15, 23, 42, 0.25);
+
+    color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --surface-root: #060b14;
+        --surface-default: #16213a;
+        --surface-secondary: #060b14;
+        --surface-navigation-hover: #101b2d;
+        --surface-overlay: rgba(0, 0, 0, 0.6);
+
+        --text-heading: #f8fafc;
+        --text-body: #e2e8f0;
+        --text-secondary: #cbd5e1;
+        --text-tertiary: #94a3b8;
+        --text-on-navigation: #7dabf5;
+
+        --text-on-fill: #0b1220;
+
+        --border-default: #334155;
+        --border-hover: #475569;
+        --border-control: #64748b;
+
+        --accent: #60a5fa;
+        --focus-ring: rgba(96, 165, 250, 0.28);
+
+        --status-success: #10b981;
+        --status-warning-text: #f59e0b;
+        --status-danger: #f87171;
+        --badge-experimental: #a78bfa;
+
+        --shadow-item: 0 1px 2px rgba(15, 23, 42, 0.50);
+        --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.40), 0 1px 2px rgba(15, 23, 42, 0.30);
+        --shadow-tab: 0 1px 3px rgba(15, 23, 42, 0.50);
+        --shadow-floating: 0 2px 8px rgba(15, 23, 42, 0.60);
+        --shadow-modal: 0 8px 32px rgba(15, 23, 42, 0.70);
+
+        color-scheme: dark;
+    }
+}
+
+:root[data-theme="dark"] {
+    --surface-root: #060b14;
+    --surface-default: #16213a;
+    --surface-secondary: #060b14;
+    --surface-navigation-hover: #101b2d;
+    --surface-overlay: rgba(0, 0, 0, 0.6);
+
+    --text-heading: #f8fafc;
+    --text-body: #e2e8f0;
+    --text-secondary: #cbd5e1;
+    --text-tertiary: #94a3b8;
+    --text-on-navigation: #7dabf5;
+
+    --text-on-fill: #0b1220;
+
+    --border-default: #334155;
+    --border-hover: #475569;
+    --border-control: #64748b;
+
+    --accent: #60a5fa;
+    --focus-ring: rgba(96, 165, 250, 0.28);
+
+    --status-success: #10b981;
+    --status-warning-text: #f59e0b;
+    --status-danger: #f87171;
+    --badge-experimental: #a78bfa;
+
+    --shadow-item: 0 1px 2px rgba(15, 23, 42, 0.50);
+    --shadow-card: 0 1px 3px rgba(15, 23, 42, 0.40), 0 1px 2px rgba(15, 23, 42, 0.30);
+    --shadow-tab: 0 1px 3px rgba(15, 23, 42, 0.50);
+    --shadow-floating: 0 2px 8px rgba(15, 23, 42, 0.60);
+    --shadow-modal: 0 8px 32px rgba(15, 23, 42, 0.70);
+
+    color-scheme: dark;
+}

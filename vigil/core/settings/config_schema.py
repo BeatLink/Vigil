@@ -77,8 +77,10 @@ class ExporterSettings(TypedDict, total=False):
 
 class ThemeSettings(TypedDict, total=False):
     """Consumed by core/ui/theme.py's configure(); kept as Dict[str, Any]
-    at that call site since theme keys are a flat CSS-color mapping, not
-    individually load-bearing to any other module."""
+    at that call site since theme keys are a flat mapping onto Halon tokens,
+    not individually load-bearing to any other module. `scheme` is the one
+    non-color key: auto (follow the browser), light, or dark."""
+    scheme: str
     primary: str
     background: str
 

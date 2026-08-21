@@ -450,6 +450,32 @@ HTTP Basic Auth (`register_auth`) is registered before the routes it protects.
 Starlette middleware wraps the whole app regardless of registration order, but
 registering it early keeps intent obvious: everything that follows is gated.
 
+## Theme: two CSS layers, no color in Python
+
+The dashboard wears the Halon theme, split the way Halon's design guide
+requires. `core/ui/static/halon-tokens.css` is Layer 1 — the only place a
+literal color exists, in a light block and a dark block that re-declares
+twenty-two of them; `core/ui/static/halon.css` is Layer 2, the Quasar/NiceGUI
+component rules, where every value is a `var(--token)`. `core/ui/theme.py`
+loads both once per process, maps Quasar's palette variables onto the tokens,
+and exposes the token names to Python as `var(--…)` strings — so an inline
+style written from Python (`STATUS_COLORS['failed']`) resolves per scheme in
+the browser and needs no Python branch for dark mode.
+
+Two hazards are worth knowing before editing either sheet:
+
+- **Quasar's utility classes (`bg-primary`, `text-white`) sit in an
+  `!important` cascade layer.** Important declarations in a layer outrank
+  unlayered author styles regardless of specificity, so no rule of ours can
+  recolor them. The fix is to stop them being emitted — `ui.button(color=None)`
+  — or, where the framework insists (toast fills), to give them a token that
+  does not flip (`--fill-*`).
+- **ECharts paints to a canvas and cannot read custom properties.** Charts
+  register with `theme.on_scheme_change()`, which hands them the literals of
+  the scheme the client reported and repaints them when it flips. Those
+  literals are parsed out of the token sheet at import, so they are not a
+  second copy of the palette.
+
 ## Declarative UI spec
 
 Most plugins reduce to the same shape: a few metric cards with a formatter, a

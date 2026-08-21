@@ -62,7 +62,7 @@ class Group(Plugin):
 
     def render_ui(self, context: str = 'page'):
         from nicegui import ui
-        from vigil.core.ui.theme import STATUS_COLORS, TEXT, TEXT_MUTED
+        from vigil.core.ui.theme import STATUS_COLORS, TEXT_SECONDARY
         from vigil.core.ui.components import card
 
         min_card_width = self.config.get('grid_min_width', '320px')
@@ -86,19 +86,20 @@ class Group(Plugin):
                 with ui.element('div').style(cell_style):
                     with card('w-full h-full overflow-hidden', padding=False):
                         with ui.row().classes(
-                            'w-full items-center gap-3 px-4 py-3 cursor-pointer select-none'
+                            'w-full items-center gap-3 halon-panel-header halon-row-hover '
+                            'cursor-pointer select-none'
                         ) as header_row:
                             ui.element('div').style(
                                 f'width: 8px; height: 8px; border-radius: 50%; '
                                 f'background: {child_color}; flex-shrink: 0'
                             )
-                            ui.label(child.name).classes('font-semibold text-sm flex-1').style(f'color: {TEXT}')
+                            ui.label(child.name).classes('halon-title-row flex-1')
                             chevron = ui.icon('expand_more', size='sm').style(
-                                f'color: {TEXT_MUTED}; transition: transform 0.2s; '
+                                f'color: {TEXT_SECONDARY}; transition: transform 0.2s; '
                                 + ('transform: rotate(180deg)' if is_open else 'transform: rotate(0deg)')
                             )
 
-                        body = ui.column().classes('w-full p-4 border-t border-gray-100').style('min-width: 0')
+                        body = ui.column().classes('w-full halon-card-body').style('min-width: 0')
                         body.set_visibility(is_open)
                         rendered = False
                         if is_open:
@@ -111,7 +112,7 @@ class Group(Plugin):
                         open_now = self._expanded[c.id]
                         _body.set_visibility(open_now)
                         angle = '180deg' if open_now else '0deg'
-                        _chev.style(f'color: {TEXT_MUTED}; transition: transform 0.2s; transform: rotate({angle})')
+                        _chev.style(f'color: {TEXT_SECONDARY}; transition: transform 0.2s; transform: rotate({angle})')
                         self._save_expanded()
                         nonlocal rendered
                         if open_now and not rendered:

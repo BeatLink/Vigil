@@ -86,26 +86,40 @@ See [DEVELOP.md](DEVELOP.md) for the architectural rationale — the pure-plugin
 
 ## Theme
 
-All colors used in the dashboard can be overridden in the `theme:` section of `config.yaml`. All fields are optional — omit any field to keep its default.
+The dashboard is themed with **Halon**: slate plus a single blue, a recessed
+navigation frame, ghost-first controls and hairline structure, in a light and a
+dark scheme that share one token set. Every color lives in
+`vigil/core/ui/static/halon-tokens.css`; the component rules that consume those
+tokens live beside it in `halon.css`, and no Python module states a color.
 
-| Field             | Default       | Description                              |
-|-------------------|---------------|------------------------------------------|
-| `primary`         | `#00ACFF`     | Header, links, and primary accents       |
-| `accent`          | `#FF5500`     | Secondary accent color                   |
-| `background`      | `#FFFFFF`     | Sidebar and card backgrounds             |
-| `background_muted`| `#FAFAFA`     | Page body background                     |
-| `text`            | `#111827`     | Primary text                             |
-| `text_muted`      | `#6B7280`     | Labels and secondary text                |
-| `status_online`   | `lime`        | Color shown when a monitor is online     |
-| `status_warning`  | `gold`        | Color shown when a monitor is in warning |
-| `status_failed`   | `red`         | Color shown when a monitor has failed    |
-| `status_offline`  | `lightgray`   | Color shown when a monitor is offline    |
+The scheme follows the browser's `prefers-color-scheme` unless you pin it:
 
 ```yaml
 theme:
-  primary: "#7C3AED"
-  status_online: "limegreen"
-  status_warning: "orange"
+  scheme: dark      # auto (default), light, or dark
+```
+
+Individual tokens can be overridden from the same block. Each key maps to one
+token and applies to **both** schemes, so an override that only suits one of
+them is yours to audit — the shipped values are contrast-audited in both.
+
+| Field              | Token                   | Role                                     |
+|--------------------|-------------------------|------------------------------------------|
+| `scheme`           | —                       | `auto`, `light`, or `dark`                |
+| `primary`          | `--accent`              | Links, focus, the one filled button       |
+| `background`       | `--surface-default`     | Cards and panels                          |
+| `background_muted` | `--surface-root`        | The page behind them                      |
+| `text`             | `--text-body`           | Body text                                 |
+| `text_muted`       | `--text-secondary`      | Labels, captions, icons                   |
+| `status_online`    | `--status-success`      | A monitor that is up                      |
+| `status_warning`   | `--status-warning-text` | A monitor in warning                      |
+| `status_failed`    | `--status-danger`       | A monitor that has failed                 |
+| `status_offline`   | `--text-tertiary`       | A monitor not reporting                   |
+
+```yaml
+theme:
+  scheme: auto
+  primary: "#7c3aed"
 ```
 
 ---

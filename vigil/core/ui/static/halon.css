@@ -1,0 +1,546 @@
+/* Halon — Layer 2: component rules for the Quasar/NiceGUI widgets the
+ * dashboard is built from. Every value here is a var(--token) from
+ * halon-tokens.css; a literal color in this file is a defect. The sheet is
+ * loaded after Quasar's and Tailwind's, so !important appears only where
+ * Quasar's own utility classes (bg-*, text-*) carry it.
+ */
+
+/* ── Framework mapping (§2). A translation table, not a third layer. ─────── */
+
+body {
+    --q-primary: var(--accent);
+    --q-secondary: var(--text-secondary);
+    --q-accent: var(--accent);
+    /* Quasar's palette fills are painted under white or black text it pins in
+     * an !important layer, so they take the non-flipping fills, not the status
+     * tokens a mark on a surface would take. */
+    --q-positive: var(--fill-success);
+    --q-negative: var(--fill-danger);
+    --q-warning: var(--fill-warning);
+    --q-info: var(--fill-accent);
+    --q-dark: var(--surface-default);
+    --q-dark-page: var(--surface-root);
+}
+
+/* ── Base ───────────────────────────────────────────────────────────────── */
+
+body,
+.q-layout,
+.q-page-container,
+.nicegui-content {
+    background-color: var(--surface-root);
+    color: var(--text-body);
+    font-family: var(--font-family-interface);
+    font-size: var(--text-prose);
+    line-height: var(--line-height-body);
+}
+
+.q-btn, .q-field, .q-item, .q-table, .q-tree, .q-chip, .q-menu, .q-notification, .q-tooltip {
+    font-family: var(--font-family-interface);
+    letter-spacing: normal;
+}
+
+.font-mono, .text-mono {
+    font-family: var(--font-family-monospace);
+}
+
+h1, h2, h3, h4, h5 { color: var(--text-heading); }
+
+a, .q-link { color: var(--accent); }
+
+::selection { background: var(--focus-ring); }
+
+:focus-visible {
+    outline: var(--focus-ring-width) solid var(--focus-ring);
+    outline-offset: 0;
+}
+
+/* Quasar paints hover and pressed states as a translucent black overlay,
+ * which reads as grime on the near-black dark surfaces. Every hover in this
+ * sheet is an explicit background or border instead. */
+.q-focus-helper, .q-ripple { display: none !important; }
+
+.halon-page {
+    padding: 28px var(--space-8);
+    gap: var(--space-7);
+}
+
+.halon-section-gap { gap: var(--space-7); }
+
+/* ── The frame (§6.4): header and drawer sit one step back from content ─── */
+
+.q-header {
+    background-color: var(--surface-navigation);
+    color: var(--text-on-navigation);
+    border-bottom: var(--border-width) solid var(--border-default);
+    box-shadow: none;
+    min-height: var(--frame-height);
+    padding: var(--space-1) var(--space-4);
+}
+
+.q-header .q-btn {
+    color: var(--text-on-navigation) !important;
+    border-color: transparent;
+}
+
+.q-header .q-btn:hover {
+    background-color: var(--surface-navigation-hover) !important;
+    color: var(--text-heading) !important;
+    border-color: transparent;
+}
+
+.q-header .halon-brand {
+    color: var(--text-heading);
+    font-size: var(--text-h3);
+    font-weight: 600;
+    line-height: var(--line-height-ui);
+}
+
+.q-drawer {
+    background-color: var(--surface-secondary);
+    border-right: var(--border-width) solid var(--border-default);
+    box-shadow: none;
+    color: var(--text-body);
+}
+
+.q-drawer .q-drawer__content { padding: 0 var(--space-4); }
+
+/* Invisible until grabbed (§6.8). */
+.halon-resize-gutter { background-color: transparent; }
+.halon-resize-gutter:hover { background-color: var(--accent); }
+
+/* ── Sidebar rows and tree (§6.5) ───────────────────────────────────────── */
+
+.q-drawer .q-item {
+    min-height: var(--row-height);
+    padding: 5px var(--space-4);
+    margin: var(--space-1) 0;
+    border-radius: var(--radius-row);
+    font-size: var(--text-control);
+    color: var(--text-body);
+}
+
+.q-drawer .q-item:hover {
+    background-color: var(--surface-navigation-hover);
+    color: var(--text-heading);
+}
+
+/* A place you are, not a row you picked: elevation, not fill. */
+.q-drawer .q-item.halon-item-selected {
+    background-color: var(--surface-default);
+    color: var(--text-heading);
+    box-shadow: var(--shadow-item);
+}
+
+.halon-sidebar-label {
+    font-size: var(--text-label);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    padding: var(--space-5) var(--space-4) var(--space-2);
+}
+
+.q-tree { color: var(--text-body); font-size: var(--text-control); }
+
+.q-tree .q-tree__node-header {
+    min-height: var(--row-height);
+    padding: 5px var(--space-4);
+    border-radius: var(--radius-row);
+    color: var(--text-body);
+}
+
+.q-tree .q-tree__node-header:hover {
+    background-color: var(--surface-navigation-hover);
+    color: var(--text-heading);
+}
+
+.q-tree .q-tree__node--selected > .q-tree__node-header,
+.q-tree .q-tree__node-header.q-tree__node-header--selected {
+    background-color: var(--accent);
+    color: var(--text-on-fill);
+}
+
+/* An accent glyph on an accent fill is the icon-vanishing hazard (§6.5). */
+.q-tree .q-tree__node--selected > .q-tree__node-header .q-icon,
+.q-tree .q-tree__node--selected > .q-tree__node-header .halon-status-dot {
+    color: var(--text-on-fill);
+}
+
+.q-tree .q-tree__node-header-content { color: var(--text-body); }
+
+.q-tree .q-tree__node-header:hover .q-tree__node-header-content { color: var(--text-heading); }
+
+.q-tree .q-tree__node--selected > .q-tree__node-header .q-tree__node-header-content {
+    color: var(--text-on-fill);
+}
+
+.q-tree .q-tree__arrow { color: var(--text-secondary); }
+
+/* ── Cards and panels (§5) ──────────────────────────────────────────────── */
+
+.q-card, .halon-card {
+    background-color: var(--surface-default);
+    color: var(--text-body);
+    border: var(--border-width) solid var(--border-default);
+    border-radius: var(--radius-default);
+    box-shadow: var(--shadow-card);
+}
+
+.halon-card { padding: 14px var(--space-6); }
+.halon-card--flush { padding: 0; }
+
+.halon-card-header {
+    padding: 10px var(--space-6);
+    border-bottom: var(--border-width) solid var(--border-default);
+    border-radius: 0;
+    font-size: var(--text-caption);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    background-color: var(--surface-secondary);
+}
+
+.halon-label {
+    font-size: var(--text-label);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+}
+
+.halon-caption { font-size: var(--text-caption); color: var(--text-secondary); }
+
+.halon-value {
+    font-size: var(--text-h2);
+    font-weight: 600;
+    color: var(--text-heading);
+    line-height: var(--line-height-ui);
+}
+
+.halon-title-page {
+    font-size: var(--text-h1);
+    font-weight: 600;
+    color: var(--text-heading);
+    line-height: var(--line-height-ui);
+}
+
+.halon-title-section {
+    font-size: var(--text-h2);
+    font-weight: 600;
+    color: var(--text-heading);
+    line-height: var(--line-height-ui);
+}
+
+.halon-divider { border-color: var(--border-default); }
+
+/* A collapsible panel: its header carries no rule of its own, so the body's
+ * top border is the only hairline when the panel is open. */
+.halon-panel-header {
+    padding: 10px var(--space-6);
+    background-color: var(--surface-secondary);
+    border-radius: 0;
+}
+
+.halon-card-body {
+    padding: var(--space-6);
+    border-top: var(--border-width) solid var(--border-default);
+}
+
+.halon-title-row {
+    font-size: var(--text-control);
+    font-weight: 600;
+    color: var(--text-heading);
+}
+
+.halon-row-hover:hover { background-color: var(--surface-navigation-hover); }
+
+/* ── Tables (§4.3) ──────────────────────────────────────────────────────── */
+
+.q-table__card, .q-table__container, .q-table {
+    background-color: var(--surface-default);
+    color: var(--text-body);
+    font-size: var(--text-control);
+    box-shadow: none;
+}
+
+.q-table thead th {
+    padding: 9px var(--space-5);
+    background-color: var(--surface-secondary);
+    color: var(--text-secondary);
+    font-size: var(--text-caption);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-bottom: var(--border-width) solid var(--border-default);
+}
+
+.q-table tbody td {
+    padding: 9px var(--space-5);
+    color: var(--text-body);
+    border-bottom: var(--border-width) solid var(--border-default);
+}
+
+.q-table tbody tr:hover td { background-color: var(--surface-navigation-hover); }
+
+.q-table tbody tr.selected td {
+    background-color: var(--accent);
+    color: var(--text-on-fill);
+}
+
+.q-table__bottom {
+    color: var(--text-secondary);
+    font-size: var(--text-caption);
+    border-top: var(--border-width) solid var(--border-default);
+}
+
+.q-table__sort-icon { color: var(--text-secondary); }
+
+/* ── Buttons — three weights, the accent is the scarcest (§6.1) ─────────── */
+
+.q-btn {
+    min-height: var(--control-height);
+    padding: var(--space-4) var(--control-padding-x);
+    border-radius: var(--radius-default);
+    font-family: var(--font-family-interface);
+    font-size: var(--text-control);
+    font-weight: 500;
+    line-height: var(--line-height-ui);
+    text-transform: none;
+    box-shadow: none;
+}
+
+.q-btn:before, .q-btn:after { box-shadow: none; }
+
+/* Default weight: a neutral bordered ghost. */
+.q-btn.q-btn--standard,
+.q-btn.halon-button {
+    background-color: transparent !important;
+    border: var(--border-width) solid var(--border-default);
+    color: var(--text-body) !important;
+}
+
+.q-btn.q-btn--standard:hover,
+.q-btn.q-btn--outline:hover,
+.q-btn.halon-button:hover { border-color: var(--accent); }
+
+/* Flat weight: no border until hover, for anything repeated. */
+.q-btn.q-btn--flat,
+.q-btn.halon-button-flat {
+    background-color: transparent !important;
+    border: var(--border-width) solid transparent;
+    color: var(--text-secondary) !important;
+}
+
+.q-btn.q-btn--flat:hover,
+.q-btn.halon-button-flat:hover {
+    border-color: var(--border-default);
+    color: var(--text-heading) !important;
+}
+
+/* Filled weight: the one primary action on a view. Hover by opacity only, so
+ * the fill and an independently colored glyph can never collapse together. */
+.q-btn.halon-button-filled {
+    background-color: var(--accent) !important;
+    border: var(--border-width) solid var(--accent);
+    color: var(--text-on-fill) !important;
+}
+
+.q-btn.halon-button-filled:hover { opacity: 0.85; }
+
+.q-btn.halon-button-danger { color: var(--status-danger) !important; }
+.q-btn.halon-button-danger:hover { border-color: var(--status-danger); }
+
+.q-btn.halon-button-filled.halon-button-danger {
+    background-color: var(--status-danger) !important;
+    border-color: var(--status-danger);
+    color: var(--text-on-fill) !important;
+}
+
+.q-btn:disabled, .q-btn.disabled { opacity: 0.5 !important; }
+
+.q-btn.q-btn--round, .q-btn.q-btn--dense.q-btn--round {
+    min-height: var(--icon-button-size);
+    min-width: var(--icon-button-size);
+    padding: var(--space-3);
+    border-radius: var(--radius-row);
+}
+
+/* Row action buttons: shadowless, secondary glyph, accent on hover (§6.5). */
+.q-table .q-btn.q-btn--flat { color: var(--text-secondary) !important; }
+.q-table .q-btn.q-btn--flat:hover { color: var(--accent) !important; }
+.q-table .q-btn.q-btn--flat.halon-button-danger { color: var(--status-danger) !important; }
+
+/* ── Inputs — hairline at rest, accent on interaction (§6.2) ────────────── */
+
+.q-field--outlined .q-field__control {
+    min-height: var(--control-height);
+    padding: 0 11px;
+    border-radius: var(--radius-default);
+    background-color: var(--surface-default);
+}
+
+.q-field--outlined .q-field__control:before {
+    border: var(--border-width) solid var(--border-default);
+}
+
+.q-field--outlined .q-field__control:hover:before,
+.q-field--outlined.q-field--highlighted .q-field__control:after {
+    border-color: var(--border-focus);
+}
+
+.q-field--outlined.q-field--focused .q-field__control {
+    outline: var(--focus-ring-width) solid var(--focus-ring);
+    outline-offset: 0;
+}
+
+.q-field__native, .q-field__input, .q-field textarea {
+    color: var(--text-body);
+    font-size: var(--text-control);
+}
+
+.q-field__native::placeholder, .q-field__input::placeholder {
+    color: var(--text-tertiary);
+}
+
+.q-field__label { color: var(--text-secondary); font-size: var(--text-control); }
+.q-field--focused .q-field__label { color: var(--accent); }
+
+/* Inline actions inside a field. */
+.q-field__append .q-icon, .q-field__prepend .q-icon { color: var(--text-secondary); }
+.q-field__append .q-icon:hover { color: var(--accent); }
+
+/* Toggles are the exception: the boundary genuinely is the control (§6.2). */
+.q-checkbox__inner, .q-radio__inner, .q-toggle__track { color: var(--border-control); }
+
+/* ── Selects — ghost when closed, ordinary surface when open (§6.3) ─────── */
+
+.q-select .q-field__control { background-color: transparent; }
+
+.q-select .q-field__native,
+.q-select .q-field__native > span,
+.q-select .q-field__append .q-icon {
+    color: var(--accent);
+    font-weight: 500;
+}
+
+.q-menu {
+    background-color: var(--surface-default);
+    color: var(--text-body);
+    border: var(--border-width) solid var(--border-default);
+    border-radius: var(--radius-default);
+    box-shadow: var(--shadow-floating);
+    padding: 5px;
+}
+
+.q-menu .q-item {
+    min-height: var(--icon-button-size);
+    padding: var(--space-3) 9px;
+    border-radius: 5px;
+    font-size: var(--text-control);
+    color: var(--text-body);
+}
+
+.q-menu .q-item:hover { background-color: var(--surface-navigation-hover); }
+.q-menu .q-item.q-item--active { color: var(--accent); }
+.q-menu .q-item .q-icon { color: var(--text-secondary); }
+.q-menu .q-separator { background-color: var(--border-default); }
+
+/* ── Modals, toasts, tooltips (§6.6) ────────────────────────────────────── */
+
+.q-dialog__backdrop { background-color: var(--surface-overlay); }
+
+.q-dialog .q-card, .q-dialog__inner > div {
+    background-color: var(--surface-default);
+    color: var(--text-body);
+    border: var(--border-width) solid var(--border-default);
+    border-radius: var(--radius-default);
+    box-shadow: var(--shadow-modal);
+}
+
+.q-dialog .q-dialog__title, .q-dialog h6 {
+    color: var(--text-heading);
+    font-size: var(--text-h3);
+    font-weight: 600;
+}
+
+/* Transient overlays belong to the frame, and float above it: without the
+ * shadow a toast on a light page is just a gray box. A typed toast keeps
+ * Quasar's status fill, which is why those fills do not flip (§3.5). */
+.q-notification, .q-tooltip {
+    background-color: var(--surface-navigation);
+    color: var(--text-heading);
+    border: var(--border-width) solid var(--border-default);
+    border-radius: var(--radius-default);
+    box-shadow: var(--shadow-floating);
+    font-size: var(--text-control);
+}
+
+.q-notification.bg-positive, .q-notification.bg-negative,
+.q-notification.bg-warning, .q-notification.bg-info {
+    border-color: transparent;
+}
+
+/* NiceGUI's connection popups and skip link pick their background from
+ * Quasar's body class, which this theme leaves in its light state; they are
+ * transient overlays, so they belong on the frame surface too. */
+.nicegui-error-popup,
+.body--light .nicegui-error-popup,
+.body--dark .nicegui-error-popup,
+.body--light .nicegui-skip-link:focus,
+.body--dark .nicegui-skip-link:focus {
+    background-color: var(--surface-navigation);
+    color: var(--text-heading);
+    border-color: var(--border-default);
+    border-radius: var(--radius-default);
+    box-shadow: var(--shadow-floating);
+    font-size: var(--text-control);
+}
+
+/* ── Badges, status marks, tinted regions (§6.7) ────────────────────────── */
+
+.q-chip, .halon-badge {
+    background-color: var(--surface-secondary);
+    color: var(--text-secondary);
+    border-radius: var(--radius-pill);
+    padding: var(--space-1) var(--space-4);
+    font-size: var(--text-label);
+    font-weight: 600;
+    box-shadow: none;
+}
+
+.halon-badge-accent { background-color: var(--accent); color: var(--text-on-fill); }
+.halon-badge-success { background-color: var(--status-success); color: var(--text-on-fill); }
+.halon-badge-danger { background-color: var(--status-danger); color: var(--text-on-fill); }
+/* Warning is light in both schemes and takes near-black text (§3.5). */
+.halon-badge-warning { background-color: var(--status-warning); color: var(--text-on-light); }
+
+.halon-status-dot { color: var(--text-tertiary); }
+
+/* Status regions are tinted, status fills are solid; text in a tint stays
+ * ordinary body text because the tint is too pale to change what is legible. */
+.halon-tint {
+    background-color: color-mix(in srgb, var(--halon-tint-color, var(--text-secondary)) 15%, transparent);
+    color: var(--text-body);
+    border-radius: var(--radius-small);
+    padding: var(--space-3) var(--space-4);
+    font-family: var(--font-family-monospace);
+    font-size: var(--text-control);
+}
+
+/* ── Scrollbars (§6.8) ──────────────────────────────────────────────────── */
+
+* { scrollbar-color: var(--border-hover) transparent; scrollbar-width: thin; }
+
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+
+*::-webkit-scrollbar-thumb {
+    background-color: var(--border-hover);
+    border: 3px solid transparent;
+    background-clip: padding-box;
+    border-radius: var(--radius-pill);
+}
+
+*::-webkit-scrollbar-thumb:hover { background-color: var(--text-tertiary); }

@@ -54,18 +54,21 @@ ssh_defaults:
   username: "beatlink"
   # key_path: "/path/to/private_key"   # optional; falls back to the SSH agent
 
-# Theme (all fields are optional — defaults shown below)
+# Theme — the dashboard is themed with Halon, whose token set lives in
+# vigil/core/ui/static/halon-tokens.css. Every field here is optional; each one
+# overrides a single Halon token, in both the light and the dark scheme, so an
+# override that only suits one of them is yours to audit.
 theme:
-  primary:          "#00ACFF"   # Header, links, accents
-  accent:           "#FF5500"   # Secondary accent (unused in current UI)
-  background:       "#FFFFFF"   # Sidebar and card backgrounds
-  background_muted: "#FAFAFA"   # Page body background
-  text:             "#111827"   # Primary text
-  text_muted:       "#6B7280"   # Labels and secondary text
-  status_online:    "lime"      # Online status color
-  status_warning:   "gold"      # Warning status color
-  status_failed:    "red"       # Failed status color
-  status_offline:   "lightgray" # Offline status color
+  scheme: auto                  # auto follows the browser; or light / dark
+  # primary:          "#2563eb" # --accent: links, focus, the primary button
+  # background:       "#ffffff" # --surface-default: cards and panels
+  # background_muted: "#f1f5f9" # --surface-root: the page behind them
+  # text:             "#1a1a2e" # --text-body
+  # text_muted:       "#475569" # --text-secondary: labels and captions
+  # status_online:    "#047857" # --status-success
+  # status_warning:   "#c2410c" # --status-warning-text
+  # status_failed:    "#dc2626" # --status-danger
+  # status_offline:   "#64748b" # --text-tertiary
 
 # Domain-based Plugins
 plugins:

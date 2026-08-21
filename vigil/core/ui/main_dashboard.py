@@ -5,8 +5,9 @@ from typing import Any, Dict, Optional
 from nicegui import app, ui
 from vigil.core.contracts import EngineLike
 from vigil.core.database.database import Setting
-from .theme import STATUS_COLORS, BACKGROUND_MUTED, PRIMARY, BACKGROUND, TEXT, TEXT_MUTED
-from .components import action_chip, card, section_title, on_data_event, offload, refresh_rows
+from . import theme
+from .theme import STATUS_COLORS, ACCENT, TEXT_SECONDARY
+from .components import action_button, card, section_title, on_data_event, offload, refresh_rows
 
 _ICON = Path(__file__).parent / 'static' / 'icon.svg'
 
@@ -42,7 +43,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
 
     @ui.page('/')
     def index_page():
-      ui.query('body').style(f'background-color: {BACKGROUND_MUTED}')
+      theme.install()
 
       state: Dict[str, Any] = {
           'current_view': 'overview',
@@ -58,25 +59,25 @@ def init_gui(engine: EngineLike, port: int = 8080):
 
       _navigation_state['switch_func'] = switch_view
 
-      with ui.header().classes('items-center p-4').style(f'background-color: {PRIMARY}; color: {BACKGROUND}'):
-          ui.button(on_click=lambda: left_drawer.toggle(), icon='menu').props('flat color=white')
-          ui.image('/icon.svg').style('width: 2rem; height: 2rem;')
-          ui.label('Vigil').classes('text-2xl font-bold ml-2')
+      with ui.header().classes('items-center gap-2'):
+          ui.button(on_click=lambda: left_drawer.toggle(), icon='menu', color=None).props('flat dense round')
+          ui.image('/icon.svg').style('width: 18px; height: 18px;')
+          ui.label('Vigil').classes('halon-brand')
 
       def _load_drawer_width() -> int:
           with Setting._meta.database.connection_context():
               try:
                   return int(Setting.get(Setting.key == 'drawer_width').value)
               except Exception:
-                  return 350
+                  return 248
 
       def _save_drawer_width(width: int):
           engine.db.set_setting('drawer_width', str(width))
 
       drawer_width = _load_drawer_width()
 
-      with ui.left_drawer(value=True).classes('p-0 shadow-lg').props(f'width={drawer_width}').style(f'background-color: {BACKGROUND}') as left_drawer:
-          resize_handle = ui.element('div').style(
+      with ui.left_drawer(value=True).classes('p-0').props(f'width={drawer_width}') as left_drawer:
+          resize_handle = ui.element('div').classes('halon-resize-gutter').style(
               'position: absolute; top: 0; right: 0; width: 6px; height: 100%; '
               'cursor: ew-resize; z-index: 2000;'
           )
@@ -101,9 +102,23 @@ def init_gui(engine: EngineLike, port: int = 8080):
           ''')
           ui.on('drawer_resized', lambda e: _save_drawer_width(int(e.args)))
           with ui.list().classes('w-full').props('dense'):
-              ui.item('All Monitors', on_click=lambda: switch_view('overview')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {TEXT}')
-              ui.item('Events', on_click=lambda: switch_view('events')).props('clickable dense').classes('text-lg font-semibold border-b py-4 px-4').style(f'color: {TEXT}')
-            
+              nav_items = {
+                  'overview': ui.item('All Monitors', on_click=lambda: switch_view('overview')).props('clickable dense'),
+                  'events': ui.item('Events', on_click=lambda: switch_view('events')).props('clickable dense'),
+              }
+
+          def sync_nav_selection():
+              # A sidebar item is a place you are, so selection is elevation
+              # (halon-item-selected), not an accent fill.
+              for view, item in nav_items.items():
+                  selected = state['current_view'] == view
+                  item.classes(add='halon-item-selected' if selected else None,
+                               remove=None if selected else 'halon-item-selected')
+
+          state['sync_nav'] = sync_nav_selection
+
+          ui.label('Monitors').classes('halon-sidebar-label')
+
           def build_tree_nodes(plugins, statuses=None):
               if statuses is None:
                   statuses = engine.db.latest_statuses()
@@ -137,12 +152,13 @@ def init_gui(engine: EngineLike, port: int = 8080):
                   if target_plugin:
                       switch_view('plugin', target_plugin)
 
-          tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).props('').classes('w-full px-6 text-lg').style(f'color: {TEXT}')
+          tree = ui.tree(nodes=build_tree_nodes(engine.plugins), on_select=handle_select).classes('w-full')
 
-          tree.add_slot('default-header', f'''
-              <span class="flex items-center gap-2" style="color: {TEXT}">
-                  <q-icon name="circle" :style="{{ color: props.node.color }}" size="12px" />
-                  {{{{ props.node.label }}}}
+          tree.add_slot('default-header', '''
+              <span class="flex items-center gap-2">
+                  <q-icon class="halon-status-dot" name="circle"
+                          :style="{ color: props.node.color }" size="8px" />
+                  {{ props.node.label }}
               </span>
           ''')
         
@@ -169,13 +185,16 @@ def init_gui(engine: EngineLike, port: int = 8080):
           tree.update()
           tree.on('update:expanded', _save_expanded)
 
-      main_container = ui.column().classes('w-full p-6 bg-transparent').style('min-width: 0; flex: 1 1 0;')
+      main_container = ui.column().classes('w-full halon-page bg-transparent').style('min-width: 0; flex: 1 1 0;')
 
       def render_main():
           try:
               main_container.clear()
           except RuntimeError:
               return
+          sync_nav = state.get('sync_nav')
+          if sync_nav:
+              sync_nav()
           with main_container:
               if state['current_view'] == 'overview':
                   render_overview()
@@ -187,17 +206,17 @@ def init_gui(engine: EngineLike, port: int = 8080):
       state['render_main'] = render_main
 
       def render_events():
-          section_title('Events', 'mb-6 font-light')
+          section_title('Events')
 
           _LEVEL_COLORS = {
               'ERROR': STATUS_COLORS['failed'],
               'WARNING': STATUS_COLORS['warning'],
-              'INFO': TEXT_MUTED,
+              'INFO': TEXT_SECONDARY,
           }
 
           ev_filter = {'level': None, 'target': None, 'search': None}
 
-          with ui.row().classes('w-full gap-4 mb-4 items-end'):
+          with ui.row().classes('w-full gap-3 mb-4 items-end'):
               level_sel = ui.select(
                   {None: 'All levels', 'ERROR': 'Error', 'WARNING': 'Warning', 'INFO': 'Info'},
                   value=None, label='Level',
@@ -213,7 +232,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
           ]
           with card('w-full'):
               events_table = ui.table(columns=columns, rows=[], row_key='timestamp',
-                                      pagination=25).classes('w-full').style(f'color: {TEXT}')
+                                      pagination=25).classes('w-full')
               events_table.add_slot('body-cell-level', '''
                   <q-td :props="props">
                       <span :style="{ color: props.row.level === 'ERROR' ? '%s'
@@ -252,7 +271,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
           on_data_event(refresh_events, run_now=False)
 
       def render_overview():
-          section_title('Monitors', 'mb-6 font-light')
+          section_title('Monitors')
 
           all_monitors = []
           def collect_leafs(plist):
@@ -264,34 +283,34 @@ def init_gui(engine: EngineLike, port: int = 8080):
 
           filter_state = {'field': None, 'value': None}
 
-          with ui.row().classes('w-full gap-4 mb-6'):
+          with ui.row().classes('w-full gap-4 mb-6 halon-section-gap'):
               with card('flex-1 h-80 min-w-[320px]'):
-                  ui.label('MONITORS BY STATUS').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
+                  ui.label('Monitors by status').classes('halon-label mb-2')
                   status_chart = ui.echart({
                       'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
-                      'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
+                      'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 12}},
                       'series': [{
                           'type': 'pie',
                           'radius': ['40%', '70%'],
                           'avoidLabelOverlap': False,
                           'cursor': 'pointer',
-                          'itemStyle': {'borderRadius': 10, 'borderColor': '#fff', 'borderWidth': 2},
+                          'itemStyle': {'borderRadius': 8, 'borderWidth': 2},
                           'label': {'show': False},
                           'data': []
                       }]
                   }).classes('w-full h-64')
 
               with card('flex-1 h-80 min-w-[320px]'):
-                  ui.label('MONITORS BY TYPE').classes('text-xs font-bold mb-2').style(f'color: {TEXT_MUTED}')
+                  ui.label('Monitors by type').classes('halon-label mb-2')
                   type_chart = ui.echart({
                       'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
-                      'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 10}},
+                      'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 12}},
                       'series': [{
                           'type': 'pie',
                           'radius': ['40%', '70%'],
                           'avoidLabelOverlap': False,
                           'cursor': 'pointer',
-                          'itemStyle': {'borderRadius': 10, 'borderColor': '#fff', 'borderWidth': 2},
+                          'itemStyle': {'borderRadius': 8, 'borderWidth': 2},
                           'label': {'show': False},
                           'data': []
                       }]
@@ -299,10 +318,10 @@ def init_gui(engine: EngineLike, port: int = 8080):
 
           with card('w-full mb-6'):
               with ui.row().classes('w-full items-center justify-between mb-3'):
-                  ui.label('ALL MONITORS').classes('text-xs font-bold').style(f'color: {TEXT_MUTED}')
+                  ui.label('All monitors').classes('halon-label')
                   with ui.row().classes('items-center gap-1') as filter_row:
-                      filter_label = ui.label('').classes('text-xs italic').style(f'color: {TEXT_MUTED}')
-                      ui.button(icon='close', on_click=lambda: _clear_filter()).props('flat dense round size=xs').style(f'color: {TEXT_MUTED}')
+                      filter_label = ui.label('').classes('halon-caption')
+                      ui.button(icon='close', on_click=lambda: _clear_filter(), color=None).props('flat dense round size=sm')
               filter_row.set_visibility(False)
 
               monitor_columns = [
@@ -316,7 +335,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
               monitor_table.add_slot('body-cell-name', f'''
                   <q-td :props="props">
                       <span class="cursor-pointer font-medium hover:underline"
-                            style="color: {PRIMARY}"
+                            style="color: {ACCENT}"
                             @click="$parent.$emit('navigate', props.row)">
                           {{{{ props.row.name }}}}
                       </span>
@@ -325,7 +344,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
 
               monitor_table.add_slot('body-cell-status', '''
                   <q-td :props="props">
-                      <span :style="{ color: props.row.status_color }" class="font-semibold text-xs">
+                      <span :style="{ color: props.row.status_color }" class="font-semibold halon-caption">
                           {{ props.row.status }}
                       </span>
                   </q-td>
@@ -401,6 +420,21 @@ def init_gui(engine: EngineLike, port: int = 8080):
               return status_counts, type_counts
 
           _last_statuses = {'value': None}
+          chart_colors = {'value': theme.current_palette()}
+
+          def _repaint_charts(colors):
+              chart_colors['value'] = colors
+              for chart in (status_chart, type_chart):
+                  chart.options['series'][0]['itemStyle']['borderColor'] = colors['surface']
+                  chart.options['legend'].setdefault('textStyle', {})['color'] = colors['text_secondary']
+              for entry, state_name in zip(
+                      status_chart.options['series'][0]['data'],
+                      ('online', 'failed', 'warning', 'offline')):
+                  entry['itemStyle'] = {'color': colors[state_name]}
+              status_chart.update()
+              type_chart.update()
+
+          theme.on_scheme_change(_repaint_charts)
 
           async def update_charts():
               statuses = await offload(engine.db.latest_statuses)()
@@ -410,11 +444,12 @@ def init_gui(engine: EngineLike, port: int = 8080):
 
               status_counts, type_counts = _build_chart_counts(statuses)
 
+              colors = chart_colors['value']
               status_chart.options['series'][0]['data'] = [
-                  {'value': status_counts['online'],  'name': 'Online',  'itemStyle': {'color': STATUS_COLORS['online']}},
-                  {'value': status_counts['failed'],  'name': 'Failed',  'itemStyle': {'color': STATUS_COLORS['failed']}},
-                  {'value': status_counts['warning'], 'name': 'Warning', 'itemStyle': {'color': STATUS_COLORS['warning']}},
-                  {'value': status_counts['offline'], 'name': 'Offline', 'itemStyle': {'color': STATUS_COLORS['offline']}},
+                  {'value': status_counts['online'],  'name': 'Online',  'itemStyle': {'color': colors['online']}},
+                  {'value': status_counts['failed'],  'name': 'Failed',  'itemStyle': {'color': colors['failed']}},
+                  {'value': status_counts['warning'], 'name': 'Warning', 'itemStyle': {'color': colors['warning']}},
+                  {'value': status_counts['offline'], 'name': 'Offline', 'itemStyle': {'color': colors['offline']}},
               ]
               type_chart.options['series'][0]['data'] = [
                   {'value': v, 'name': k.upper()} for k, v in type_counts.items()
@@ -428,7 +463,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
 
           with ui.row().classes('w-full gap-4'):
               with card('flex-1 min-w-[320px]'):
-                  ui.label('Recent System Metrics').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
+                  ui.label('Recent system metrics').classes('halon-label mb-2')
                   metric_columns = [
                       {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
                       {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
@@ -443,7 +478,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
                   on_data_event(update_m)
 
               with card('flex-1 min-w-[320px]'):
-                  ui.label('Recent Events').classes('text-lg font-bold mb-2').style(f'color: {TEXT}')
+                  ui.label('Recent events').classes('halon-label mb-2')
                   event_columns = [
                       {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
                       {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left'},
@@ -460,7 +495,7 @@ def init_gui(engine: EngineLike, port: int = 8080):
           header = ui.row().classes('w-full items-center justify-between gap-4 mb-6').style('flex-wrap: wrap;')
           with header:
               with ui.column().classes('min-w-0'):
-                  ui.label(plugin.name).classes('text-3xl font-bold break-words').style(f'color: {TEXT}')
+                  ui.label(plugin.name).classes('halon-title-page break-words')
               actions_row = ui.row().classes('gap-2 items-center').style('flex-wrap: wrap;')
 
           async def render_actions():
@@ -468,7 +503,9 @@ def init_gui(engine: EngineLike, port: int = 8080):
                   async def poll_now():
                       await plugin.run_cycle()
                       ui.notify(f'{plugin.name} polled', type='positive')
-                  action_chip('Poll Now', on_click=poll_now, icon='refresh')
+                  # The one filled button on the view; everything else is a
+                  # bordered ghost so the accent keeps meaning "the action".
+                  action_button('Poll Now', on_click=poll_now, icon='refresh', weight='filled')
 
                   info = await plugin.present()
                   for action in info.get('actions', []):
@@ -477,8 +514,9 @@ def init_gui(engine: EngineLike, port: int = 8080):
                           ui.notify('Action completed successfully' if success else 'Action failed',
                                     type='positive' if success else 'negative')
 
-                      btn_color = PRIMARY if action.get('variant') != 'danger' else STATUS_COLORS['failed']
-                      action_chip(action['name'], on_click=do_action, color=btn_color, icon=action.get('icon', 'play_arrow'))
+                      action_button(action['name'], on_click=do_action,
+                                    icon=action.get('icon', 'play_arrow'),
+                                    danger=action.get('variant') == 'danger')
 
           import asyncio
           asyncio.create_task(render_actions())
