@@ -49,9 +49,14 @@ in
 
     package = mkOption {
       type = types.package;
-      default = self.packages.${pkgs.stdenv.hostPlatform.system}.default;
-      defaultText = literalExpression "vigil (from flake)";
-      description = "The package providing the `vigil-agent` binary.";
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.agent;
+      defaultText = literalExpression "vigil-agent (from flake)";
+      description = ''
+        The package providing the `vigil-agent` binary. Defaults to the
+        standalone agent package, which carries only what the agent imports —
+        deliberately not the server package, so a monitored host never builds
+        nicegui, peewee, dnspython or asyncssh to run an agent.
+      '';
     };
 
     url = mkOption {

@@ -65,6 +65,35 @@
                     pythonImportsCheck = [ "vigil" ];
                 };
 
+                # The agent, packaged apart from the server.
+                #
+                # A monitored host installs only this, so it must not pull in
+                # nicegui, peewee, dnspython or asyncssh — none of which the
+                # agent imports, and building them on every target is both
+                # wasteful and, on aarch64, a source of build failures the
+                # monitored host has no reason to care about.
+                #
+                # `vigil_agent` imports nothing from `vigil` (the wire protocol
+                # lives in vigil_agent/protocol.py precisely so it doesn't), so
+                # copying that one package in is the whole install.
+                agentPython = pkgs.python312.withPackages (ps: with ps; [
+                    websockets
+                    pyyaml
+                ]);
+
+                agentSrc = pkgs.runCommand "vigil-agent-src" { } ''
+                    mkdir -p $out
+                    cp -r ${./vigil_agent} $out/vigil_agent
+                '';
+
+                vigil-agent-pkg = pkgs.writeShellApplication {
+                    name = "vigil-agent";
+                    text = ''
+                        export PYTHONPATH="${agentSrc}''${PYTHONPATH:+:$PYTHONPATH}"
+                        exec ${agentPython}/bin/python3 -m vigil_agent "$@"
+                    '';
+                };
+
                 # Vigil runs as a single process (target polling and the web
                 # dashboard share one asyncio event loop — see
                 # vigil/__main__.py). This dev script just runs it.
@@ -84,6 +113,7 @@
             in
             {
                 packages.default = vigil-pkg;
+                packages.agent = vigil-agent-pkg;
 
                 apps.default = {
                     type = "app";

@@ -1003,7 +1003,9 @@ Every setting can come from the environment instead (`VIGIL_AGENT_URL`, `VIGIL_A
 container can supply the token without writing it to disk.
 
 On NixOS the flake exports `nixosModules.agent` for the monitored host, alongside the
-existing `nixosModules.default` for the server:
+existing `nixosModules.default` for the server. The agent module defaults to
+`packages.agent`, a standalone build carrying only what the agent imports — a monitored
+host never builds nicegui, peewee, dnspython or asyncssh to run one:
 
 ```nix
 services.vigil-agent = {
