@@ -75,3 +75,44 @@ class TestSmartDiskCollection:
 
     async def test_on_action_always_false(self, plugin):
         assert plugin.plan_action("anything") is None
+
+
+
+class TestBlindChecksAreNotHealthy:
+    """The failure that matters most: when smartctl cannot run, the monitor
+    must not report healthy disks. Found in production, where a missing sudo
+    right made a host report 4 OK disks while reading none of them."""
+
+    def test_a_privilege_error_is_not_a_passing_disk(self, plugin):
+        result = plugin.parse([CmdResult(
+            0, "UNKNOWN /dev/sda sudo: must be owned by uid 0 and have the setuid bit set", "")])
+
+        assert result.status == 'failed'
+        assert result.metrics['disks_ok'] == 0
+        assert result.metrics['disks_unknown'] == 1
+        assert any('Could not read SMART health' in m for m, _ in result.logs)
+
+    def test_a_healthy_disk_still_passes(self, plugin):
+        result = plugin.parse([CmdResult(0, "PASS /dev/sda\nPASS /dev/sdb", "")])
+
+        assert result.status == 'online'
+        assert result.metrics['disks_ok'] == 2
+        assert result.metrics['disks_unknown'] == 0
+
+    def test_one_unreadable_disk_fails_the_monitor(self, plugin):
+        result = plugin.parse([CmdResult(0, "PASS /dev/sda\nUNKNOWN /dev/sdb Permission denied", "")])
+
+        assert result.status == 'failed'
+        assert (result.metrics['disks_ok'], result.metrics['disks_unknown']) == (1, 1)
+
+    def test_a_real_failure_still_fails(self, plugin):
+        result = plugin.parse([CmdResult(0, "FAIL /dev/sda", "")])
+        assert result.status == 'failed'
+        assert result.metrics['disks_failed'] == 1
+
+    def test_the_script_classifies_by_positive_assertion(self):
+        """Guards the shell itself: a blind check must land in the UNKNOWN
+        branch rather than falling through to PASS."""
+        from vigil.plugins.smart_disk import _SMART_SCRIPT
+        assert "test result: *PASSED" in _SMART_SCRIPT
+        assert "UNKNOWN $d" in _SMART_SCRIPT

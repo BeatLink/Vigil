@@ -3,6 +3,12 @@ from typing import Any, Dict, List
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
+# Classification is by positive assertion, deliberately. smartctl prints
+# "SMART overall-health self-assessment test result: PASSED" (or FAILED); any
+# other output means the check did not run — no sudo rights, an unsupported
+# controller, a device that vanished. Matching only on the absence of "FAIL"
+# would report every one of those as a healthy disk, which is the one answer a
+# disk-health monitor must never give when it is blind.
 _SMART_SCRIPT = (
     "command -v smartctl >/dev/null 2>&1 || { echo 'ERROR smartctl not found'; exit 1; }; "
     "disks=$(lsblk -dn -o NAME,TYPE 2>/dev/null | awk '$2==\"disk\"{print \"/dev/\"$1}'); "
@@ -14,8 +20,9 @@ _SMART_SCRIPT = (
     "  else "
     "    result=$(sudo smartctl -H \"$d\" 2>&1 || true); "
     "  fi; "
-    "  if echo \"$result\" | grep -iq 'FAIL'; then echo \"FAIL $d\"; "
-    "  else echo \"PASS $d\"; fi; "
+    "  if echo \"$result\" | grep -iq 'test result: *PASSED'; then echo \"PASS $d\"; "
+    "  elif echo \"$result\" | grep -iqE 'test result: *FAILED|SMART Health Status: *FAIL'; then echo \"FAIL $d\"; "
+    "  else echo \"UNKNOWN $d $(echo \"$result\" | tr '\\n' ' ' | cut -c1-160)\"; fi; "
     "done"
 )
 
@@ -36,29 +43,43 @@ class SmartDisk(Plugin):
         if ret != 0:
             return CollectResult.failed(f"SMART check script failed: {stdout or stderr}")
 
-        passed, failed = 0, 0
+        passed, failed, unknown = 0, 0, 0
         logs = []
         for line in stdout.splitlines():
             parts = line.strip().split(None, 1)
-            if len(parts) != 2 or parts[0] not in ('PASS', 'FAIL'):
+            if len(parts) != 2 or parts[0] not in ('PASS', 'FAIL', 'UNKNOWN'):
                 continue
-            result, disk = parts
+            result, rest = parts
             if result == 'FAIL':
                 failed += 1
-                logs.append((f"SMART failure detected on {disk}", "ERROR"))
+                logs.append((f"SMART failure detected on {rest}", "ERROR"))
+            elif result == 'UNKNOWN':
+                unknown += 1
+                disk, _, detail = rest.partition(' ')
+                logs.append((
+                    f"Could not read SMART health for {disk}: {detail or 'no usable output'}",
+                    "ERROR",
+                ))
             else:
                 passed += 1
-                logs.append((f"SMART OK on {disk}", "INFO"))
+                logs.append((f"SMART OK on {rest}", "INFO"))
 
-        total = passed + failed
+        total = passed + failed + unknown
         if total == 0:
             return CollectResult.failed(
                 "No physical disks found", level="WARNING", status='offline')
 
+        # A disk whose health could not be read is reported as failed, not as
+        # healthy: "I cannot tell" and "it is fine" must not look the same.
         return CollectResult(
-            metrics={"disks_total": total, "disks_ok": passed, "disks_failed": failed},
+            metrics={
+                "disks_total": total,
+                "disks_ok": passed,
+                "disks_failed": failed,
+                "disks_unknown": unknown,
+            },
             logs=logs,
-            status='failed' if failed > 0 else 'online',
+            status='failed' if (failed > 0 or unknown > 0) else 'online',
         )
 
     UI_SPEC = {
