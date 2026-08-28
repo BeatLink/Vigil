@@ -17,12 +17,20 @@ A change wakes every tickable on the client rather than only those interested
 in the changed monitor. Refresh callbacks are registered by plugin render code
 and may read any monitor's data — a group page renders its children — so there
 is no reliable interest set to filter on.
+
+A tickable lives as long as the elements it redraws, not as long as the client.
+Each anchors itself to a hidden marker in the slot it was registered in, and
+counts as detached once that marker leaves ``client.elements``. Switching views
+clears the main container, which deletes those markers and so retires the old
+view's tickables; the sidebar's own callbacks sit outside that container and
+survive. Scoping to the client instead would accumulate one dead tickable per
+view visited, each still refreshing widgets the browser no longer has.
 """
 
 import asyncio
 from typing import Any, Dict, List
 
-from nicegui import binding, context, helpers
+from nicegui import binding, context, helpers, ui
 from nicegui import Client
 
 from vigil.core.contracts import RefreshCallback
@@ -45,6 +53,23 @@ COOLDOWN_SECONDS = 0.5
 # duration, "last seen" times) and reaps a client that closed while the system
 # had nothing to publish.
 IDLE_REFRESH_SECONDS = 5.0
+
+
+def _anchor_element():
+    """A hidden marker in the slot being rendered, whose removal is the signal
+    that the widgets registered alongside it are gone."""
+    try:
+        return ui.element('span').style('display: none')
+    except RuntimeError:
+        # No slot to anchor to (headless/tests); fall back to client lifetime.
+        return None
+
+
+def _is_detached(client, anchor) -> bool:
+    """True once the client disconnected or the anchor's container was cleared."""
+    if client is None or client.id not in Client.instances:
+        return True
+    return anchor is not None and anchor.id not in client.elements
 
 
 class _PageScheduler:
@@ -118,24 +143,27 @@ class _PageScheduler:
         idle, self._idle = self._idle, None
         if idle is not None:
             idle.cancel()
-        _schedulers.pop(self._client_id, None)
+        # Only if a replacement has not already claimed the id.
+        if _schedulers.get(self._client_id) is self:
+            _schedulers.pop(self._client_id, None)
 
 
 class _CallbackTick:
     """Adapts a bare refresh callback to the scheduler's tickable protocol so
     overview-page refreshes (on_data_event) share the client's single change
     subscription instead of each owning an independent timer. Detachment is
-    tied to the client the callback was registered under — same lifetime as a
+    tied to the slot the callback was registered in — same lifetime as a
     PluginPage."""
 
     def __init__(self, callback: RefreshCallback, run_now: bool):
         self._callback = callback
         self._client = context.client
+        self._anchor = _anchor_element()
         self._ran_once = False
         self._run_now = run_now
 
     def _detached(self) -> bool:
-        return self._client is None or self._client.id not in Client.instances
+        return _is_detached(self._client, self._anchor)
 
     async def _tick(self) -> None:
         # Honour run_now=False by skipping the very first (inline) tick.
@@ -183,6 +211,7 @@ class PluginPage:
         self._metric_names = list(metric_names)
         self._refresh_callbacks: List[RefreshCallback] = []
         self._client = None
+        self._anchor = None
 
     def on_refresh(self, callback: RefreshCallback) -> None:
         self._refresh_callbacks.append(callback)
@@ -193,10 +222,11 @@ class PluginPage:
 
     def start(self) -> None:
         self._client = context.client
+        self._anchor = _anchor_element()
         _scheduler_for_current_client().add(self)
 
     def _detached(self) -> bool:
-        return self._client is None or self._client.id not in Client.instances
+        return _is_detached(self._client, self._anchor)
 
     async def _tick(self) -> None:
         await self._refresh_model_async()
