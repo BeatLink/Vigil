@@ -687,7 +687,6 @@ class Borg(Plugin):
                 'run_action_id': 'run_backup', 'run_label': 'Run Backup', 'run_icon': 'play_arrow',
                 'cancel_label': 'Cancel', 'cancel_icon': 'stop',
                 'enabled_if': self._has_sources_name,
-                'refresh_interval': 2.0,
                 'history_limit': 10,
             },
             'events': {'title': 'EVENTS', 'limit': 100, 'full_height': True},

@@ -18,51 +18,13 @@ def refresh_rows(table, new_rows) -> None:
         table.update()
 
 
-class _SafeTimer(ui.timer):
-    def _detached(self) -> bool:
-        if getattr(self, "is_deleted", False):
-            return True
-        try:
-            return self.id not in self.client.elements
-        except Exception:
-            return True
-
-    def _should_stop(self) -> bool:
-        return self._detached() or super()._should_stop()
-
-
-def safe_timer(interval: float, callback: RefreshCallback, defer_first: bool = False):
-    from nicegui import helpers
-    timer = None
-
-    async def _wrapped():
-        try:
-            result = callback()
-            if helpers.should_await(result):
-                await result
-        except RuntimeError as e:
-            if 'parent slot' in str(e) or 'has been deleted' in str(e):
-                if timer is not None:
-                    timer.cancel()
-                return
-            raise
-
-    timer = _SafeTimer(interval, _wrapped, immediate=not defer_first)
-    return timer
-
-
-POLL_FALLBACK_SECONDS = 1.0
-
-
 def on_data_event(callback: RefreshCallback, run_now: bool = True):
-    """Refresh by polling: register `callback` on the current client's shared
-    scheduler so overview-page refreshes ride the same timer as every card,
-    chart and table on the page (rather than each owning an independent
-    timer). The Database Engine is polled, not subscribed to. `run_now=False`
-    defers the first tick to the next scheduler tick instead of firing inline
-    during construction."""
+    """Refresh on push: register `callback` on the current client's shared
+    scheduler, which the Database Engine's change bus wakes whenever anything
+    is written. `run_now=False` defers the first tick to the next scheduler
+    tick instead of firing inline during construction."""
     from vigil.core.ui.model import schedule_callback
-    schedule_callback(callback, interval=POLL_FALLBACK_SECONDS, run_now=run_now)
+    schedule_callback(callback, run_now=run_now)
 
 
 LABEL_CLASS = 'halon-label'
@@ -662,7 +624,7 @@ def render_job_panel(plugin, spec: dict):
             ]
             jobs_table.update()
 
-        safe_timer(spec.get('refresh_interval', 2.0), update)
+        on_data_event(update)
 
 
 async def _start(plugin, spec: dict):

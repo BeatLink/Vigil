@@ -43,7 +43,7 @@ The engine executes the declared IO, persists the returned `CollectResult`, and 
 3. **Polling**: each monitor runs its own async loop at its own `interval`. Per cycle the engine runs the plugin's declared requests through the **Connector Engine** — which routes each `Command` to that target's agent or its SSH connection — then calls the plugin's pure `parse_results()`.
 3b. **Events**: monitors on an agent-backed target also declare `subscriptions()`. The agent watches those sources locally and pushes a frame the instant one changes; the engine hands it to the plugin's pure `parse_event()` and persists the result immediately, outside the polling schedule.
 4. **Persistence**: the engine writes the resulting `CollectResult` via `db.apply_result(...)` into SQLite (Peewee ORM). A background writer thread batches commits off the event loop.
-5. **Visualization**: the NiceGUI dashboard polls the database on one shared per-client timer and renders the sidebar tree plus each plugin's detail page. It reads only through `plugin.data` / the database — never through a plugin's IO.
+5. **Visualization**: every write publishes a change, and the NiceGUI dashboard refreshes off that — one subscription per connected client — rendering the sidebar tree plus each plugin's detail page. An idle system costs nothing and a status flip reaches the screen as soon as it is written. It reads only through `plugin.data` / the database — never through a plugin's IO.
 6. **Export**: metrics are exposed to Prometheus (pull, `/metrics`) and optionally pushed to InfluxDB.
 
 ### Project Structure

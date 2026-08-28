@@ -528,5 +528,4 @@ def init_gui(engine: EngineLike, port: int = 8080):
     svg = _ICON.read_text()
     ui.run(
         title='Vigil', favicon=svg[svg.index('<svg'):], port=port, reload=False, show=False,
-        binding_refresh_interval=2.0,
     )

@@ -34,6 +34,7 @@ if TYPE_CHECKING:
 
 from vigil.core.state import (
     BufferSizes,
+    CHANGES,
     EventRecord,
     JobRecord,
     JobOutputRecord,
@@ -42,6 +43,7 @@ from vigil.core.state import (
     StateStore,
     StatusRecord,
 )
+from vigil.core.state import changes
 
 from .models import (
     ALL_MODELS,
@@ -416,6 +418,7 @@ class DatabaseManager:
                 timestamp=record.timestamp,
             )
         )
+        CHANGES.publish(changes.METRIC, collector)
 
     def latest_metric(self, collector: str, metric_name: str) -> Optional[MetricRecord]:
         return self.store.latest_metric(collector, metric_name)
@@ -460,6 +463,7 @@ class DatabaseManager:
                 timestamp=record.timestamp,
             )
         )
+        CHANGES.publish(changes.STATUS, collector_id)
 
     def latest_statuses(self) -> Dict[str, str]:
         return {cid: rec.state for cid, rec in self.store.statuses.items()}
@@ -492,6 +496,7 @@ class DatabaseManager:
                 timestamp=record.timestamp,
             )
         )
+        CHANGES.publish(changes.EVENT, source_id)
 
     def recent_events(
         self,
@@ -566,6 +571,7 @@ class DatabaseManager:
                 .execute()
             )
         )
+        CHANGES.publish(changes.LOG, source)
 
     def log_lines(
         self, target: str, filter_prefix: str = "", limit: int = 15
@@ -685,12 +691,15 @@ class DatabaseManager:
             .on_conflict_replace()
             .execute()
         )
+        CHANGES.publish(changes.JOB, plugin_id)
         return record.id
 
     def _update_job(self, job_id: int, **fields: Any) -> None:
-        if self.store.update_job(job_id, **fields) is None:
+        record = self.store.update_job(job_id, **fields)
+        if record is None:
             return
         _writer.submit(lambda: Job.update(**fields).where(Job.id == job_id).execute())
+        CHANGES.publish(changes.JOB, record.plugin_id)
 
     def set_job_pid(self, job_id: int, pid: int) -> None:
         self._update_job(job_id, pid=pid)
@@ -738,6 +747,7 @@ class DatabaseManager:
             .on_conflict_ignore()
             .execute()
         )
+        CHANGES.publish(changes.JOB, (self.store.get_job(job_id) or {}).get("plugin_id"))
 
     def get_job(self, job_id: int) -> Optional[JobDict]:
         return self.store.get_job(job_id)
@@ -789,6 +799,7 @@ class DatabaseManager:
             .where(Job.id.in_(failed))
             .execute()
         )
+        CHANGES.publish(changes.JOB)
         return len(failed)
 
     # ------------------------------------------------------------------
@@ -802,6 +813,7 @@ class DatabaseManager:
         _writer.submit(
             lambda: Setting.insert(key=key, value=value).on_conflict_replace().execute()
         )
+        CHANGES.publish(changes.SETTING)
 
     def set_snapshot(self, plugin_id: str, data: Any):
         """``data`` is the decoded object. It is stored as-is and serialised
@@ -815,6 +827,7 @@ class DatabaseManager:
             .on_conflict_replace()
             .execute()
         )
+        CHANGES.publish(changes.SNAPSHOT, plugin_id)
 
     def latest_snapshot(self, plugin_id: str, default: Any = None) -> Any:
         return self.store.snapshots.get(plugin_id, default)

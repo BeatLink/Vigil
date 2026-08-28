@@ -16,6 +16,6 @@ class UIOrchestrator:
         self.status_card = partial(render_status_card, collector=plugin.id)
         self.open_dialog = partial(open_dialog_impl, plugin)
 
-    def page(self, metric_names: List[str] = (), interval: float = 1.0) -> "PluginPage":
+    def page(self, metric_names: List[str] = ()) -> "PluginPage":
         from vigil.core.ui.model import PluginPage
-        return PluginPage(self._plugin, metric_names=metric_names, interval=interval)
+        return PluginPage(self._plugin, metric_names=metric_names)

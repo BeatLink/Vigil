@@ -153,7 +153,6 @@ class JobPanelSpec(TypedDict, total=False):
     enabled_if: str                # ENABLED_PREDICATES key
     run_action_id: str
     history_limit: int
-    refresh_interval: float
 
 
 # UI_SPEC['layout'] rows: each row is a list of either a bare widget-name

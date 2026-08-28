@@ -3,7 +3,7 @@
 Architectural decisions and non-obvious rationale for Vigil, organized by topic.
 Code comments stay short (≤1 sentence); anything that needs more explanation
 lives here. This documents the architecture as it *is* — read it before changing
-the engine, the plugin contract, or the UI polling model.
+the engine, the plugin contract, or the UI refresh model.
 
 ## Single process, one event loop
 
@@ -117,7 +117,7 @@ unchecked at the boundary (bad data fails at first use, not at load).
 
 `core/contracts.py` holds the cross-subsystem contracts:
 - `RefreshCallback` — "a sync function, or one returning an awaitable", the
-  signature `PluginPage._tick`, `safe_timer`, and `on_data_event` all share.
+  signature `PluginPage._tick`, `_CallbackTick._tick` and `on_data_event` all share.
 - `MetricsSource` — the two-method read-only slice of `DatabaseManager`
   (`latest_metrics`, `latest_statuses`) the exporters and REST API need.
 - `PushablePlugin` — a `runtime_checkable` Protocol for the `token`/`record_push`
@@ -377,22 +377,31 @@ buffer rather than being one fixed-size entry, and they get two bounds:
 Without those two, `monitors x jobs x output_lines` would stay resident to
 serve a view that is only opened on demand.
 
-## UI refresh: polling, not push
+## UI refresh: push, not polling
 
-The UI polls the state store; it does **not** subscribe to write
-notifications. There is no event bus. Every widget refreshes by re-reading
-state on its tick and applying the result only when it changed (`refresh_rows`
-and the inline equality checks in `history_chart`, the sidebar tree,
-`update_charts`). This trades sub-second push latency for a much simpler model
-with no cross-thread subscription lifecycle to leak.
+The UI subscribes to write notifications; it does **not** poll. Every semantic
+write on the Database Engine publishes one change to the bus in
+`core/state/changes.py`, tagged with its kind (`STATUS`, `METRIC`, `EVENT`,
+`LOG`, `JOB`, `SNAPSHOT`, `SETTING`) and the monitor it belongs to. An idle
+system publishes nothing and so costs nothing, and a status flip reaches the
+screen as soon as it is written rather than at the next tick of a timer.
+
+Publishing is synchronous, on whichever thread performed the write — a
+collector's worker thread, the agent's socket task, the UI's own loop. A
+subscriber therefore does the minimum possible inline and marshals the real work
+onto its own event loop; nothing in the bus awaits, holds a lock for long, or
+lets a subscriber's exception escape into the write path.
+
+Widgets still apply a refresh only when the value changed (`refresh_rows` and
+the inline equality checks in `history_chart`, the sidebar tree,
+`update_charts`), so a wake-up that finds nothing new is cheap.
 
 Reads are dict lookups and slices over live objects — sub-microsecond — so
 there is no cache and no TTL anywhere: a read sees what the last collector
-wrote, immediately. (Reads formerly went to SQLite behind a 1s TTL cache,
-which is what made polling expensive enough to need caching in the first
-place.) Widgets still read through `offload()` where they did before, since a
-NiceGUI callback should not block the loop, but the work it wraps is now
-trivial.
+wrote, immediately. (Reads formerly went to SQLite behind a 1s TTL cache, which
+is what made polling expensive enough to need caching in the first place.)
+Widgets still read through `offload()` where they did before, since a NiceGUI
+callback should not block the loop, but the work it wraps is now trivial.
 
 **Thread-safety.** Collectors run on asyncio worker threads while the UI reads
 from its own pool, so the store is touched from several threads. Its flat
@@ -402,49 +411,70 @@ reading them are read-modify-write sequences. Buffer readers copy out under
 that lock and return lists, so a caller never iterates a deque a collector is
 appending to.
 
-### One timer per client
+### One change subscription per client
 
 `_PageScheduler` (`core/ui/model.py`) drives every *tickable* registered for a
-NiceGUI client from a **single** `safe_timer`, ticking at the fastest interval
-any tickable asked for. A tickable is anything with `_tick()` and `_detached()`:
+NiceGUI client from a **single** subscription to the change bus. A tickable is
+anything with `_tick()` and `_detached()`:
 
 - A `PluginPage`, which refreshes a plugin detail page's cards/charts/tables.
 - A `_CallbackTick`, wrapping a bare refresh callback registered via
   `on_data_event` / `schedule_callback` — used by the overview and events pages.
 
-Both ride the one timer, so the overview's sidebar/events/charts refreshes and a
-plugin page's widgets are all coalesced. This is what keeps a group's refresh
-cost from scaling with how many children are expanded — plugins have no idea
-whether they're standalone or one of many expanded children.
+Both ride the one subscription, so the overview's sidebar/events/charts
+refreshes and a plugin page's widgets are all coalesced. This is what keeps a
+group's refresh cost from scaling with how many children are expanded — plugins
+have no idea whether they're standalone or one of many expanded children.
+
+A change wakes *every* tickable on the client, not only those interested in the
+changed monitor. Refresh callbacks are registered by plugin render code and may
+read any monitor's data — a group page renders its children — so there is no
+reliable interest set to filter on.
+
+**Debouncing is leading-edge.** The first change refreshes immediately and
+further changes arriving during `COOLDOWN_SECONDS` collapse into one trailing
+refresh. That keeps latency at zero for an isolated event while bounding the
+refresh rate on a busy system, where one collection cycle publishes a change per
+metric, log line and status it writes.
+
+An `IDLE_REFRESH_SECONDS` sweep runs alongside it as a backstop, for the two
+things a change notification cannot cover: values that age on their own (a
+running job's duration, "last seen" times) and reaping a client that closed
+while the system had nothing to publish.
 
 `PluginPage.start()` does one synchronous refresh immediately before
 registering, so a freshly loaded page shows real data rather than its
 constructed defaults (`--`, empty tables) until the first tick. `run_now=False`
 on a callback defers only its first tick.
 
-## Safe timers and teardown
+## Teardown
 
 NiceGUI resolves a `ui.timer`'s context *outside* the callback and raises "The
 parent slot of the element has been deleted." as soon as the client disconnects
 or the page re-renders — in NiceGUI's own task, so a try/except around the
-callback never sees it, and it floods the log every tick. `_SafeTimer`
-(`core/ui/components.py`) overrides `_should_stop` so detachment is an ordinary
-stop condition. `_detached()` checks `is_deleted` / `client.elements` rather than
-`parent_slot`, which only raises later — the very raise this class avoids.
+callback never sees it, and it floods the log every tick. Driving refreshes off
+the change bus rather than `ui.timer` removes that failure mode: the scheduler
+owns its own tasks and checks liveness itself.
 
-`safe_timer`'s `defer_first=True` skips `ui.timer`'s inline first call (which
-otherwise runs during widget construction, before the page paints) and fires on
-the next loop tick instead.
+Each tick drops the tickables whose `_detached()` is true, and a scheduler with
+none left unsubscribes from the bus, cancels its idle sweep and removes itself
+from `_schedulers`. `_CallbackTick._detached()` tests the client it was
+registered under against `Client.instances`, giving it the same lifetime as a
+`PluginPage`. If the event loop is already gone when a change arrives,
+`_on_change` drops the subscription and returns — cancelling the tasks is the
+loop's job, not the publishing thread's.
+
 
 ## Bindings
 
 Vigil uses NiceGUI's reactive `.bind_*()` only for `render_status_card`'s label
 text (`label.text` is a real `BindableProperty` with an on-change push hook).
 Everything else — `ui.table.rows`, `ui.echart.options`, label colors — has no
-such hook (verified against NiceGUI's source), so it refreshes through the shared
-per-page timer via `page.on_refresh()`, setting values and calling `.update()`
-explicitly. `binding_refresh_interval` is slowed to 2s rather than disabled, in
-case a future widget starts binding.
+such hook (verified against NiceGUI's source), so it refreshes through the
+client's shared change subscription via `page.on_refresh()`, setting values and
+calling `.update()` explicitly. `binding_refresh_interval` is left at NiceGUI's
+default: the binding propagation loop only has the one label to walk, and a
+refresh model that no longer runs on a timer has no reason to slow it.
 
 ## NiceGUI routing quirk
 

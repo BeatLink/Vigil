@@ -15,8 +15,8 @@ from typing import (
 # A callback that may be a plain sync function or one returning an
 # awaitable — both are valid everywhere NiceGUI invokes a callback, since
 # `helpers.should_await` (or an equivalent check) decides at the call site
-# whether to await the result. Reused by PluginPage._tick, safe_timer, and
-# on_data_event.
+# whether to await the result. Reused by PluginPage._tick, _CallbackTick._tick
+# and on_data_event.
 RefreshCallback = Callable[[], Union[None, Awaitable[None]]]
 
 
