@@ -1,5 +1,11 @@
 # Plugin domains
 
+> **Superseded.** This review argued for folding many signals into one modular monitor per
+> domain, and that consolidation happened — then was reversed. Every signal is its own monitor
+> again (`cpu`, `smart`, `throughput`, …), grouped per host and per domain in config, sharing
+> only `plugins/base/signal_plugin.py`. What survives is the domain analysis itself; the module
+> mechanics below, and the files they name, no longer exist.
+
 A review of the plugin tree against one question: **which of the 36 plugins are the same
 functional domain wearing different names, and which are genuinely their own?**
 

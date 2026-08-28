@@ -81,29 +81,66 @@ plugins:
         target_host: "server.example.com"
         interval: 30s
 
+  # A group with a `layout:` stops wrapping its children in collapsible cards and
+  # builds its own rows instead, one child widget per cell, addressed as
+  # "<child_id>.<widget_name>". "<child_id>.status" is a status card the group
+  # draws itself; a bare "<child_id>" renders that child whole. Widgets the
+  # layout does not name are not rendered at all.
+  # - name: "Fleet Overview"
+  #   type: "group"
+  #   layout:
+  #     - - "my-server.status"
+  #       - widget: "server-cpu.cpu_card"
+  #         title: "SERVER CPU"          # override the widget's own heading
+  #     - - widget: "server-cpu.cpu_chart"
+  #         height: "300px"
+  #         flex: 2                      # twice the width of its row neighbour
+  #       - "server-disk-root.usage_card"
+  #   children:
+  #     - ...
+
   - name: "My Server Stats"
     type: "group"
-    grid_columns: 4
     children:
-      - name: "System"
-        id: "server-system"
-        type: "system_stats"
+      # One monitor per signal: each keeps its own status, interval and history,
+      # and the group above rolls them up to the worst of them.
+      - name: "CPU"
+        id: "server-cpu"
+        type: "cpu"
         interval: 1m
-        modules:                 # omit for the defaults; naming any turns the rest off
-          cpu:
-            warning: 70          # CPU % (warn / fail)
-            threshold: 85
-          memory:
-            warning: 75          # memory % (warn / fail)
-            threshold: 90
-          load:
-            warning: 70          # 1m load as % of cores (warn / fail)
-            threshold: 100
-          temperature:
-            warning: 70          # °C (warn / fail)
-            threshold: 80
-          oom:
-            alert_for: 3         # collections a kill keeps the monitor alerting
+        warning: 70              # CPU % (warn / fail)
+        threshold: 85
+        ssh_config:
+          host: "server.example.com"
+      - name: "Memory"
+        id: "server-memory"
+        type: "memory"
+        interval: 1m
+        warning: 75              # memory % (warn / fail)
+        threshold: 90
+        ssh_config:
+          host: "server.example.com"
+      - name: "Load"
+        id: "server-load"
+        type: "load"
+        interval: 1m
+        warning: 70              # 1m load as % of cores (warn / fail)
+        threshold: 100
+        ssh_config:
+          host: "server.example.com"
+      - name: "Temperature"
+        id: "server-temperature"
+        type: "temperature"
+        interval: 1m
+        warning: 70              # °C (warn / fail)
+        threshold: 80
+        ssh_config:
+          host: "server.example.com"
+      - name: "OOM Kills"
+        id: "server-oom"
+        type: "oom"
+        interval: 1m
+        alert_for: 3             # collections a kill keeps the monitor alerting
         ssh_config:
           host: "server.example.com"
       - name: "/"
@@ -164,54 +201,66 @@ plugins:
 
   - name: "Server I/O & Network"
     type: "group"
-    grid_columns: 4
     children:
-      - name: "Disks"
-        id: "server-disks"
-        type: "disks"
-        interval: 1m
-        modules:                 # omit for the defaults; naming any turns the rest off
-          smart:
-            interval: 1h         # smartctl is slow and rarely changes its answer
-          zfs:
-            warning: 80          # pool capacity % (warn / fail)
-            threshold: 90
-            # pools: ["tank"]    # optional; omit to list every pool
-          md: {}                 # mdadm arrays from /proc/mdstat
-          io: {}                 # device: "nvme0n1" — omit to auto-detect the busiest disk
+      # An expensive signal just gets a slower interval of its own.
+      - name: "SMART"
+        id: "server-smart"
+        type: "smart"
+        interval: 1h           # smartctl is slow and rarely changes its answer
         ssh_config:
           host: "server.example.com"
-      # Omit `modules` entirely and the monitor runs its defaults — for
-      # system_stats that is cpu, memory, load and oom.
-      - name: "Host"
-        id: "server-host"
-        type: "system_stats"
-        interval: 1m
+      - name: "ZFS"
+        id: "server-zfs"
+        type: "zfs"
+        interval: 1h
+        warning: 80            # pool capacity % (warn / fail)
+        threshold: 90
+        # pools: ["tank"]      # optional; omit to list every pool
+        ssh_config:
+          host: "server.example.com"
+      - name: "RAID"
+        id: "server-md"
+        type: "md"             # mdadm arrays from /proc/mdstat
+        interval: 10m
+        ssh_config:
+          host: "server.example.com"
+      - name: "Disk I/O"
+        id: "server-disk-io"
+        type: "disk_io"
+        interval: 30s
+        # device: "nvme0n1"    # omit to auto-detect the busiest disk
         ssh_config:
           host: "server.example.com"
       - name: "Interrupts"
         id: "server-interrupts"
-        type: "system_stats"
+        type: "interrupts"
         interval: 1m
-        modules:
-          interrupts:
-            warning: 20000     # interrupts/sec
-            threshold: 50000
+        warning: 20000         # interrupts/sec
+        threshold: 50000
         ssh_config:
           host: "server.example.com"
-      - name: "Network"
-        id: "server-network"
-        type: "network"
+      - name: "Throughput"
+        id: "server-throughput"
+        type: "throughput"
+        interval: 30s
+        # interface: "eth0"    # omit to auto-detect the busiest
+        ssh_config:
+          host: "server.example.com"
+      - name: "Connections"
+        id: "server-connections"
+        type: "connections"
         interval: 1m
-        modules:
-          throughput: {}       # interface: "eth0" — omit to auto-detect the busiest
-          connections:
-            warning: 500       # total TCP connections
-            threshold: 1000
-          wifi:
-            # interface: "wlan0"   # optional; auto-detects the strongest link
-            quality_warning: 40    # link quality floor (warn below)
-            quality_threshold: 20  # link quality floor (fail below)
+        warning: 500           # total TCP connections
+        threshold: 1000
+        ssh_config:
+          host: "server.example.com"
+      - name: "WiFi"
+        id: "server-wifi"
+        type: "wifi"
+        interval: 1m
+        # interface: "wlan0"     # optional; auto-detects the strongest link
+        quality_warning: 40      # link quality floor (warn below)
+        quality_threshold: 20    # link quality floor (fail below)
         ssh_config:
           host: "server.example.com"
 
@@ -234,20 +283,17 @@ plugins:
 
   - name: "GPU & Containers"
     type: "group"
-    grid_columns: 4
     children:
       - name: "GPU"
         id: "server-gpu"
-        type: "system_stats"
+        type: "gpu"
         interval: 1m
-        modules:
-          gpu:
-            util_warning: 85   # GPU util % (warn / fail)
-            util_threshold: 95
-            mem_warning: 85    # VRAM % (warn / fail)
-            mem_threshold: 95
-            temp_warning: 80   # °C (warn / fail)
-            temp_threshold: 90
+        util_warning: 85       # GPU util % (warn / fail)
+        util_threshold: 95
+        mem_warning: 85        # VRAM % (warn / fail)
+        mem_threshold: 95
+        temp_warning: 80       # °C (warn / fail)
+        temp_threshold: 90
         ssh_config:
           host: "server.example.com"   # target needs nvidia-smi
       - name: "Docker"

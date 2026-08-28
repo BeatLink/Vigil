@@ -41,6 +41,20 @@ STARTUP_JITTER_SECONDS = 3.0
 _PRUNE_CHECK_SECONDS = 60
 
 
+def _plugin_class(module, module_path: str) -> type:
+    """The Plugin subclass a plugin module defines, ignoring the bases it imports."""
+    candidates = [obj for _, obj in inspect.getmembers(module, inspect.isclass)
+                  if issubclass(obj, Plugin) and obj.__module__ == module_path
+                  and not inspect.isabstract(obj)]
+    if not candidates:
+        raise ValueError(f"{module_path} defines no concrete Plugin subclass")
+    if len(candidates) > 1:
+        raise ValueError(
+            f"{module_path} defines more than one Plugin subclass "
+            f"({[c.__name__ for c in candidates]}) — a plugin module must define exactly one")
+    return candidates[0]
+
+
 class VigilEngine:
     def __init__(self, config_path: str, db_path_override: Optional[str] = None):
         self.config_loader = VigilConfig(config_path)
@@ -206,21 +220,18 @@ class VigilEngine:
                 module_path = f"vigil.plugins.{p_type}"
                 module = importlib.import_module(module_path)
 
-                for _, obj in inspect.getmembers(module, inspect.isclass):
-                    if issubclass(obj, Plugin) and obj is not Plugin:
-                        plugin_instance = obj(name, plugin_cfg)
-                        plugin_instance.engine = self
-                        self._wire_plugin(plugin_instance, plugin_cfg)
+                plugin_instance = _plugin_class(module, module_path)(name, plugin_cfg)
+                plugin_instance.engine = self
+                self._wire_plugin(plugin_instance, plugin_cfg)
 
-                        if 'children' in plugin_cfg:
-                            plugin_instance.children = self.setup_modules(
-                                plugin_cfg['children'],
-                                inherited_agent=plugin_cfg.get('agent'),
-                            )
+                if 'children' in plugin_cfg:
+                    plugin_instance.children = self.setup_modules(
+                        plugin_cfg['children'],
+                        inherited_agent=plugin_cfg.get('agent'),
+                    )
 
-                        current_level_plugins.append(plugin_instance)
-                        logging.info(f"Loaded plugin '{name}' of type '{p_type}'")
-                        break
+                current_level_plugins.append(plugin_instance)
+                logging.info(f"Loaded plugin '{name}' of type '{p_type}'")
             except Exception as e:
                 logging.error(f"Failed to load plugin '{name}' ({p_type}): {e}")
 

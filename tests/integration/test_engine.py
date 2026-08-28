@@ -63,6 +63,41 @@ class TestPluginLoading:
         assert len(engine.plugins) == 1
         assert engine.plugins[0].name == "My Host"
 
+    def test_loads_a_signal_plugin_as_its_own_class(self, tmp_path):
+        # cpu.py imports SignalPlugin, whose name sorts before Cpu; picking the
+        # first Plugin subclass by name would instantiate the base instead.
+        db_path = str(tmp_path / "test.db")
+        cfg_path = _write_config(tmp_path, {
+            "database": {"path": db_path},
+            "plugins": [{
+                "name": "CPU",
+                "id":   "host-cpu",
+                "type": "cpu",
+                "warning": 70,
+                "threshold": 85,
+            }],
+        })
+        with patch("vigil.core.connectors.engine.SSHConnection"):
+            engine = VigilEngine(cfg_path)
+            engine.setup_modules()
+        assert len(engine.plugins) == 1
+        assert type(engine.plugins[0]).__name__ == "Cpu"
+        assert engine.plugins[0].threshold == 85
+
+    def test_each_signal_type_loads_its_own_monitor(self, tmp_path):
+        db_path = str(tmp_path / "test.db")
+        cfg_path = _write_config(tmp_path, {
+            "database": {"path": db_path},
+            "plugins": [
+                {"name": "Throughput", "id": "host-throughput", "type": "throughput"},
+                {"name": "SMART", "id": "host-smart", "type": "smart"},
+            ],
+        })
+        with patch("vigil.core.connectors.engine.SSHConnection"):
+            engine = VigilEngine(cfg_path)
+            engine.setup_modules()
+        assert [type(p).__name__ for p in engine.plugins] == ["Throughput", "Smart"]
+
     def test_unknown_plugin_type_is_skipped(self, tmp_path):
         db_path = str(tmp_path / "test.db")
         cfg_path = _write_config(tmp_path, {
@@ -117,7 +152,7 @@ class TestSSHDefaultsMerge:
             "database": {"path": db_path},
             "ssh_defaults": {"username": "beatlink", "key_path": "/run/vigil.key"},
             "plugins": [{
-                "name": "CPU", "id": "cpu", "type": "system_stats",
+                "name": "CPU", "id": "cpu", "type": "cpu",
                 "ssh_config": {"host": "server.technet"},
             }],
         })
@@ -137,7 +172,7 @@ class TestSSHDefaultsMerge:
             "database": {"path": db_path},
             "ssh_defaults": {"username": "beatlink"},
             "plugins": [{
-                "name": "CPU", "id": "cpu", "type": "system_stats",
+                "name": "CPU", "id": "cpu", "type": "cpu",
                 "ssh_config": {"host": "server.technet", "username": "root"},
             }],
         })

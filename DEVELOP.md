@@ -144,15 +144,11 @@ iteration at boot. Exceptions are caught per-iteration, so one crashing monitor
 never stops its own future polls or anyone else's. Group plugins get a loop too;
 they re-read live child status from the DB each cycle.
 
-A modular monitor subdivides its own cycle: a module in the `modules` block may
-carry an `interval` of its own, and the plugin issues the commands of only the
-modules due that cycle. The monitor's `interval` is therefore the floor, not the
-schedule — a module asking for less than it gets collected every cycle. Because a
-resting module contributes no result, the plugin holds its last status and folds
-that into the worst-status roll-up, so an hourly `smart` check does not read as
-online for the 59 minutes between probes. Metrics are deliberately *not* carried:
-`latest_metric` already returns the last value written, and forging samples would
-put points on a chart that were never measured.
+Signals with different costs therefore just get different intervals: `smart` runs
+hourly and `cpu` every minute because they are separate monitors on separate
+loops, not two modules sharing one cycle. A slow check's status is its own, so it
+never lapses to online between probes, and a group rolls the pair up to the worst
+of the two.
 
 `run_cycle_now` is single-flight per plugin (`_collecting[id]`), shared by the
 scheduler and any out-of-band (dashboard-triggered) collection, so a slow cycle
@@ -530,7 +526,9 @@ Most plugins reduce to the same shape: a few metric cards with a formatter, a
 layout grid, a chart, an events table. A plugin declares that shape as a
 `UI_SPEC` dict and calls `spec.generic_render()` from `render_ui()`, instead of
 hand-writing widgets. Only genuinely bespoke plugins (`group`,
-`systemd_service`) keep a full hand-written `render_ui()`.
+`systemd_service`) keep a full hand-written `render_ui()` — a group renders its
+children as collapsible cards, or, when it declares a `layout`, as its own grid
+of their widgets (see below).
 
 Format/color/predicate functions are referenced by name from module registries
 (`FORMATTERS`, `COLOR_RULES`, `ITEM_FORMATTERS`, `ITEM_COLOR_RULES`,
@@ -542,8 +540,28 @@ data. A plugin needing a one-off transform registers it under its own key
 arrangement two ways: replacing the row structure entirely, or per-widget
 overrides (visibility, height, flex) merged onto the default rows — the same
 list-or-dict pattern `UI_SPEC['events']` / `['logs']` (`bool | dict`) uses.
+Every cell div is created up front in declared order, so a page follows its
+layout rather than the order `generic_render` happens to build widgets in.
+
+**A layout is injectable, which is what lets a group mix children.** A
+`generic_render(..., layout=...)` call renders into a caller-supplied layout
+instead of building one from the plugin's own config, and it asks that layout
+`renders(widget)` before constructing each widget. `CompositeLayout` is the
+group's implementation: its cells are named `'<child_id>.<widget>'`, and
+`view(child_id)` hands one child a window that answers in the child's own
+widget names. So a group can pull the CPU card off one monitor and the chart
+off another into the same row, and a widget no cell claims is never built —
+the child plugin has no idea it is being taken apart. Only a plugin with a
+`UI_SPEC` can be addressed this way; `systemd_service` and a nested group are
+referenced by a bare id and render whole.
 
 ## Plugin config & helpers
+
+A monitor's `type` is the module name under `vigil/plugins/`, and
+`setup_modules()` loads the one concrete `Plugin` subclass that module *defines*
+— a class it merely imports (`SignalPlugin`, `Plugin`) is skipped, so a plugin
+module must define exactly one. Selecting by name instead would depend on
+alphabetical luck: `SignalPlugin` sorts before `Throughput`.
 
 `plugins/base/plugin_helpers.py` holds `PluginConfigMixin` (the `id` / `target` /
 `interval` derivation every plugin needs, via `_init_config`) plus shared pure
@@ -552,31 +570,22 @@ out so they're reusable without dragging in the rest of `plugin_base.py`.
 `parse_duration` accepts plain numbers or strings like `'1w'`, `'7d'`,
 `'2h30m'`, `'30s'`, including compound forms like `'1d12h'`.
 
-`plugins/base/module_plugin.py` holds the scaffolding the modular monitors
-(`system_stats`, `network`, `disks`) share: the `Module` contract, the `modules`
-block resolver, the severity ordering, and the `ModularPlugin` base that
-concatenates due modules' commands, slices the results back out positionally, and
-assembles the composite `UI_SPEC`. A modular plugin declares `MODULE_TYPES`,
-`MODULE_LABEL` and `DEFAULT_MODULES`, and adds only what is genuinely its own.
+`plugins/base/signal_plugin.py` holds what the single-signal monitors (`cpu`,
+`memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`,
+`connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io`) share: the severity
+ordering, `worst_status` for the ones that fold several disks or pools into one
+verdict, and a `SignalPlugin` base that turns the `cards()`/`charts()`/`rows()`
+a monitor declares into the usual host-card / charts / events page. Each one
+collects exactly one signal, so it carries its own status, interval and history,
+and a monitor that needs hardware the host lacks is simply not configured rather
+than reporting offline for something nobody asked about.
 
-**Defaults are all-or-nothing, deliberately.** Omitting `modules` selects
-`DEFAULT_MODULES`; naming *anything* means the config is driving and only what it
-names runs. The alternative — merging the named modules over the defaults, with
-`false` to opt back out — makes the effective set a function of two places at
-once, and the failure it produces is a module the user never asked for quietly
-collecting. One rule, stated in the plugin's docs, beats a merge users have to
-simulate in their heads.
-
-A default set must therefore be safe on a host that has nothing: every module in
-one reads `/proc` or `/sys` with no extra package, no privileges and no
-particular hardware. That is why `smart` (needs `smartctl` and `sudo`), `zfs`
-(needs a pool), `gpu` (`nvidia-smi`-only), `wifi` (needs a radio) and
-`temperature` (needs sensors) are all opt-in: defaulting them on would make a
-bare monitor report offline for hardware the host simply does not have, and
-`offline` outranks `online` in the roll-up.
-
-An empty `modules` list is still an error, since it can only be deliberate: it is
-the one way to ask for a monitor that collects nothing.
+**One signal per monitor, grouped in config.** A host's page is assembled by a
+`group` — per host, then per domain — not by one plugin collecting seven things.
+That costs one agent round trip per monitor instead of one per host, which over
+a persistent WebSocket is cheap, and buys per-signal status, per-signal history,
+and cells a group layout can address individually
+(`"ragnarok-cpu.cpu_chart"`).
 
 ## Testing
 

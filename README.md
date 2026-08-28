@@ -136,11 +136,22 @@ theme:
 | [`ddns_updater`](#ddns_updater)         | Dynamic DNS record kept current       | Public IP lookup + DNS query (in-process)        | `in_sync`, `last_update_epoch`                   | Force Update |
 | [`systemd_service`](#systemd_service)   | systemd unit state / last run         | SSH (`systemctl`)                                | `active` *or* `last_run_epoch`, `last_run_success` | Restart, Stop, Enable, Disable |
 | [`service_list`](#service_list)         | Systemd unit browser and control      | SSH (`systemctl`)                                | `services_total`, `services_active`, `services_failed` | Start, Stop, Restart, Enable, Disable, View Status |
-| [`disks`](#disks)                       | SMART disk health, ZFS pool state and capacity, disk I/O throughput | SSH (`smartctl`, `zpool list`, `/proc/diskstats`) | per enabled module — see below | — |
+| [`smart`](#smart)                       | SMART health of every physical disk    | SSH (`smartctl`)                                | `disks_total`, `disks_ok`, `disks_failed`       | — |
+| [`zfs`](#zfs)                           | ZFS pool state and capacity            | SSH (`zpool list`)                              | `pools_total`, `pools_degraded`, `zfs_usage_max` | — |
+| [`md`](#md)                             | mdadm array health                     | SSH (`/proc/mdstat`)                            | `arrays_total`, `arrays_ok`, `arrays_degraded`  | — |
+| [`disk_io`](#disk_io)                   | Disk read/write throughput             | SSH (`/proc/diskstats`)                         | `read_kbps`, `write_kbps`                       | — |
 | [`disk_space`](#disk_space)             | Filesystem usage for a path           | SSH (`df`)                                       | `used_pct`, `size_gb`, `used_gb`, `avail_gb`    | — |
-| [`system_stats`](#system_stats)         | CPU, memory, load, temperature, interrupts, GPU and OOM kills | SSH (`/proc/*`, `/sys/class/thermal`, `nvidia-smi`) | per enabled module — see below | — |
+| [`cpu`](#cpu)                           | CPU utilization                        | SSH (`/proc/stat`)                              | `cpu_pct`                                       | — |
+| [`memory`](#memory)                     | Memory and swap use                    | SSH (`/proc/meminfo`)                           | `memory_pct`, `memory_used_gb`                  | — |
+| [`load`](#load)                         | Load average, scaled by core count     | SSH (`/proc/loadavg`)                           | `load_pct_1m`, `load_pct_5m`, `load_pct_15m`    | — |
+| [`temperature`](#temperature)           | Thermal zone temperatures              | SSH (`/sys/class/thermal`)                      | `temp_c`, `temp_zone_<zone>`                    | — |
+| [`interrupts`](#interrupts)             | Interrupt and context-switch rates     | SSH (`/proc/stat`)                              | `irq_per_sec`, `ctxt_per_sec`                   | — |
+| [`gpu`](#gpu)                           | NVIDIA GPU utilization, memory, temperature | SSH (`nvidia-smi`)                         | `gpu_util`, `gpu_mem_pct`, `gpu_temp`           | — |
+| [`oom`](#oom)                           | Kernel OOM kills                       | SSH (`/proc/vmstat`) + agent journal push       | `oom_kills_total`, `oom_kills_new`              | — |
 | [`processes`](#processes)               | Running processes by CPU              | SSH (`ps`)                                       | `process_count`, `top_cpu_pct` *(ephemeral)*    | SIGTERM, SIGKILL |
-| [`network`](#network)                   | Interface throughput, TCP connection states and WiFi link | SSH (`/proc/net/dev`, `/proc/net/tcp`, `/proc/net/wireless`) | per enabled module — see below | — |
+| [`throughput`](#throughput)             | Network interface throughput           | SSH (`/proc/net/dev`)                           | `rx_kbps`, `tx_kbps`                            | — |
+| [`connections`](#connections)           | TCP connection counts by state         | SSH (`/proc/net/tcp`)                           | `conn_total`, `conn_established`, `conn_listen` | — |
+| [`wifi`](#wifi)                         | WiFi link quality and signal strength  | SSH (`/proc/net/wireless`)                      | `link_quality`, `signal_dbm`                    | — |
 | [`ports`](#ports)                       | TCP port / URL reachability           | SSH (`/dev/tcp`, `curl`)                         | `<check>_up`, `<check>_latency_ms`              | — |
 | [`borg`](#borg)                         | Borg backup freshness                 | SSH (`borg list`)                                | `archive_count`, `last_backup_epoch`            | — |
 | [`containers`](#containers)             | Docker / Podman container states      | SSH (`docker`/`podman ps`)                       | `containers_total`, `containers_running`, `containers_stopped` | Restart (per expected container) |
@@ -157,7 +168,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `disks`, `disk_space`, `network`, `ports`, `system_stats`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -405,69 +416,101 @@ The service browser renders a sortable table of all units, and offers per-unit a
 
 ---
 
-### `disks`
-Collects a host's storage signals — SMART disk health, ZFS pool state and capacity, mdadm array health, and disk I/O throughput — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Modules have a working default**: omit `modules` and the monitor runs `io`, the one storage signal that needs no extra package, no privileges and no particular hardware. `smart` needs `smartctl` and `sudo`, and `zfs` needs a pool, so both are opt-in rather than reporting offline on a host that has neither. Name anything in `modules` and the config is driving: only what you name runs, and the defaults no longer apply. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
+### `smart`
+SMART health of every physical disk on a host, via `smartctl`. Classification is by positive assertion: only an explicit `PASSED` verdict counts a disk as healthy, so a check that could not run reads as **failed** rather than as a clean disk. Virtual block devices (zram, ZFS zvols, loop/md/device-mapper nodes) are filtered out before probing, and a device that genuinely has no SMART support is skipped rather than counted.
 
-> The `smart` module needs passwordless `sudo` access to `smartctl` for the SSH user (e.g. `vigil ALL=(ALL) NOPASSWD: /usr/bin/smartctl`).
+> Needs passwordless `sudo` access to `smartctl` for the SSH user (e.g. `vigil ALL=(ALL) NOPASSWD: /usr/bin/smartctl`).
 
-| Option    | Description                                                                 |
-|-----------|-----------------------------------------------------------------------------|
-| `modules` | Which modules to run. A plain list of names — `modules: ["cpu", "memory"]` — takes each one's defaults; use a mapping of name → options when you need to tune one. Omit the key entirely for the default set above. A named module can be turned back off with `false` (or `enabled: false`) without deleting its options, and an empty list selects nothing at all. |
-| `interval`| Polling frequency (default: `60`), and the floor for any module's own `interval`. `smartctl` is slow and its answer changes rarely, so give the `smart` module an `interval` of its own. |
-| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below              |
+| Option       | Description                                                                 |
+|--------------|-----------------------------------------------------------------------------|
+| `interval`   | Polling frequency (default: `60`). `smartctl` is slow and its answer changes rarely — `1h` is a sensible setting. |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below                |
 
-| Module  | Collected via | Options | Metrics |
-|---------|---------------|---------|---------|
-| `smart` | `lsblk` to discover disks, then `smartctl -H` on each (USB-attached disks with `-d sat`) | — | `disks_total`, `disks_ok`, `disks_failed`, `disks_unknown` |
-| `zfs`   | `zpool list -H -o name,health,capacity` | `warning` (default `80`), `threshold` (default `90`) — pool capacity %; `pools` — pool names to list (omit for all) | `pools_total`, `pools_ok`, `pools_degraded`, `zfs_usage_max`, `pool_usage_<pool>` per pool |
-| `md`    | `cat /proc/mdstat` | — | `arrays_total`, `arrays_ok`, `arrays_degraded` |
-| `io`    | two `/proc/diskstats` samples 1s apart, in one command | `device` — disk to measure (omit to auto-detect the busiest) | `read_kbps`, `write_kbps` |
+**Metrics**: `disks_total`, `disks_ok`, `disks_failed`
 
-The overall status is the worst status of the enabled modules (`online` < `offline` < `warning` < `failed`), and each module logs its own line every cycle. A failed command is contained to its own module — a host with no ZFS leaves `smart` and `io` collecting normally.
-
-`md` reads each array's `[N/M] [UU__]` line: any array with a down disk (`_`) or fewer active disks than expected reports **failed**, one undergoing resync/recovery/reshape reports **warning**, and a host with no arrays at all reports **offline** rather than pretending to be clean.
-
-`smart` classifies by positive assertion: only an explicit `PASSED` verdict counts as healthy, and a disk whose health could not be read counts as **failed**, never as fine. Virtual block devices that `lsblk` calls disks (`zram`, ZFS zvols, `loop`, `md`, `dm-`) are skipped rather than probed. `zfs` fails a pool in a `DEGRADED`, `FAULTED`, `OFFLINE`, `UNAVAIL` or `REMOVED` state regardless of its capacity. `io` auto-detects the physical disk with the most sector traffic across the two samples, ignoring partitions and virtual nodes, and persists the disk actually in use to show on its card.
+**Status**: `failed` if any disk fails or cannot be read, `offline` if the host has no SMART-capable disk, otherwise `online`.
 
 ```yaml
-# The default set — disk I/O, nothing to install
-- name: "Ragnarok Disks"
-  id: "ragnarok-disks"
-  type: "disks"
-  interval: 1m
+- name: "SMART"
+  id: "ragnarok-smart"
+  type: "smart"
+  interval: 1h
   ssh_config:
-    host: "ragnarok.technet"
+    host: "ragnarok.example.com"
 ```
+
+---
+
+### `zfs`
+ZFS pool state and capacity, via `zpool list`. Every pool's health and used percentage is read each cycle; per-pool usage is charted individually as well as rolled up.
+
+| Option       | Description                                                                 |
+|--------------|-----------------------------------------------------------------------------|
+| `pools`      | Pool names to query (default: every pool on the host)                       |
+| `warning`    | Pool usage % that triggers `warning` (default: `80`)                        |
+| `threshold`  | Pool usage % that triggers `failed` (default: `90`)                         |
+| `interval`   | Polling frequency (default: `60`; `1h` suits a pool that changes slowly)    |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below                |
+
+**Metrics**: `pools_total`, `pools_ok`, `pools_degraded`, `zfs_usage_max`, `pool_usage_<pool>`
+
+**Status**: `failed` for any pool not `ONLINE`, or usage at `threshold`; `warning` above `warning`; `offline` if the host has no pools.
 
 ```yaml
-# Naming modules replaces the defaults rather than adding to them
-- name: "Ragnarok Disks"
-  id: "ragnarok-disks"
-  type: "disks"
-  interval: 1m
-  modules:
-    zfs:
-      warning: 80
-      threshold: 90
-    io: {}
+- name: "ZFS"
+  id: "ragnarok-zfs"
+  type: "zfs"
+  interval: 1h
+  warning: 80
+  threshold: 90
   ssh_config:
-    host: "ragnarok.technet"
+    host: "ragnarok.example.com"
 ```
+
+---
+
+### `md`
+Linux software RAID health, read from `/proc/mdstat` — the mdadm sibling of [`zfs`](#zfs). Counts arrays that are clean, degraded or rebuilding.
+
+| Option       | Description                                                  |
+|--------------|--------------------------------------------------------------|
+| `interval`   | Polling frequency (default: `60`)                            |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `arrays_total`, `arrays_ok`, `arrays_degraded`
+
+**Status**: `failed` for a degraded array, `warning` while one is rebuilding, `offline` on a host with no arrays.
 
 ```yaml
-# One monitor, but smartctl runs hourly instead of every minute
-- name: "Ragnarok Disks"
-  id: "ragnarok-disks"
-  type: "disks"
-  interval: 1m
-  modules:
-    smart:
-      interval: 1h
-    io: {}
+- name: "RAID"
+  id: "ragnarok-md"
+  type: "md"
+  interval: 10m
   ssh_config:
-    host: "ragnarok.technet"
+    host: "ragnarok.example.com"
 ```
 
+---
+
+### `disk_io`
+Disk read/write throughput, from two `/proc/diskstats` samples a second apart taken on the target. With no `device`, it auto-detects the busiest whole disk (ignoring partitions and virtual devices) and persists the choice, showing it on the card.
+
+| Option       | Description                                                              |
+|--------------|--------------------------------------------------------------------------|
+| `device`     | Block device to measure, e.g. `sda` (default: auto-detect the busiest)    |
+| `interval`   | Polling frequency (default: `60`, recommend `30s`)                        |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below             |
+
+**Metrics**: `read_kbps`, `write_kbps`
+
+```yaml
+- name: "Disk I/O"
+  id: "ragnarok-disk-io"
+  type: "disk_io"
+  interval: 30s
+  ssh_config:
+    host: "ragnarok.example.com"
+```
 ---
 
 ### `disk_space`
@@ -495,85 +538,179 @@ Monitors disk space usage for a path or mountpoint over SSH via `df`. Works on a
 
 ---
 
-### `system_stats`
-Collects the basic health signals of a host — CPU, memory, load average, temperature, interrupts, GPU and kernel OOM kills — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Modules have a working default**: omit `modules` and the monitor runs `cpu`, `memory`, `load` and `oom` — the signals every Linux host can produce from `/proc` alone. `temperature` and `interrupts` are absent or meaningless on plenty of hosts and `gpu` is `nvidia-smi`-only, so those are opt-in rather than reporting offline for hardware the host does not have. Name anything in `modules` and the config is driving: only what you name runs, and the defaults no longer apply. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
+### `cpu`
+CPU utilization from two `/proc/stat` samples a second apart, taken on the target so the sleep costs one round trip rather than two.
 
-| Option    | Description                                                                 |
-|-----------|-----------------------------------------------------------------------------|
-| `modules` | Which modules to run. A plain list of names — `modules: ["cpu", "memory"]` — takes each one's defaults; use a mapping of name → options when you need to tune one. Omit the key entirely for the default set above. A named module can be turned back off with `false` (or `enabled: false`) without deleting its options, and an empty list selects nothing at all. |
-| `interval`| Polling frequency (default: `60`)                                            |
-| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below              |
+| Option       | Description                                                  |
+|--------------|--------------------------------------------------------------|
+| `warning`    | CPU % that triggers `warning` (default: `70`)                |
+| `threshold`  | CPU % that triggers `failed` (default: `85`)                 |
+| `interval`   | Polling frequency (default: `60`)                            |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
 
-| Module   | Collected via | Options | Metrics |
-|----------|---------------|---------|---------|
-| `cpu`    | two `/proc/stat` samples 1s apart, in one command | `warning` (default `70`), `threshold` (default `85`) — CPU % per state | `cpu_pct` |
-| `memory` | `/proc/meminfo` (`MemAvailable`, so cache is not counted as used) | `warning` (default `75`), `threshold` (default `90`) — memory % per state | `memory_pct`, `memory_used_gb`, `memory_total_gb` |
-| `load`   | `/proc/loadavg` + `nproc`, normalized by core count | `warning`, `threshold` — 1m load as % of cores (both optional; omit to collect load without affecting status) | `load_pct_1m`, `load_pct_5m`, `load_pct_15m` |
-| `temperature` | `/sys/class/thermal/thermal_zone*` | `warning` (default `70`), `threshold` (default `80`) — °C per state | `temp_c` (hottest zone); `temp_zone_<type>` (per zone) |
-| `interrupts` | two `/proc/stat` samples 1s apart (its own, not the `cpu` module's) | `warning` (default `20000`), `threshold` (default `50000`) — interrupts/sec per state | `irq_per_sec`, `ctxt_per_sec` |
-| `gpu`    | `nvidia-smi` | `util_warning`/`util_threshold` (`85`/`95`), `mem_warning`/`mem_threshold` (`85`/`95`), `temp_warning`/`temp_threshold` (`80`/`90`), `timeout_trip` (`2`), `suspend_seconds` (`1800`) | `gpu_util`, `gpu_mem_pct`, `gpu_temp` (busiest card); `gpu<idx>_util`, `gpu<idx>_mem_pct`, `gpu<idx>_temp` (per card) |
-| `oom`    | `/proc/vmstat`'s `oom_kill` counter | `alert_for` (default `3`) — collections a kill keeps the monitor in `warning` afterwards; `is_warning` (default `false`) — report a kill as `warning` instead of `failed` | `oom_kills_total`, `oom_kills_new` |
-
-The overall status is the worst status of the enabled modules (`online` < `offline` < `warning` < `failed`, so a module that cannot measure never outranks one measuring a bad number), and each module logs its own line every cycle. A failed command is contained to its own module — the rest still collect. A host with no thermal zones (a VM, typically) leaves the `temperature` module online with no metric rather than reporting a problem it cannot see.
-
-On an agent-backed host the `oom` module also follows the kernel journal, so a kill is reported the moment it happens — see [Agent](#agent).
-
-A wedged NVIDIA driver — typically a dGPU that failed to restore from suspend — leaves `nvidia-smi` in uninterruptible sleep, where the connector's terminate/kill has no effect. Left alone, every interval would strand another unkillable process on the target until it reboots. After `timeout_trip` consecutive timeouts the `gpu` module therefore stops issuing the command entirely and reports **offline** for `suspend_seconds`, then retries once; a successful collection clears the count.
+**Metrics**: `cpu_pct`
 
 ```yaml
-# The default set — cpu, memory, load and oom
-- name: "Heimdall System"
-  id: "heimdall-system"
-  type: "system_stats"
+- name: "CPU"
+  id: "ragnarok-cpu"
+  type: "cpu"
+  interval: 1m
+  warning: 70
+  threshold: 85
+  ssh_config:
+    host: "ragnarok.example.com"
+```
+
+---
+
+### `memory`
+Memory use from `/proc/meminfo`, reported as the share of total memory that is *unavailable* — the number that matters, since cache is reclaimable.
+
+| Option       | Description                                                  |
+|--------------|--------------------------------------------------------------|
+| `warning`    | Memory % that triggers `warning` (default: `75`)             |
+| `threshold`  | Memory % that triggers `failed` (default: `90`)              |
+| `interval`   | Polling frequency (default: `60`)                            |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `memory_pct`, `memory_used_gb`, `memory_total_gb`
+
+```yaml
+- name: "Memory"
+  id: "ragnarok-memory"
+  type: "memory"
   interval: 1m
   ssh_config:
-    host: "heimdall.example.com"
+    host: "ragnarok.example.com"
 ```
 
+---
+
+### `load`
+Load average from `/proc/loadavg`, normalized by core count so 100% means the host is exactly at capacity. Thresholds are optional: without both, load is collected and charted but never changes the status — useful on a box where a high load average is normal.
+
+| Option       | Description                                                              |
+|--------------|--------------------------------------------------------------------------|
+| `warning`    | 1m load as % of cores that triggers `warning` (optional)                  |
+| `threshold`  | 1m load as % of cores that triggers `failed` (optional)                   |
+| `interval`   | Polling frequency (default: `60`)                                         |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below             |
+
+**Metrics**: `load_pct_1m`, `load_pct_5m`, `load_pct_15m`, `load_1m`, `cpu_count`
+
 ```yaml
-# Tuning any module replaces the defaults rather than adding to them
-- name: "Heimdall System"
-  id: "heimdall-system"
-  type: "system_stats"
+- name: "Load"
+  id: "ragnarok-load"
+  type: "load"
   interval: 1m
-  modules:
-    cpu:
-      warning: 70
-      threshold: 85
-    memory:
-      warning: 75
-      threshold: 90
-    load:
-      warning: 70     # warn when 1m load exceeds 70% of available cores
-      threshold: 100
-    oom:
-      alert_for: 3
+  warning: 70
+  threshold: 100
   ssh_config:
-    host: "heimdall.example.com"
+    host: "ragnarok.example.com"
 ```
+
+---
+
+### `temperature`
+Every thermal zone under `/sys/class/thermal`. The hottest zone sets the status; each zone is also kept as its own metric and chip, so a single hot sensor is identifiable rather than hidden in a maximum. A host with no zones (a VM, typically) stays `online` with no metric rather than reporting a problem it cannot see.
+
+| Option       | Description                                                  |
+|--------------|--------------------------------------------------------------|
+| `warning`    | °C that triggers `warning` (default: `70`)                   |
+| `threshold`  | °C that triggers `failed` (default: `80`)                    |
+| `interval`   | Polling frequency (default: `60`)                            |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `temp_c`, `temp_zone_<zone>`
 
 ```yaml
-# A named subset, all on their defaults
-- name: "Heimdall System"
-  id: "heimdall-system"
-  type: "system_stats"
-  modules: ["memory", "oom"]
+- name: "Temperature"
+  id: "ragnarok-temperature"
+  type: "temperature"
+  interval: 1m
   ssh_config:
-    host: "heimdall.example.com"
+    host: "ragnarok.example.com"
 ```
+
+---
+
+### `interrupts`
+Interrupt and context-switch rates, from two `/proc/stat` snapshots a second apart. Takes its own sample rather than sharing the [`cpu`](#cpu) monitor's, so a host can run either without the other.
+
+| Option       | Description                                                       |
+|--------------|-------------------------------------------------------------------|
+| `warning`    | Interrupts/sec that triggers `warning` (default: `20000`)         |
+| `threshold`  | Interrupts/sec that triggers `failed` (default: `50000`)          |
+| `interval`   | Polling frequency (default: `60`)                                 |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below      |
+
+**Metrics**: `irq_per_sec`, `ctxt_per_sec`
 
 ```yaml
-# One module only — naming it turns the defaults off
-- name: "Ragnarok GPU"
-  id: "ragnarok-gpu"
-  type: "system_stats"
-  modules:
-    gpu:
-      temp_threshold: 88
+- name: "Interrupts"
+  id: "ragnarok-interrupts"
+  type: "interrupts"
+  interval: 1m
   ssh_config:
-    host: "ragnarok.example.com"   # target needs nvidia-smi
+    host: "ragnarok.example.com"
 ```
 
+---
+
+### `gpu`
+NVIDIA GPU utilization, memory and temperature via `nvidia-smi`. The peak across cards sets the status; every card is also kept individually.
+
+A GPU that sleeps with a laptop lid can wedge `nvidia-smi` uninterruptibly. After `timeout_trip` consecutive timeouts the monitor stops issuing the probe entirely for `suspend_seconds` and reports `offline` rather than stranding a process per cycle.
+
+| Option            | Description                                                       |
+|-------------------|-------------------------------------------------------------------|
+| `util_warning`    | GPU utilization % that triggers `warning` (default: `85`)         |
+| `util_threshold`  | GPU utilization % that triggers `failed` (default: `95`)          |
+| `mem_warning`     | GPU memory % that triggers `warning` (default: `85`)              |
+| `mem_threshold`   | GPU memory % that triggers `failed` (default: `95`)               |
+| `temp_warning`    | °C that triggers `warning` (default: `80`)                        |
+| `temp_threshold`  | °C that triggers `failed` (default: `90`)                         |
+| `timeout_trip`    | Consecutive timeouts before the probe is suspended (default: `2`) |
+| `suspend_seconds` | How long the probe stays suspended (default: `1800`)              |
+| `ssh_config`      | SSH connection details — see [SSH Config](#ssh-config) below      |
+
+**Metrics**: `gpu_util`, `gpu_mem_pct`, `gpu_temp`, `gpu<n>_util`, `gpu<n>_mem_pct`, `gpu<n>_temp`
+
+```yaml
+- name: "GPU"
+  id: "odin-gpu"
+  type: "gpu"
+  interval: 1m
+  temp_threshold: 88
+  ssh_config:
+    host: "odin.example.com"   # target needs nvidia-smi
+```
+
+---
+
+### `oom`
+Kernel OOM kills, from `/proc/vmstat`'s `oom_kill` counter. An OOM kill is an event, not a level: memory is back to normal before the next sample, so the [`memory`](#memory) monitor cannot see it. The counter is read every cycle so no kill is ever missed, and the alert is held for `alert_for` cycles afterwards so a kill is still visible when you look.
+
+On an agent-backed host the monitor also follows the kernel journal, so a kill is reported the moment it happens and names the process the counter can only total.
+
+| Option       | Description                                                                |
+|--------------|----------------------------------------------------------------------------|
+| `is_warning` | Report a kill as `warning` instead of `failed` (default: `false`)          |
+| `alert_for`  | Collections a kill keeps the monitor alerting (default: `3`)               |
+| `interval`   | Polling frequency (default: `60`)                                           |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below               |
+
+**Metrics**: `oom_kills_total`, `oom_kills_new`
+
+```yaml
+- name: "OOM Kills"
+  id: "ragnarok-oom"
+  type: "oom"
+  interval: 1m
+  alert_for: 3
+  ssh_config:
+    host: "ragnarok.example.com"
+```
 ---
 
 ### `processes`
@@ -605,66 +742,76 @@ Monitors running processes over SSH via `ps`, sorted by CPU usage. Process data 
 
 ---
 
-### `network`
-Collects a host's networking signals — interface throughput, TCP connection states and WiFi link quality — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Modules have a working default**: omit `modules` and the monitor runs `throughput` and `connections`, both of which read `/proc` on any host. `wifi` is opt-in because a wired host has no link to report on. Name anything in `modules` and the config is driving: only what you name runs, and the defaults no longer apply. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
+### `throughput`
+Network interface throughput, from two `/proc/net/dev` samples a second apart. With no `interface`, it auto-detects the non-virtual interface with the highest cumulative byte count (ignoring `lo`, `veth`, `docker`, `virbr`, `br-`, `tun`, `tap` prefixes) and persists the choice, showing it on the card.
 
-| Option    | Description                                                                 |
-|-----------|-----------------------------------------------------------------------------|
-| `modules` | Which modules to run. A plain list of names — `modules: ["cpu", "memory"]` — takes each one's defaults; use a mapping of name → options when you need to tune one. Omit the key entirely for the default set above. A named module can be turned back off with `false` (or `enabled: false`) without deleting its options, and an empty list selects nothing at all. |
-| `interval`| Polling frequency (default: `60`). Shorter intervals give finer-grained trend history. |
-| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below              |
+| Option       | Description                                                              |
+|--------------|--------------------------------------------------------------------------|
+| `interface`  | Interface to measure, e.g. `eth0` (default: auto-detect the busiest)      |
+| `interval`   | Polling frequency (default: `60`, recommend `30s`)                        |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below             |
 
-| Module        | Collected via | Options | Metrics |
-|---------------|---------------|---------|---------|
-| `throughput`  | two `/proc/net/dev` samples 1s apart, in one command | `interface` — interface to measure (omit to auto-detect the busiest) | `rx_kbps`, `tx_kbps` |
-| `connections` | `/proc/net/tcp` and `/proc/net/tcp6` | `warning` (default `500`), `threshold` (default `1000`) — total sockets per state | `conn_total`; `conn_<state>` per TCP state (`conn_established`, `conn_listen`, `conn_time_wait`, …) |
-| `wifi`        | `/proc/net/wireless` | `interface` (omit to auto-detect the strongest link); `quality_warning` (default `40`), `quality_threshold` (default `20`) — link-quality **floors**, so lower is worse | `link_quality`, `signal_dbm` |
-
-The overall status is the worst status of the enabled modules (`online` < `offline` < `warning` < `failed`), and each module logs its own line every cycle. A failed command is contained to its own module — a host with no wireless leaves `throughput` and `connections` collecting normally.
-
-Both interface-based modules auto-detect when no `interface` is given: `throughput` picks the non-virtual, non-loopback interface with the highest cumulative byte count (ignoring `lo`, `veth`, `docker`, `virbr`, `br-`, `tun`, `tap` prefixes), and `wifi` picks the interface with the best link quality. The interface actually in use is persisted and shown on its card.
+**Metrics**: `rx_kbps`, `tx_kbps`
 
 ```yaml
-# The default set — throughput and connections
-- name: "Heimdall Network"
-  id: "heimdall-network"
-  type: "network"
+- name: "Throughput"
+  id: "ragnarok-throughput"
+  type: "throughput"
   interval: 30s
-  ssh_config:
-    host: "heimdall.example.com"
-```
-
-```yaml
-# Naming modules replaces the defaults rather than adding to them
-- name: "Heimdall Network"
-  id: "heimdall-network"
-  type: "network"
-  interval: 30s
-  modules:
-    throughput: {}
-    connections:
-      warning: 500
-      threshold: 1000
-    wifi:
-      quality_warning: 40
-      quality_threshold: 20
-  ssh_config:
-    host: "heimdall.example.com"
-```
-
-```yaml
-# Throughput on a named interface, and nothing else
-- name: "Ragnarok Network"
-  id: "ragnarok-network"
-  type: "network"
-  interval: 30s
-  modules:
-    throughput:
-      interface: "eth0"
   ssh_config:
     host: "ragnarok.example.com"
 ```
 
+---
+
+### `connections`
+TCP connection counts by state, read from `/proc/net/tcp`. Thresholds apply to the total, which is what catches a connection leak or a flood.
+
+| Option       | Description                                                  |
+|--------------|--------------------------------------------------------------|
+| `warning`    | Total connections that trigger `warning` (default: `500`)    |
+| `threshold`  | Total connections that trigger `failed` (default: `1000`)    |
+| `interval`   | Polling frequency (default: `60`)                            |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `conn_total`, `conn_established`, `conn_listen`, `conn_timewait`
+
+```yaml
+- name: "Connections"
+  id: "ragnarok-connections"
+  type: "connections"
+  interval: 1m
+  warning: 500
+  threshold: 1000
+  ssh_config:
+    host: "ragnarok.example.com"
+```
+
+---
+
+### `wifi`
+WiFi link quality and signal strength from `/proc/net/wireless`. With no `interface`, it picks the interface with the best link quality and persists the choice. Quality thresholds are inverted — *lower* is worse.
+
+| Option              | Description                                                  |
+|---------------------|--------------------------------------------------------------|
+| `interface`         | Wireless interface, e.g. `wlan0` (default: the strongest)    |
+| `quality_warning`   | Link quality at or below which the status is `warning` (default: `40`) |
+| `quality_threshold` | Link quality at or below which the status is `failed` (default: `20`)  |
+| `interval`          | Polling frequency (default: `60`)                            |
+| `ssh_config`        | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `link_quality`, `signal_dbm`
+
+```yaml
+- name: "WiFi"
+  id: "odin-wifi"
+  type: "wifi"
+  interval: 1m
+  quality_warning: 40
+  quality_threshold: 20
+  ssh_config:
+    host: "odin.example.com"
+```
 ---
 
 ### `containers`
@@ -845,125 +992,171 @@ Detects the cloud provider of the target and surfaces its instance metadata (id,
 ---
 
 ### `group`
-A logical container for other monitors. Aggregates the worst-case status of all descendants and displays each child as a collapsible card. Expansion state is preserved across page refreshes within the same server session.
+A logical container for other monitors. Aggregates the worst-case status of all descendants, and renders them one of two ways: as **collapsible cards**, one per child, or — when the group declares a `layout:` — as a **composite layout** built out of individual widgets pulled from its children.
 
-Groups support a CSS grid layout, configurable at both the group level and per-child.
+| Option          | Description                                                                                     |
+|-----------------|-------------------------------------------------------------------------------------------------|
+| `children`      | A list of nested plugin definitions                                                              |
+| `layout`        | Rows of widget references. Present ⇒ composite layout; absent ⇒ collapsible cards.               |
+| `grid_min_width`| Card mode only: minimum width of a child card before it wraps (default: `"320px"`)               |
 
-| Option          | Description                                                                                  |
-|-----------------|----------------------------------------------------------------------------------------------|
-| `children`      | A list of nested plugin definitions                                                           |
-| `grid_columns`  | Number of equal-width columns in the grid (default: `1` — full-width stacked layout)         |
+Groups can be nested to arbitrary depth.
 
-Each child entry can also set:
+#### Card mode (default)
+
+Each child is a collapsible card. Expansion state is preserved across page refreshes within the same server session. Each child entry can set:
 
 | Child Option     | Description                                                                                  |
-|------------------|----------------------------------------------------------------------------------------------|
-| `grid_col_span`  | How many grid columns this child occupies (default: `1`)                                     |
+|------------------|------------------------------------------------------------------------------------------------|
+| `grid_col_span`  | How many card widths this child occupies (default: `1`)                                       |
 | `grid_height`    | Explicit CSS height for the child cell, e.g. `"400px"` (default: auto). Adds a scrollbar if content overflows. |
-
-Groups can be nested to arbitrary depth. Inner groups inherit their own `grid_columns` independently.
+| `grid_min_width` | Overrides the group's `grid_min_width` for this child                                         |
 
 ```yaml
 - name: "System Stats"
   type: "group"
-  grid_columns: 3       # 3 equal columns — one subgroup per host
   children:
     - name: "Ragnarok System"
       type: "group"
-      grid_columns: 4   # 4 columns — one card per stat (CPU / Mem / Temp / Load)
       children:
-        - name: "Ragnarok System"
-          type: "system_stats"
-          ...
-        - name: "Ragnarok Disk"
-          type: "disk_space"
+        - name: "CPU"
+          type: "cpu"
           ...
 
-# Child spanning multiple columns
+# Child spanning two card widths
 - name: "Overview"
   type: "group"
-  grid_columns: 3
   children:
     - name: "Processes"
       type: "processes"
-      grid_col_span: 2   # spans 2 of 3 columns
+      grid_col_span: 2
       grid_height: "600px"
       ...
-    - name: "Uptime"
-      type: "uptime"
-      ...
 ```
+
+#### Composite mode
+
+Give the group a `layout:` and it stops wrapping children in cards: it builds its own rows of cells and renders **one widget of one child** into each. Any widget of any descendant can be shown, hidden, resized or retitled, so cards, charts and tables from different monitors can share a row.
+
+A cell names its widget as `"<child_id>.<widget_name>"` — the same widget names listed under [Plugin Layout](#plugin-layout). A child's id is its `id:` if set, otherwise its `name:`, so give a child an explicit `id` before referencing it (a `name` containing a dot is ambiguous). Nested groups are reachable too: a layout may address any descendant, at any depth, not just direct children.
+
+Three refs are special:
+
+| Ref form            | Renders                                                                                       |
+|---------------------|-----------------------------------------------------------------------------------------------|
+| `"<child_id>.<widget>"` | One widget of that child                                                                  |
+| `"<child_id>.status"`   | A status card the group itself draws (child name + live state), for children that declare no `status_card` of their own |
+| `"<child_id>"`          | The whole child, laid out by its own default layout — the escape hatch for `systemd_service` and nested groups, whose hand-written UIs have no addressable widgets |
+
+Widgets a layout does not name are never built, so a composite page costs only what it shows. Each cell accepts the same per-widget properties as a plugin layout (`flex`, `height`, `min_width`, `visible`), plus `title`, which overrides the widget's own heading — the way to tell two hosts' CPU cards apart.
+
+```yaml
+- name: "Fleet Overview"
+  type: "group"
+  layout:
+    # One row: both hosts' status, then both CPU cards side by side.
+    - - "ragnarok.status"
+      - "heimdall.status"
+      - widget: "ragnarok-cpu.cpu_card"
+        title: "RAGNAROK CPU"
+      - widget: "heimdall-cpu.cpu_card"
+        title: "HEIMDALL CPU"
+    # One row: the two CPU charts, each half the width.
+    - - widget: "ragnarok-cpu.cpu_chart"
+        height: "300px"
+      - widget: "heimdall-cpu.cpu_chart"
+        height: "300px"
+    # One row: a wide table beside a narrow card.
+    - - widget: "ragnarok-procs.table"
+        flex: 3
+      - "ragnarok-procs.count_card"
+    # A monitor with a hand-written UI, rendered whole under a heading.
+    - - widget: "nginx"
+        title: "Nginx"
+  children:
+    - name: "Ragnarok"
+      id: "ragnarok"
+      type: "uptime"
+      target_host: "ragnarok.lan"
+    - name: "Ragnarok CPU"
+      id: "ragnarok-cpu"
+      type: "cpu"
+      ssh_config:
+        host: "ragnarok.lan"
+    - name: "Nginx"
+      id: "nginx"
+      type: "systemd_service"
+      service_name: "nginx.service"
+      ssh_config:
+        host: "ragnarok.lan"
+```
+
+A ref naming a child or widget that does not exist renders nothing and is logged as a warning at startup of the page.
 
 ---
 
 ### Plugin Layout
 
-Every leaf plugin supports a `layout:` key that controls how its widgets are arranged on the detail page. Without a `layout:` block the plugin uses its built-in default grid (defined in the plugin's `_DEFAULT_LAYOUT`).
+Every plugin with a declarative UI supports a `layout:` key controlling how its widgets are arranged on its detail page. Without one the plugin uses its built-in default (its `_DEFAULT_LAYOUT`).
 
-| `layout` option  | Description                                                                                          |
-|------------------|------------------------------------------------------------------------------------------------------|
-| `grid_columns`   | Number of equal-width columns in this plugin's detail grid. Defaults vary by plugin type.            |
-
-Each named widget within a plugin can be overridden:
+A layout is a list of **rows**; each row is a list of widgets sharing that row, laid out as flex cells that wrap when they run out of width. An entry is either a bare widget name or a mapping with these keys:
 
 | Per-widget option | Description                                                                                         |
-|-------------------|-----------------------------------------------------------------------------------------------------|
-| `col`             | Start column (1-based). Omit to use CSS auto-placement.                                             |
-| `row`             | Start row (1-based). Omit to use CSS auto-placement.                                                |
-| `col_span`        | How many columns this widget occupies (default: `1`).                                               |
-| `row_span`        | How many rows this widget occupies (default: `1`).                                                  |
-| `height`          | Explicit CSS height for this cell, e.g. `"400px"`. Adds a scrollbar on overflow (default: auto).   |
-| `visible`         | `false` to hide the widget entirely (default: `true`).                                              |
+|-------------------|-------------------------------------------------------------------------------------------------------|
+| `widget`          | The widget name (required in mapping form)                                                          |
+| `flex`            | Share of the row's width relative to its siblings (default: `1`)                                    |
+| `min_width`       | Width below which the cell wraps to its own line (default: `"280px"`)                               |
+| `height`          | Explicit CSS height for this cell, e.g. `"400px"`. Adds a scrollbar on overflow (default: auto).     |
+| `visible`         | `false` to hide the widget (default: `true`)                                                        |
+
+The same keys can instead be given as a **mapping of widget name → properties**, which keeps the plugin's default rows and only overrides the named widgets — the usual way to hide a panel or make one chart taller.
 
 **Widget names by plugin type:**
 
 | Plugin             | Widget names                                                                 |
 |--------------------|------------------------------------------------------------------------------|
-| `uptime`           | `host_card`, `status_card`, `latency_card`, `chart`, `logs`                 |
-| `systemd_service`  | `host_card`, `service_card`, `status_card`, `time_card`, `logs` *(continuous)* / `host_card`, `service_card`, `maxage_card`, `state_card`, `history`, `logs` *(oneshot)* |
-| `system_stats`     | `host_card`, the enabled modules' cards (`cpu_card`, `mem_pct_card`, `mem_used_card`, `load_1m_card`, `load_5m_card`, `load_15m_card`, `temp_card`, `sensors`, `irq_card`, `ctxt_card`, `gpu_util_card`, `gpu_mem_card`, `gpu_temp_card`, `gpus`, `oom_total_card`, `oom_recent_card`) and charts (`cpu_chart`, `memory_chart`, `load_chart`, `temp_chart`, `irq_chart`, `ctxt_chart`, `gpu_chart`, `oom_chart`), `events` |
+| `uptime`           | `host_card`, `status_card`, `latency_card`, `chart`, `events`               |
+| `systemd_service`  | hand-written UI — not individually addressable                              |
+| `cpu`              | `host_card`, `cpu_card`, `cpu_chart`, `events`                              |
+| `memory`           | `host_card`, `mem_pct_card`, `mem_used_card`, `memory_chart`, `events`      |
+| `load`             | `host_card`, `load_1m_card`, `load_5m_card`, `load_15m_card`, `load_chart`, `events` |
+| `temperature`      | `host_card`, `temp_card`, `sensors`, `temp_chart`, `events`                 |
+| `interrupts`       | `host_card`, `irq_card`, `ctxt_card`, `irq_chart`, `ctxt_chart`, `events`   |
+| `gpu`              | `host_card`, `gpu_util_card`, `gpu_mem_card`, `gpu_temp_card`, `gpus`, `gpu_chart`, `events` |
+| `oom`              | `host_card`, `oom_total_card`, `oom_recent_card`, `oom_chart`, `events`     |
+| `throughput`       | `host_card`, `iface_card`, `rx_card`, `tx_card`, `rx_chart`, `tx_chart`, `events` |
+| `connections`      | `host_card`, `conn_total_card`, `conn_established_card`, `conn_listen_card`, `conn_timewait_card`, `conn_total_chart`, `conn_established_chart`, `events` |
+| `wifi`             | `host_card`, `wifi_iface_card`, `quality_card`, `signal_card`, `quality_chart`, `signal_chart`, `events` |
+| `smart`            | `host_card`, `smart_total_card`, `smart_ok_card`, `smart_failed_card`, `events` |
+| `zfs`              | `host_card`, `zfs_total_card`, `zfs_ok_card`, `zfs_degraded_card`, `zfs_usage_card`, `zfs_pools`, `zfs_chart`, `events` |
+| `md`               | `host_card`, `md_total_card`, `md_ok_card`, `md_degraded_card`, `events`    |
+| `disk_io`          | `host_card`, `io_device_card`, `read_card`, `write_card`, `read_chart`, `write_chart`, `events` |
 | `processes`        | `host_card`, `count_card`, `top_cpu_card`, `table`, `logs`                  |
-| `network`          | `host_card`, the enabled modules' cards (`iface_card`, `rx_card`, `tx_card`, `conn_total_card`, `conn_established_card`, `conn_listen_card`, `conn_timewait_card`, `wifi_iface_card`, `quality_card`, `signal_card`) and charts (`rx_chart`, `tx_chart`, `conn_total_chart`, `conn_established_chart`, `quality_chart`, `signal_chart`), `events` |
-| `disks`            | `host_card`, the enabled modules' cards (`smart_total_card`, `smart_ok_card`, `smart_failed_card`, `zfs_total_card`, `zfs_ok_card`, `zfs_degraded_card`, `zfs_usage_card`, `zfs_pools`, `io_device_card`, `read_card`, `write_card`) and charts (`zfs_chart`, `read_chart`, `write_chart`), `events` |
 | `disk_space`       | `host_card`, `path_card`, `threshold_card`, `usage_card`, `avail_card`, `total_card`, `chart`, `logs` |
+
+Any other plugin's names are the keys of its `UI_SPEC` `cards`, `charts` and `tables`, plus `events`, `logs`, `jobs` and `host_card` where it has them.
 
 **Examples:**
 
 ```yaml
-# Make the chart taller and hide the logs panel
+# Overrides only: keep the default rows, make the chart taller, hide the logs.
 - name: "Ragnarok CPU"
-  type: "system_stats"
-  modules: ["cpu"]
+  type: "cpu"
   layout:
     cpu_chart:
       height: "500px"
     logs:
       visible: false
 
-# Custom 3-column grid: stat cards left, chart occupies right two columns
+# Full replacement: two stat cards on one row, a double-width chart below.
 - name: "Heimdall Memory"
-  type: "system_stats"
-  modules: ["memory"]
+  type: "memory"
   layout:
-    grid_columns: 3
-    host_card:
-      col: 1
-      row: 1
-    mem_pct_card:
-      col: 1
-      row: 2
-    mem_used_card:
-      col: 1
-      row: 3
-    chart:
-      col: 2
-      row: 1
-      col_span: 2
-      row_span: 3
-    logs:
-      col: 1
-      row: 4
-      col_span: 3
+    - - "host_card"
+      - "mem_pct_card"
+      - "mem_used_card"
+    - - widget: "memory_chart"
+        height: "400px"
 ```
 
 ---
@@ -1089,7 +1282,7 @@ practical without the target's `sshd` ever seeing it.
 
 Two plugins use this today:
 
-- **`system_stats`**'s `oom` module follows the kernel journal for the OOM killer's own message. The polled
+- **`oom`** follows the kernel journal for the OOM killer's own message. The polled
   `/proc/vmstat` counter still runs and remains the authority on totals, but a kill is now
   reported the moment it happens and carries the process name — which the counter cannot.
 - **`systemd_service`** follows its unit's journal, so the log view is live rather than a
@@ -1118,7 +1311,7 @@ sudo grants the SSH user had rather than as root.
 
 ### SSH Config
 
-All SSH-based plugins (`systemd_service`, `disks`, `disk_space`, `network`) accept an `ssh_config` block:
+All SSH-based plugins (`systemd_service`, `cpu`, `smart`, `disk_space`, `throughput`, …) accept an `ssh_config` block:
 
 | Field        | Description                                                         |
 |--------------|---------------------------------------------------------------------|

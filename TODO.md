@@ -43,8 +43,8 @@ Nothing here is committed work — this is the candidate list.
 ### 1b. Extensions to existing plugins
 
 - [ ] **GPU: AMD and Intel** — LNXlink `gpu` covers NVIDIA, AMD, and Intel.
-      the `gpu` module of [system_stats.py](vigil/plugins/system_stats.py) is `nvidia-smi`-only and reports offline on anything else
-      ([README.md:629](README.md#L629)). Add `amdgpu_top`/`sysfs` and `intel_gpu_top` paths.
+      [gpu.py](vigil/plugins/gpu.py) is `nvidia-smi`-only and reports offline on anything else.
+      Add `amdgpu_top`/`sysfs` and `intel_gpu_top` paths.
 - [ ] **Containers: update-available detection and prune** — LNXlink `docker` checks whether a newer
       image exists and can prune. [containers.py](vigil/plugins/containers.py) counts running/stopped
       and offers restart only. An `image_update_available` metric plus a Prune action would be a
@@ -53,28 +53,22 @@ Nothing here is committed work — this is the candidate list.
       attributes; Vigil already splits these into `load_pct_*` metrics, so only the per-core split
       is outstanding.
 
-### 1b2. Further plugin consolidation
+### 1b2. Plugin granularity
 
-`system_stats` now covers the cheap per-host `/proc` and `/sys` signals as opt-in modules
-(cpu, memory, load, temperature, interrupts, gpu, oom), each with its own thresholds, cards
-and charts. [network.py](vigil/plugins/network.py) follows the same shape for throughput,
-connections and wifi, and [disks.py](vigil/plugins/disks.py) for smart, zfs and io. One
-consolidation is left:
+Every host signal is its own monitor — `cpu`, `memory`, `load`, `temperature`, `interrupts`,
+`gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io` — each with
+its own thresholds, interval, status and history, grouped per host and per domain in config.
+They share only [signal_plugin.py](vigil/plugins/base/signal_plugin.py): the severity ordering
+and the page assembly.
 
-- [x] **mdadm module** — `raid.py` is now the `md` module of
-      [disks.py](vigil/plugins/disks.py), the mdadm sibling of `zfs`.
-- [ ] **Filesystem modules** — whether [filesystems.py](vigil/plugins/filesystems.py) should
-      follow is open. It passes the domain test but not the end-user one: `disk_space` and
-      `folders` exist so a named path gets its *own* status and alert, and folding them into a
-      roll-up would take that away. Merge `filesystems` only, or leave all three.
-- [x] **Per-module intervals** — a module may set its own `interval` in the `modules` block;
-      the plugin only issues the commands of the modules due that cycle and holds a resting
-      module's last status, so a slow check never lapses to online between runs. Implemented on
-      the shared [module_plugin.py](vigil/plugins/base/module_plugin.py) scaffolding that
-      `system_stats`, `network` and `disks` now share.
-- [ ] **Shared delta sampling** — `cpu`, `interrupts`, `io` and `throughput` each take their
-      own 1s sample, so enabling several costs one sleep apiece. A single snapshot-sleep-snapshot
-      command whose output the delta modules slice would collapse them to one.
+- [ ] **Shared delta sampling** — `cpu`, `interrupts`, `disk_io` and `throughput` each take their
+      own 1s sample, so a host running several pays one sleep apiece. Collapsing them would need
+      a shared snapshot the four monitors slice, which cuts against one-monitor-one-signal;
+      open whether it is worth it.
+- [ ] **Filesystem monitors** — whether [filesystems.py](vigil/plugins/filesystems.py),
+      `disk_space` and `folders` should stay three plugins is open. `disk_space` and `folders`
+      exist so a named path gets its *own* status and alert, which is the same argument the
+      per-signal split rests on.
 
 ### 1c. Control actions
 

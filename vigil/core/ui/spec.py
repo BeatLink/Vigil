@@ -156,6 +156,18 @@ def _nonzero_warning(v):
     return 'warning' if v > 0 else 'online'
 
 
+@register_color_rule('always_online')
+def _always_online(v):
+    return None if v is None else 'online'
+
+
+@register_color_rule('nonzero_failed')
+def _nonzero_failed(v):
+    if v is None:
+        return None
+    return 'failed' if v > 0 else 'online'
+
+
 def threshold_color(warning: float, threshold: float):
     def rule(v):
         if v is None:
