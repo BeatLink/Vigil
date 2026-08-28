@@ -62,6 +62,8 @@ class Wifi(SignalPlugin):
     def _quality_color(self, quality: Optional[float]) -> Optional[str]:
         return None if quality is None else self._level_for_quality(quality)
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command("cat /proc/net/wireless")]
 

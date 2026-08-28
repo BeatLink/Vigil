@@ -43,6 +43,8 @@ class Vms(Plugin):
     def _virsh(self, subcmd: str) -> str:
         return f"virsh -c {_shquote(self.uri)} {subcmd}"
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command(f"{self._virsh('list --all')} 2>&1")]
 

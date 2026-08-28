@@ -39,6 +39,8 @@ class Smart(SignalPlugin):
     healthy/failed/unreadable. A disk whose health could not be read counts as
     failed, not healthy: "I cannot tell" and "it is fine" must not look alike."""
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command(_SMART_SCRIPT)]
 

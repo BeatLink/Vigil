@@ -33,6 +33,8 @@ class Memory(SignalPlugin):
         self._used_format = f'memory_used_{self.id}'
         register_item_formatter(self._used_format)(_format_memory_used)
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command("grep -E 'MemTotal:|MemAvailable:' /proc/meminfo")]
 

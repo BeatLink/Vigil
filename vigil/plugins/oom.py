@@ -47,15 +47,21 @@ class Oom(SignalPlugin):
     def _kill_status(self) -> str:
         return 'warning' if self.is_warning else 'failed'
 
+    SAMPLED = True
+
     def subscriptions(self) -> List[StreamSpec]:
-        return [StreamSpec(
-            id=self.id,
+        """The counter sample alongside the kernel journal: the sample carries
+        the vmstat total, the journal names the process a kill took."""
+        return super().subscriptions() + [StreamSpec(
+            id=f'{self.id}:journal',
             kind='journal',
             params={'kernel': True, 'grep': 'Out of memory'},
         )]
 
     def parse_event(self, stream_id: str, payload: Dict[str, Any],
                     timestamp: float) -> Optional[CollectResult]:
+        if not stream_id.endswith(':journal'):
+            return super().parse_event(stream_id, payload, timestamp)
         message = str(payload.get('message', '')).strip()
         if not message:
             return None

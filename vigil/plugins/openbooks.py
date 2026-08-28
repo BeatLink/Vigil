@@ -47,6 +47,8 @@ class Openbooks(Plugin):
         self.ws_url = config.get('ws_url', 'ws://127.0.0.1:9777/ws')
         self.probe_timeout = int(config.get('probe_timeout', 8))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command(_build_probe_script(self.ws_url, self.probe_timeout))]
 

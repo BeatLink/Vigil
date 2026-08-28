@@ -56,6 +56,8 @@ class Connections(SignalPlugin):
         register_color_rule(self._color_rule)(
             threshold_color(warning=self.warning, threshold=self.threshold))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command("cat /proc/net/tcp /proc/net/tcp6 2>/dev/null")]
 

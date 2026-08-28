@@ -73,6 +73,8 @@ class Unbound(Plugin):
         register_color_rule(self._color_rule_name)(
             threshold_color(warning=self.servfail_warning, threshold=self.servfail_threshold))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         script = _build_probe_script(
             self.control_cmd, self.query_host, self.query_port,

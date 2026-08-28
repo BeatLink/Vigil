@@ -111,6 +111,19 @@ class VigilEngine:
         if net.is_agent:
             self._wire_subscriptions(plugin, net)
 
+    def _is_event_driven(self, plugin: Plugin) -> bool:
+        """Whether this monitor's agent collects for it, so the engine runs no
+        polling loop. Only ever true on an agent target: over SSH the streams
+        are never registered and the poll stays the only collection path."""
+        net = self._net_for(plugin)
+        if net is None or not net.is_agent:
+            return False
+        try:
+            return bool(plugin.event_driven())
+        except Exception as e:
+            logging.error(f"{plugin.name}: event_driven() failed: {e}")
+            return False
+
     def _wire_subscriptions(self, plugin: Plugin, net: "ExecContext") -> None:
         """Register a plugin's declared event streams with its agent, so the
         agent starts watching them the moment it connects. Streams are keyed by
@@ -466,8 +479,13 @@ class VigilEngine:
         self._start_exporters()
 
         monitors = list(self._flatten(self.plugins))
-        logging.info(f"Starting {len(monitors)} independent monitor schedule(s).")
-        for plugin in monitors:
+        polled = [p for p in monitors if not self._is_event_driven(p)]
+        pushed = len(monitors) - len(polled)
+        logging.info(
+            f"Starting {len(polled)} independent monitor schedule(s); "
+            f"{pushed} collect on their agent."
+        )
+        for plugin in polled:
             asyncio.create_task(self._monitor_loop(plugin))
 
         asyncio.create_task(self._prune_loop())

@@ -76,6 +76,8 @@ class DiskIo(SignalPlugin):
     def setting_key(self) -> str:
         return f"disks:{self.id}:active_device"
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command("cat /proc/diskstats && sleep 1 && echo '---SNAP---' && cat /proc/diskstats")]
 

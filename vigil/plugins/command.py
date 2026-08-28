@@ -49,6 +49,8 @@ class CommandPlugin(Plugin):
             return _level_for(-value, -float(self.warning), -float(self.threshold))
         return _level_for(value, float(self.warning), float(self.threshold))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         if not self.command:
             return []

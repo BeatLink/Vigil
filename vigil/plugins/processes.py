@@ -58,6 +58,8 @@ class Processes(Plugin):
             self._cpu_color_rule_name = None
             self._top_cpu_color_rule_name = None
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         cmd = (
             f"ps -eo pid,user,pcpu,pmem,comm --sort=-%cpu "

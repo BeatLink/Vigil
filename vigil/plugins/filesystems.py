@@ -89,6 +89,8 @@ class Filesystems(Plugin):
             return 'warning'
         return 'online'
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command(_build_cmd())]
 

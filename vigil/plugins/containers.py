@@ -38,6 +38,8 @@ class Containers(Plugin):
         self.expect_running = set(config.get('expect_running', []) or [])
         self.stopped_warning = bool(config.get('stopped_warning', True))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command(f"{self.runtime} {_PS_FMT} 2>&1")]
 

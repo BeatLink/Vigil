@@ -45,6 +45,8 @@ class Cpu(SignalPlugin):
         register_color_rule(self._color_rule)(
             threshold_color(warning=self.warning, threshold=self.threshold))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command("{ head -1 /proc/stat; sleep 1; head -1 /proc/stat; }")]
 

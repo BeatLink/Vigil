@@ -72,6 +72,8 @@ class Mosquitto(Plugin):
         self.probe_timeout = int(config.get('probe_timeout', 5))
         self._started: Optional[float] = None
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         self._started = time.monotonic()
         script = _build_probe_script(

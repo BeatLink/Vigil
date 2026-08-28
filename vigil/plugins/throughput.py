@@ -58,6 +58,8 @@ class Throughput(SignalPlugin):
     def setting_key(self) -> str:
         return f"network:{self.id}:throughput_interface"
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command("cat /proc/net/dev && sleep 1 && cat /proc/net/dev")]
 

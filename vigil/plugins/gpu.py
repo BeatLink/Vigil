@@ -54,6 +54,8 @@ class Gpu(SignalPlugin):
         register_color_rule(self._temp_color_rule)(
             threshold_color(warning=self.temp_warning, threshold=self.temp_threshold))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         if time.monotonic() < self._suspended_until:
             return []

@@ -45,6 +45,8 @@ class Folders(Plugin):
     def _valid_folders(self) -> List[Dict[str, Any]]:
         return [f for f in self.folders if f.get('path')]
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [
             Command(f"timeout {self.du_timeout} du -sb {_shquote(folder['path'])}")

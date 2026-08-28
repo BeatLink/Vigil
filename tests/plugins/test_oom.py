@@ -66,13 +66,27 @@ class TestCollection:
 
 
 class TestPushedEvents:
-    def test_it_subscribes_to_the_kernel_journal(self, plugin):
-        assert [s.kind for s in plugin.subscriptions()] == ['journal']
+    def test_it_subscribes_to_a_sample_and_the_kernel_journal(self, plugin):
+        assert sorted(s.kind for s in plugin.subscriptions()) == ['journal', 'sample']
+
+    def test_each_stream_has_its_own_id(self, plugin):
+        ids = {s.kind: s.id for s in plugin.subscriptions()}
+        assert ids['sample'] == f'{plugin.id}:sample'
+        assert ids['journal'] == f'{plugin.id}:journal'
 
     def test_pushed_event_reports_a_kill(self, plugin):
-        result = plugin.parse_event(plugin.id, {'message': 'Out of memory: Killed process 1 (x)'}, 0.0)
+        result = plugin.parse_event(f'{plugin.id}:journal',
+                                    {'message': 'Out of memory: Killed process 1 (x)'}, 0.0)
         assert result.status == 'failed'
         assert 'OOM killer fired' in result.logs[0][0]
 
     def test_empty_event_ignored(self, plugin):
-        assert plugin.parse_event(plugin.id, {'message': '  '}, 0.0) is None
+        assert plugin.parse_event(f'{plugin.id}:journal', {'message': '  '}, 0.0) is None
+
+    def test_a_sample_frame_parses_like_a_poll(self, plugin):
+        result = plugin.parse_event(f'{plugin.id}:sample',
+                                    {'exit_code': 0, 'stdout': 'oom_kill 4\n', 'stderr': ''}, 0.0)
+        assert result.metrics['oom_kills_total'] == 4.0
+
+    def test_an_unknown_stream_is_ignored(self, plugin):
+        assert plugin.parse_event(f'{plugin.id}:nope', {'message': 'x'}, 0.0) is None

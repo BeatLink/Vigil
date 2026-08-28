@@ -36,6 +36,8 @@ class Interrupts(SignalPlugin):
         register_color_rule(self._color_rule)(
             threshold_color(warning=self.warning, threshold=self.threshold))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command("cat /proc/stat && sleep 1 && echo '---SNAP---' && cat /proc/stat")]
 

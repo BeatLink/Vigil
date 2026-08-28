@@ -84,6 +84,8 @@ class Ports(Plugin):
                 check['name'] = check['url'] if check.get('url') else f"{check.get('host', 'localhost')}:{check.get('port')}"
             check['metric'] = _safe_metric_name(check['name'])
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         if not self.checks:
             return []

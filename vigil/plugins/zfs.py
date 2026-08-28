@@ -36,6 +36,8 @@ class Zfs(SignalPlugin):
         register_item_color_rule(self._item_color_rule)(
             lambda item: _level_for(item.get('value') or 0.0, self.warning, self.threshold))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command("zpool list -H -o name,health,capacity " + " ".join(self.pools) + " 2>&1")]
 

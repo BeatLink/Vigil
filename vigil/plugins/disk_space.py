@@ -24,6 +24,8 @@ class DiskSpace(Plugin):
         register_color_rule(self._color_rule_name)(
             threshold_color(warning=self.threshold, threshold=self.threshold))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command(f"df --output=size,used,avail,pcent -B1 '{self.path}' | tail -1")]
 

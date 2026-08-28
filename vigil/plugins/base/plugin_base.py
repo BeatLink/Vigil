@@ -31,6 +31,19 @@ class Plugin(PluginConfigMixin, ABC):
     # UI_SPEC as "no declarative UI", via getattr(plugin, 'UI_SPEC', None).
     UI_SPEC: Optional[UISpec] = None
 
+    # Collect on the agent rather than on the poll: the agent runs commands()
+    # locally at this monitor's interval and pushes each result, so a cycle
+    # costs no round trip and the engine starts no polling task. Only for
+    # single-command plugins cheap enough to run on the target unattended, and
+    # never for one whose commands() varies with state — the stream is built
+    # once, when it is registered, so borg switching to a job poll would pin
+    # the agent to whichever command happened to be current.
+    SAMPLED: bool = False
+
+    # Suffix of the generic sample stream's id, distinct so a plugin can carry
+    # other streams beside it.
+    SAMPLE_STREAM = 'sample'
+
     def __init__(self, name: str, config: PluginConfig):
         """Pure plugins take only their name and config. All IO/persistence
         machinery (SSH/HTTP connectors, the storage writer, the read view) is
@@ -110,8 +123,33 @@ class Plugin(PluginConfigMixin, ABC):
         agent, which is what lets a plugin declare both a poll path and a push
         path and run correctly over either transport.
 
-        Default: no streams — the monitor is poll-only."""
-        return []
+        Default: the generic sample stream when SAMPLED is set, else none.
+        A subclass with its own streams composes with super()."""
+        return self.sample_streams()
+
+    def sample_streams(self) -> List["StreamSpec"]:
+        """The generic sample stream: the poll's own command, run by the agent
+        at this monitor's own interval and pushed as it completes."""
+        if not self.SAMPLED:
+            return []
+        commands = self.commands()
+        if len(commands) != 1:
+            return []
+        from vigil_agent.protocol import StreamSpec
+        return [StreamSpec(
+            id=f'{self.id}:{self.SAMPLE_STREAM}',
+            kind='sample',
+            params={'command': commands[0].text, 'interval': self.interval},
+        )]
+
+    def event_driven(self) -> bool:
+        """Whether pushed events fully replace this monitor's poll. The engine
+        starts no polling loop for a monitor that says yes and has an agent.
+
+        Derived from the stream actually produced, not from SAMPLED alone: a
+        plugin whose commands() is empty or multi-command yields no sample
+        stream, and suppressing its poll would leave it collecting nothing."""
+        return bool(self.sample_streams())
 
     def parse_event(self, stream_id: str, payload: Dict[str, Any],
                     timestamp: float) -> Optional[CollectResult]:
@@ -120,7 +158,20 @@ class Plugin(PluginConfigMixin, ABC):
         inbound frame, so it must stay cheap as well as pure.
 
         `stream_id` identifies which of this plugin's subscriptions fired."""
-        return None
+        return self.parse_sample(stream_id, payload)
+
+    def parse_sample(self, stream_id: str,
+                     payload: Dict[str, Any]) -> Optional[CollectResult]:
+        """Interpret a generic sample frame through the plugin's own parse().
+        The agent sends back the same (exit_code, stdout, stderr) triple the
+        command connector returns, so the poll's parser needs no push variant."""
+        if not stream_id.endswith(f':{self.SAMPLE_STREAM}'):
+            return None
+        return self.parse([CmdResult(
+            int(payload.get('exit_code', -1)),
+            str(payload.get('stdout', '')),
+            str(payload.get('stderr', '')),
+        )])
 
     def get_actions(self) -> List[ActionButtonSpec]:
         return []

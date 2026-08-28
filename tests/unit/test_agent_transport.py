@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from vigil.core.connectors.agent_connector import AgentConnection, AgentRegistry
 from vigil.core.connectors.engine import ConnectorEngine, ExecContext
 from vigil_agent import protocol as proto
+from vigil.core.connectors.types import CmdResult
 
 
 class FakeSocket:
@@ -187,6 +188,7 @@ class TestEventRouting:
         engine = object.__new__(VigilEngine)
         engine.db = db
         engine._event_targets = {plugin.id: plugin}
+        engine._event_targets.update({s.id: plugin for s in plugin.subscriptions()})
         return engine
 
     def test_an_event_is_parsed_and_persisted(self, make_plugin, db_manager):
@@ -194,7 +196,7 @@ class TestEventRouting:
         plugin = make_plugin(Oom, {})
         engine = self._engine(db_manager, plugin)
 
-        engine._on_agent_event('node-a', plugin.id, 1234.0,
+        engine._on_agent_event('node-a', f'{plugin.id}:journal', 1234.0,
                                {'message': 'Out of memory: Killed process 42 (redis)'})
 
         messages = [row['message'] for row in db_manager.recent_events(limit=10)]
@@ -218,9 +220,24 @@ class TestPluginSubscriptions:
     def test_oom_subscribes_to_the_kernel_journal(self, make_plugin):
         from vigil.plugins.oom import Oom
         plugin = make_plugin(Oom, {})
-        spec = plugin.subscriptions()[0]
-        assert (spec.id, spec.kind) == (plugin.id, 'journal')
+        spec = next(s for s in plugin.subscriptions() if s.kind == 'journal')
+        assert spec.id == f'{plugin.id}:journal'
         assert spec.params['kernel'] is True
+
+    def test_a_sampled_plugin_carries_its_poll_command(self, make_plugin):
+        from vigil.plugins.cpu import Cpu
+        plugin = make_plugin(Cpu, {})
+        spec = next(s for s in plugin.subscriptions() if s.kind == 'sample')
+        assert spec.params['command'] == plugin.commands()[0].text
+        assert spec.params['interval'] == plugin.interval
+
+    def test_a_sample_frame_parses_through_the_poll_parser(self, make_plugin):
+        from vigil.plugins.cpu import Cpu
+        plugin = make_plugin(Cpu, {})
+        stdout = 'cpu  100 0 100 800 0 0 0 0\ncpu  200 0 200 1200 0 0 0 0'
+        result = plugin.parse_event(f'{plugin.id}:sample',
+                                    {'exit_code': 0, 'stdout': stdout, 'stderr': ''}, 0.0)
+        assert result.metrics == plugin.parse([CmdResult(0, stdout, '')]).metrics
 
     def test_systemd_subscribes_to_its_own_unit(self, make_plugin):
         from vigil.plugins.systemd_service import SystemdService
@@ -240,3 +257,34 @@ class TestPluginSubscriptions:
         from vigil.plugins.uptime import Uptime
         assert make_plugin(Uptime).subscriptions() == []
 
+
+
+class TestSampleStreamContract:
+    """The generic sample path: a plugin's poll command, run by the agent."""
+
+    def test_a_plugin_is_poll_only_by_default(self, make_plugin):
+        from vigil.plugins.borg import Borg
+        plugin = make_plugin(Borg, {'repo': '/srv/repo'})
+        assert plugin.SAMPLED is False
+        assert plugin.event_driven() is False
+
+    def test_no_stream_without_exactly_one_command(self, make_plugin):
+        """service_list issues two commands, so the generic path cannot carry
+        it and must not claim to — suppressing its poll would collect nothing."""
+        from vigil.plugins.service_list import ServiceList
+        plugin = make_plugin(ServiceList, {})
+        plugin.SAMPLED = True
+        assert plugin.sample_streams() == []
+        assert plugin.event_driven() is False
+
+    def test_a_failing_sample_parses_as_a_failure(self, make_plugin):
+        from vigil.plugins.cpu import Cpu
+        plugin = make_plugin(Cpu, {})
+        result = plugin.parse_event(f'{plugin.id}:sample',
+                                    {'exit_code': 1, 'stdout': '', 'stderr': 'boom'}, 0.0)
+        assert result.status == 'failed'
+
+    def test_a_malformed_frame_does_not_raise(self, make_plugin):
+        from vigil.plugins.cpu import Cpu
+        plugin = make_plugin(Cpu, {})
+        assert plugin.parse_event(f'{plugin.id}:sample', {}, 0.0).status == 'failed'

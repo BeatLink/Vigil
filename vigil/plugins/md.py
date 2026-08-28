@@ -24,6 +24,8 @@ class Md(SignalPlugin):
     """Linux software RAID health from /proc/mdstat — the mdadm sibling of the
     zfs monitor, counting arrays that are clean, degraded or rebuilding."""
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         return [Command("cat /proc/mdstat 2>&1")]
 

@@ -211,6 +211,8 @@ class Qbittorrent(Plugin):
         register_color_rule(self._errored_color_name)(
             lambda v: None if v is None else ('failed' if int(v) else 'online'))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         script = _build_fetch_script(
             self.api_url, self.api_timeout, self.password_command,

@@ -302,6 +302,8 @@ class TestPerMonitorScheduling:
 
         leaf = MagicMock(id="leaf", children=[], interval=60)
         group = MagicMock(id="group", children=[leaf], interval=60)
+        for p in (leaf, group):
+            p.event_driven.return_value = False
         engine.plugins = [group]
         engine._start_exporters = MagicMock()
 
@@ -319,6 +321,66 @@ class TestPerMonitorScheduling:
         monitor_tasks = [c for c in created if c.cr_code.co_name == "_monitor_loop"]
         assert len(monitor_tasks) == 2
         assert any(c.cr_code.co_name == "_prune_loop" for c in created)
+
+    async def test_run_starts_no_loop_for_an_agent_collected_monitor(self, tmp_path):
+        """A monitor whose agent samples for it needs no polling task; one that
+        declares no stream still gets one, on the same agent."""
+        cfg_path = str(tmp_path / "config.yaml")
+        import yaml
+        with open(cfg_path, "w") as fh:
+            yaml.dump({"database": {"path": str(tmp_path / "t.db")}, "plugins": []}, fh)
+
+        with patch("vigil.core.connectors.engine.SSHConnection"):
+            engine = VigilEngine(cfg_path)
+
+        sampled = MagicMock(id="sampled", children=[], interval=60)
+        sampled.event_driven.return_value = True
+        polled = MagicMock(id="polled", children=[], interval=60)
+        polled.event_driven.return_value = False
+        engine.plugins = [sampled, polled]
+        engine._start_exporters = MagicMock()
+        engine._net = {p.id: MagicMock(is_agent=True) for p in (sampled, polled)}
+
+        created = []
+
+        def spy_create_task(coro, *a, **kw):
+            created.append(coro)
+            coro.close()
+            return MagicMock()
+
+        with patch("vigil.core.coordination.engine.asyncio.create_task", side_effect=spy_create_task):
+            await engine.run()
+
+        assert len([c for c in created if c.cr_code.co_name == "_monitor_loop"]) == 1
+
+    async def test_an_ssh_monitor_always_polls(self, tmp_path):
+        """Streams are never registered without an agent, so event_driven() must
+        not be allowed to silence the only collection path a target has."""
+        cfg_path = str(tmp_path / "config.yaml")
+        import yaml
+        with open(cfg_path, "w") as fh:
+            yaml.dump({"database": {"path": str(tmp_path / "t.db")}, "plugins": []}, fh)
+
+        with patch("vigil.core.connectors.engine.SSHConnection"):
+            engine = VigilEngine(cfg_path)
+
+        plugin = MagicMock(id="over-ssh", children=[], interval=60)
+        plugin.event_driven.return_value = True
+        engine.plugins = [plugin]
+        engine._start_exporters = MagicMock()
+        engine._net = {plugin.id: MagicMock(is_agent=False)}
+
+        created = []
+
+        def spy_create_task(coro, *a, **kw):
+            created.append(coro)
+            coro.close()
+            return MagicMock()
+
+        with patch("vigil.core.coordination.engine.asyncio.create_task", side_effect=spy_create_task):
+            await engine.run()
+
+        assert len([c for c in created if c.cr_code.co_name == "_monitor_loop"]) == 1
 
 
 class TestExceptionIsolation:

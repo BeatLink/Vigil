@@ -147,6 +147,8 @@ class Pihole(Plugin):
         register_color_rule(self._blocking_color_name)(
             lambda v: None if v is None else ('online' if v >= 1.0 else 'failed'))
 
+    SAMPLED = True
+
     def commands(self) -> List[Command]:
         script = _build_fetch_script(
             self.api_url, self.api_timeout,
