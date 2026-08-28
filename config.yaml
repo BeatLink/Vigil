@@ -177,6 +177,7 @@ plugins:
             warning: 80          # pool capacity % (warn / fail)
             threshold: 90
             # pools: ["tank"]    # optional; omit to list every pool
+          md: {}                 # mdadm arrays from /proc/mdstat
           io: {}                 # device: "nvme0n1" — omit to auto-detect the busiest disk
         ssh_config:
           host: "server.example.com"
@@ -258,16 +259,6 @@ plugins:
           - "nginx"
           - "postgres"
         stopped_warning: true  # any other stopped container -> warning
-        ssh_config:
-          host: "server.example.com"
-
-  - name: "RAID"
-    type: "group"
-    children:
-      - name: "Software RAID"
-        id: "server-raid"
-        type: "raid"           # parses /proc/mdstat (mdadm)
-        interval: 5m
         ssh_config:
           host: "server.example.com"
 

@@ -144,7 +144,6 @@ theme:
 | [`ports`](#ports)                       | TCP port / URL reachability           | SSH (`/dev/tcp`, `curl`)                         | `<check>_up`, `<check>_latency_ms`              | — |
 | [`borg`](#borg)                         | Borg backup freshness                 | SSH (`borg list`)                                | `archive_count`, `last_backup_epoch`            | — |
 | [`containers`](#containers)             | Docker / Podman container states      | SSH (`docker`/`podman ps`)                       | `containers_total`, `containers_running`, `containers_stopped` | Restart (per expected container) |
-| [`raid`](#raid)                         | Linux software RAID (mdadm) health    | SSH (`/proc/mdstat`)                             | `arrays_total`, `arrays_ok`, `arrays_degraded`  | — |
 | [`command`](#command)                   | Arbitrary command (generic check)     | SSH (any command)                                | `exit_code` (+ `value` in pattern mode)         | — |
 | [`filesystems`](#filesystems)           | All mounted filesystems (auto-discovered) | SSH (`df`)                                    | `worst_used_pct`, `fs_<mount>_used_pct`         | — |
 | [`folders`](#folders)                   | Sizes of arbitrary directories        | SSH (`du`)                                        | `worst_folder_gb`, `folder_<path>_gb`           | — |
@@ -158,7 +157,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `disks`, `disk_space`, `network`, `ports`, `system_stats`, `processes`, `borg`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `disks`, `disk_space`, `network`, `ports`, `system_stats`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -407,7 +406,7 @@ The service browser renders a sortable table of all units, and offers per-unit a
 ---
 
 ### `disks`
-Collects a host's storage signals — SMART disk health, ZFS pool state and capacity, and disk I/O throughput — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Modules have a working default**: omit `modules` and the monitor runs `io`, the one storage signal that needs no extra package, no privileges and no particular hardware. `smart` needs `smartctl` and `sudo`, and `zfs` needs a pool, so both are opt-in rather than reporting offline on a host that has neither. Name anything in `modules` and the config is driving: only what you name runs, and the defaults no longer apply. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
+Collects a host's storage signals — SMART disk health, ZFS pool state and capacity, mdadm array health, and disk I/O throughput — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Modules have a working default**: omit `modules` and the monitor runs `io`, the one storage signal that needs no extra package, no privileges and no particular hardware. `smart` needs `smartctl` and `sudo`, and `zfs` needs a pool, so both are opt-in rather than reporting offline on a host that has neither. Name anything in `modules` and the config is driving: only what you name runs, and the defaults no longer apply. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
 
 > The `smart` module needs passwordless `sudo` access to `smartctl` for the SSH user (e.g. `vigil ALL=(ALL) NOPASSWD: /usr/bin/smartctl`).
 
@@ -421,9 +420,12 @@ Collects a host's storage signals — SMART disk health, ZFS pool state and capa
 |---------|---------------|---------|---------|
 | `smart` | `lsblk` to discover disks, then `smartctl -H` on each (USB-attached disks with `-d sat`) | — | `disks_total`, `disks_ok`, `disks_failed`, `disks_unknown` |
 | `zfs`   | `zpool list -H -o name,health,capacity` | `warning` (default `80`), `threshold` (default `90`) — pool capacity %; `pools` — pool names to list (omit for all) | `pools_total`, `pools_ok`, `pools_degraded`, `zfs_usage_max`, `pool_usage_<pool>` per pool |
+| `md`    | `cat /proc/mdstat` | — | `arrays_total`, `arrays_ok`, `arrays_degraded` |
 | `io`    | two `/proc/diskstats` samples 1s apart, in one command | `device` — disk to measure (omit to auto-detect the busiest) | `read_kbps`, `write_kbps` |
 
 The overall status is the worst status of the enabled modules (`online` < `offline` < `warning` < `failed`), and each module logs its own line every cycle. A failed command is contained to its own module — a host with no ZFS leaves `smart` and `io` collecting normally.
+
+`md` reads each array's `[N/M] [UU__]` line: any array with a down disk (`_`) or fewer active disks than expected reports **failed**, one undergoing resync/recovery/reshape reports **warning**, and a host with no arrays at all reports **offline** rather than pretending to be clean.
 
 `smart` classifies by positive assertion: only an explicit `PASSED` verdict counts as healthy, and a disk whose health could not be read counts as **failed**, never as fine. Virtual block devices that `lsblk` calls disks (`zram`, ZFS zvols, `loop`, `md`, `dm-`) are skipped rather than probed. `zfs` fails a pool in a `DEGRADED`, `FAULTED`, `OFFLINE`, `UNAVAIL` or `REMOVED` state regardless of its capacity. `io` auto-detects the physical disk with the most sector traffic across the two samples, ignoring partitions and virtual nodes, and persists the disk actually in use to show on its card.
 
@@ -688,27 +690,6 @@ For safety, the restart action only ever targets containers explicitly listed in
   expect_running:
     - "nginx"
     - "postgres"
-  ssh_config:
-    host: "server.example.com"
-```
-
----
-
-### `raid`
-Monitors Linux software RAID (mdadm) array health over SSH by parsing `/proc/mdstat`. Each array's `[N/M] [UU__]` status is checked: any array with a down disk (`_`) or fewer active disks than expected reports **failed**; an array undergoing resync/recovery/reshape reports **warning**; all-clean reports **online**. Complements the ZFS plugins for hosts using classic mdraid. Reports **offline** when no arrays are present.
-
-| Option       | Description                                                  |
-|--------------|--------------------------------------------------------------|
-| `interval`   | Polling frequency (default: `60`; `5m` is usually plenty)   |
-| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
-
-**Metrics**: `arrays_total`, `arrays_ok`, `arrays_degraded`
-
-```yaml
-- name: "Software RAID"
-  id: "server-raid"
-  type: "raid"
-  interval: 5m
   ssh_config:
     host: "server.example.com"
 ```

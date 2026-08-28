@@ -61,10 +61,12 @@ and charts. [network.py](vigil/plugins/network.py) follows the same shape for th
 connections and wifi, and [disks.py](vigil/plugins/disks.py) for smart, zfs and io. One
 consolidation is left:
 
-- [ ] **Filesystem modules** — fold [filesystems.py](vigil/plugins/filesystems.py) and
-      [raid.py](vigil/plugins/raid.py) into [disks.py](vigil/plugins/disks.py) as further modules.
-      No longer blocked: a module now takes its own `interval`, so `smartctl` can run hourly
-      inside a monitor that reads `/proc` every minute.
+- [x] **mdadm module** — `raid.py` is now the `md` module of
+      [disks.py](vigil/plugins/disks.py), the mdadm sibling of `zfs`.
+- [ ] **Filesystem modules** — whether [filesystems.py](vigil/plugins/filesystems.py) should
+      follow is open. It passes the domain test but not the end-user one: `disk_space` and
+      `folders` exist so a named path gets its *own* status and alert, and folding them into a
+      roll-up would take that away. Merge `filesystems` only, or leave all three.
 - [x] **Per-module intervals** — a module may set its own `interval` in the `modules` block;
       the plugin only issues the commands of the modules due that cycle and holds a resting
       module's last status, so a slow check never lapses to online between runs. Implemented on

@@ -15,7 +15,7 @@ BASE_CFG = {
     "ssh_config": {"host": "test.host"},
 }
 
-ALL_MODULES = ['smart', 'zfs', 'io']
+ALL_MODULES = ['smart', 'zfs', 'md', 'io']
 
 
 def _make_diskstats(devices: dict) -> str:
@@ -29,16 +29,45 @@ def _two_snaps(d1: dict, d2: dict) -> str:
     return _make_diskstats(d1) + "---SNAP---\n" + _make_diskstats(d2)
 
 
+_MDSTAT_CLEAN = """Personalities : [raid1]
+md0 : active raid1 sdb1[1] sda1[0]
+      1953382464 blocks super 1.2 [2/2] [UU]
+
+unused devices: <none>
+"""
+
+_MDSTAT_DEGRADED = """Personalities : [raid1]
+md0 : active raid1 sda1[0]
+      1953382464 blocks super 1.2 [2/1] [U_]
+
+unused devices: <none>
+"""
+
+_MDSTAT_RECOVERING = """Personalities : [raid1]
+md0 : active raid1 sdb1[1] sda1[0]
+      1953382464 blocks super 1.2 [2/2] [UU]
+      [====>................]  recovery = 22.6% (442k/1953k) finish=30.0min speed=100000K/sec
+
+unused devices: <none>
+"""
+
+_MDSTAT_EMPTY = """Personalities :
+unused devices: <none>
+"""
+
+
 def _make_zpool(pools: dict) -> str:
     return "".join(f"{name}\t{health}\t{capacity}%\n"
                    for name, (health, capacity) in pools.items())
 
 
-def _outputs(plugin, *, smart=None, zpool=None, diskstats=None, codes=None, stderrs=None):
+def _outputs(plugin, *, smart=None, zpool=None, mdstat=None, diskstats=None,
+             codes=None, stderrs=None):
     """Map the plugin's concatenated commands to fake results, in the order
     the enabled modules declared them."""
     smart = smart if smart is not None else "PASS /dev/sda\nPASS /dev/sdb\n"
     zpool = zpool if zpool is not None else _make_zpool({"tank": ("ONLINE", 40)})
+    mdstat = mdstat if mdstat is not None else _MDSTAT_CLEAN
     diskstats = diskstats if diskstats is not None else _two_snaps(
         {"sda": (0, 0), "sdb": (0, 0)}, {"sda": (2, 4), "sdb": (0, 0)})
 
@@ -48,6 +77,8 @@ def _outputs(plugin, *, smart=None, zpool=None, diskstats=None, codes=None, stde
             bodies.append(smart)
         elif 'zpool' in command.text:
             bodies.append(zpool)
+        elif 'mdstat' in command.text:
+            bodies.append(mdstat)
         else:
             bodies.append(diskstats)
     codes = codes or [0] * len(bodies)
@@ -84,7 +115,7 @@ def plugin(make_plugin):
 
 class TestModuleSelection:
     def test_known_modules_are_in_canonical_order(self, plugin):
-        assert [m.key for m in plugin.modules] == ['smart', 'zfs', 'io']
+        assert [m.key for m in plugin.modules] == ['smart', 'zfs', 'md', 'io']
 
     def test_every_module_is_opt_in(self, make_plugin):
         p = make_plugin(Disks, dict(BASE_CFG, modules=['io', 'smart']))
@@ -112,7 +143,7 @@ class TestModuleSelection:
 
     def test_unknown_module_rejected(self, make_plugin):
         with pytest.raises(ValueError, match="unknown module"):
-            make_plugin(Disks, dict(BASE_CFG, modules=['raid']))
+            make_plugin(Disks, dict(BASE_CFG, modules=['nvme_wear']))
 
     def test_bad_modules_type_rejected(self, make_plugin):
         with pytest.raises(ValueError, match="must be a mapping or a list"):
@@ -213,7 +244,8 @@ class TestCollection:
         assert _latest_status() == "failed"
 
     async def test_one_failed_command_does_not_stop_the_others(self, plugin, run_cycle):
-        _collect(plugin, run_cycle, codes=[0, 0, -1], stderrs=["", "", "no device"])
+        _collect(plugin, run_cycle, codes=[0, 0, 0, -1],
+                 stderrs=["", "", "", "no device"])
         assert _latest_metric("disks_ok") == 2
         assert _latest_metric("pools_total") == 1
         assert _latest_status() == "failed"
@@ -424,3 +456,37 @@ class TestUiSpec:
 
     def test_per_pool_repeat_card_is_its_own_row(self, plugin):
         assert ['zfs_pools'] in plugin.UI_SPEC['layout']
+
+
+class TestMdModule:
+    @pytest.fixture
+    def md(self, make_plugin):
+        return make_plugin(Disks, dict(BASE_CFG, modules=['md']))
+
+    async def test_clean_arrays_are_online(self, md, run_cycle):
+        _collect(md, run_cycle, mdstat=_MDSTAT_CLEAN)
+        assert _latest_status() == "online"
+        assert _latest_metric("arrays_total") == pytest.approx(1.0)
+        assert _latest_metric("arrays_ok") == pytest.approx(1.0)
+        assert _latest_metric("arrays_degraded") == pytest.approx(0.0)
+
+    async def test_a_degraded_array_fails(self, md, run_cycle):
+        _collect(md, run_cycle, mdstat=_MDSTAT_DEGRADED)
+        assert _latest_status() == "failed"
+        assert _latest_metric("arrays_degraded") == pytest.approx(1.0)
+
+    async def test_a_rebuilding_array_warns(self, md, run_cycle):
+        _collect(md, run_cycle, mdstat=_MDSTAT_RECOVERING)
+        assert _latest_status() == "warning"
+        assert _latest_metric("arrays_ok") == pytest.approx(1.0)
+
+    async def test_a_host_with_no_arrays_is_offline(self, md, run_cycle):
+        _collect(md, run_cycle, mdstat=_MDSTAT_EMPTY)
+        assert _latest_status() == "offline"
+
+    async def test_an_unreadable_mdstat_fails(self, md, run_cycle):
+        _collect(md, run_cycle, mdstat="", codes=[1], stderrs=["no such file"])
+        assert _latest_status() == "failed"
+
+    async def test_it_contributes_its_cards(self, md):
+        assert {'md_total_card', 'md_ok_card', 'md_degraded_card'} <= set(md.UI_SPEC['cards'])

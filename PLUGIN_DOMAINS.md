@@ -38,6 +38,13 @@ health, capacity, consumption.
 
 Modules: `smart`, `zfs`, `md`, `io`, `filesystems`, `paths`.
 
+**Decided:** `md` is in — it is the mdadm sibling of `zfs` and reads `/proc` like the rest.
+`disk_space` and `folders` stay separate plugins. They are mechanically near-identical to
+`filesystems`, but they exist so that a *named* path carries its own status, its own alert and
+its own line on the dashboard; a roll-up over `paths:` would take exactly that away. The
+duplication they cost is the maintainer's problem, and the fix for it is a shared parser, not a
+merged plugin.
+
 ### 2. Workloads
 
 **Merge** [systemd_service.py](vigil/plugins/systemd_service.py) + [service_list.py](vigil/plugins/service_list.py)
@@ -61,6 +68,14 @@ differ only in arity — one unit with a journal tail vs. all units — the same
 `services: [foo]` means these, with journals.
 
 Modules: `systemd`, `containers`, `libvirt`, `processes`.
+
+**Decided against.** This merge fails the end-user test the storage one passes. A user does not
+think of `nginx` as a signal about a host; they think of it as a thing they name, watch and
+restart on its own. `systemd_service` being per-unit *is* the feature — one named monitor, one
+status line, one restart button. Folding it into a super-plugin would bury each unit as a module
+and take all three away, and `containers`, `vms` and `processes` enumerate individually-named
+items for the same reason. Podman, libvirt and `/proc` also share no mechanism underneath, so
+nothing is saved: the merge would relocate config ceremony without removing a line of code.
 
 ### 3. Reachability
 
