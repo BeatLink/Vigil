@@ -295,17 +295,34 @@ class VigilEngine:
         plugin's pure parse_results() turns the results into a CollectResult
         the Database Engine persists. The rare plugin with genuinely
         sequential/conditional local IO uses io_call() instead."""
+        started = time.perf_counter()
         io_fn = plugin.io_call()
         if io_fn is not None:
             io_result = await self._run_io(io_fn)
+            collected = time.perf_counter()
             result = plugin.parse_results([io_result])
+            did_io = True
         else:
             requests = plugin.requests()
             net = self._net_for(plugin)
             results = await self.connectors.run(net, requests) if requests else []
+            collected = time.perf_counter()
             result = plugin.parse_results(results)
+            did_io = bool(requests)
+        parsed = time.perf_counter()
         self._apply(plugin, result)
+        if did_io:
+            self._record_cycle_timing(plugin, started, collected, parsed)
         return True
+
+    def _record_cycle_timing(self, plugin: Plugin, started: float,
+                             collected: float, parsed: float) -> None:
+        """Record where a cycle's wall clock went, split so that transport cost
+        and parse cost are separable rather than one opaque total."""
+        self.db.insert_metric(plugin.target, plugin.id,
+                              "cycle_collect_seconds", collected - started)
+        self.db.insert_metric(plugin.target, plugin.id,
+                              "cycle_parse_seconds", parsed - collected)
 
     async def run_cycle_now(self, plugin: Plugin) -> bool:
         """Single-flight wrapper for out-of-band (dashboard-poll-triggered)
