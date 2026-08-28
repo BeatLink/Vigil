@@ -121,8 +121,12 @@ class TestModuleSelection:
         assert [m.key for m in p.modules] == ['cpu', 'gpu']
         assert len(p.commands()) == 2
 
-    def test_an_absent_modules_block_enables_nothing(self, make_plugin):
-        assert make_plugin(SystemStats, BASE_CFG).modules == []
+    def test_an_absent_modules_block_enables_the_defaults(self, make_plugin):
+        assert [m.key for m in make_plugin(SystemStats, BASE_CFG).modules] == [
+            'cpu', 'memory', 'load', 'oom']
+
+    def test_an_empty_modules_block_enables_nothing(self, make_plugin):
+        assert make_plugin(SystemStats, dict(BASE_CFG, modules=[])).modules == []
 
     def test_list_form_selects_modules(self, make_plugin):
         p = make_plugin(SystemStats, dict(BASE_CFG, modules=['oom', 'memory']))
@@ -150,8 +154,11 @@ class TestModuleSelection:
         with pytest.raises(ValueError, match="must be a mapping or a list"):
             make_plugin(SystemStats, dict(BASE_CFG, modules="memory"))
 
-    def test_module_options_of_an_absent_block_are_empty(self):
-        assert _module_options({}) == {}
+    def test_module_options_of_an_absent_block_are_the_defaults(self):
+        assert list(_module_options({})) == ['cpu', 'memory', 'load', 'oom']
+
+    def test_module_options_of_an_empty_block_are_empty(self):
+        assert _module_options({'modules': []}) == {}
 
 
 class TestCollection:
@@ -206,7 +213,7 @@ class TestCollection:
         assert _latest_metric("load_pct_1m") == pytest.approx(25.0)
 
     async def test_no_modules_enabled_reports_offline(self, make_plugin, run_cycle):
-        p = make_plugin(SystemStats, BASE_CFG)
+        p = make_plugin(SystemStats, dict(BASE_CFG, modules=[]))
         run_cycle(p)
         assert _latest_status() == "offline"
 

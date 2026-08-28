@@ -407,13 +407,13 @@ The service browser renders a sortable table of all units, and offers per-unit a
 ---
 
 ### `disks`
-Collects a host's storage signals — SMART disk health, ZFS pool state and capacity, and disk I/O throughput — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Every module is opt-in**: only the ones named in `modules` run, and one that is off costs no command, no metric and no widget. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
+Collects a host's storage signals — SMART disk health, ZFS pool state and capacity, and disk I/O throughput — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Modules have a working default**: omit `modules` and the monitor runs `io`, the one storage signal that needs no extra package, no privileges and no particular hardware. `smart` needs `smartctl` and `sudo`, and `zfs` needs a pool, so both are opt-in rather than reporting offline on a host that has neither. Name anything in `modules` and the config is driving: only what you name runs, and the defaults no longer apply. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
 
 > The `smart` module needs passwordless `sudo` access to `smartctl` for the SSH user (e.g. `vigil ALL=(ALL) NOPASSWD: /usr/bin/smartctl`).
 
 | Option    | Description                                                                 |
 |-----------|-----------------------------------------------------------------------------|
-| `modules` | Which modules to run, and their options — a mapping of module name → options, or a plain list of names to take their defaults. Nothing runs until a module is named here, and a named module can be turned back off with `false` (or `enabled: false`) without deleting its options. |
+| `modules` | Which modules to run. A plain list of names — `modules: ["cpu", "memory"]` — takes each one's defaults; use a mapping of name → options when you need to tune one. Omit the key entirely for the default set above. A named module can be turned back off with `false` (or `enabled: false`) without deleting its options, and an empty list selects nothing at all. |
 | `interval`| Polling frequency (default: `60`), and the floor for any module's own `interval`. `smartctl` is slow and its answer changes rarely, so give the `smart` module an `interval` of its own. |
 | `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below              |
 
@@ -428,6 +428,17 @@ The overall status is the worst status of the enabled modules (`online` < `offli
 `smart` classifies by positive assertion: only an explicit `PASSED` verdict counts as healthy, and a disk whose health could not be read counts as **failed**, never as fine. Virtual block devices that `lsblk` calls disks (`zram`, ZFS zvols, `loop`, `md`, `dm-`) are skipped rather than probed. `zfs` fails a pool in a `DEGRADED`, `FAULTED`, `OFFLINE`, `UNAVAIL` or `REMOVED` state regardless of its capacity. `io` auto-detects the physical disk with the most sector traffic across the two samples, ignoring partitions and virtual nodes, and persists the disk actually in use to show on its card.
 
 ```yaml
+# The default set — disk I/O, nothing to install
+- name: "Ragnarok Disks"
+  id: "ragnarok-disks"
+  type: "disks"
+  interval: 1m
+  ssh_config:
+    host: "ragnarok.technet"
+```
+
+```yaml
+# Naming modules replaces the defaults rather than adding to them
 - name: "Ragnarok Disks"
   id: "ragnarok-disks"
   type: "disks"
@@ -483,11 +494,11 @@ Monitors disk space usage for a path or mountpoint over SSH via `df`. Works on a
 ---
 
 ### `system_stats`
-Collects the basic health signals of a host — CPU, memory, load average, temperature, interrupts, GPU and kernel OOM kills — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Every module is opt-in**: only the ones named in `modules` run, and one that is off costs no command, no metric and no widget. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
+Collects the basic health signals of a host — CPU, memory, load average, temperature, interrupts, GPU and kernel OOM kills — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Modules have a working default**: omit `modules` and the monitor runs `cpu`, `memory`, `load` and `oom` — the signals every Linux host can produce from `/proc` alone. `temperature` and `interrupts` are absent or meaningless on plenty of hosts and `gpu` is `nvidia-smi`-only, so those are opt-in rather than reporting offline for hardware the host does not have. Name anything in `modules` and the config is driving: only what you name runs, and the defaults no longer apply. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
 
 | Option    | Description                                                                 |
 |-----------|-----------------------------------------------------------------------------|
-| `modules` | Which modules to run, and their options — a mapping of module name → options, or a plain list of names to take their defaults. Nothing runs until a module is named here, and a named module can be turned back off with `false` (or `enabled: false`) without deleting its options. |
+| `modules` | Which modules to run. A plain list of names — `modules: ["cpu", "memory"]` — takes each one's defaults; use a mapping of name → options when you need to tune one. Omit the key entirely for the default set above. A named module can be turned back off with `false` (or `enabled: false`) without deleting its options, and an empty list selects nothing at all. |
 | `interval`| Polling frequency (default: `60`)                                            |
 | `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below              |
 
@@ -508,6 +519,17 @@ On an agent-backed host the `oom` module also follows the kernel journal, so a k
 A wedged NVIDIA driver — typically a dGPU that failed to restore from suspend — leaves `nvidia-smi` in uninterruptible sleep, where the connector's terminate/kill has no effect. Left alone, every interval would strand another unkillable process on the target until it reboots. After `timeout_trip` consecutive timeouts the `gpu` module therefore stops issuing the command entirely and reports **offline** for `suspend_seconds`, then retries once; a successful collection clears the count.
 
 ```yaml
+# The default set — cpu, memory, load and oom
+- name: "Heimdall System"
+  id: "heimdall-system"
+  type: "system_stats"
+  interval: 1m
+  ssh_config:
+    host: "heimdall.example.com"
+```
+
+```yaml
+# Tuning any module replaces the defaults rather than adding to them
 - name: "Heimdall System"
   id: "heimdall-system"
   type: "system_stats"
@@ -539,7 +561,7 @@ A wedged NVIDIA driver — typically a dGPU that failed to restore from suspend 
 ```
 
 ```yaml
-# One module only — anything not named is simply off
+# One module only — naming it turns the defaults off
 - name: "Ragnarok GPU"
   id: "ragnarok-gpu"
   type: "system_stats"
@@ -582,11 +604,11 @@ Monitors running processes over SSH via `ps`, sorted by CPU usage. Process data 
 ---
 
 ### `network`
-Collects a host's networking signals — interface throughput, TCP connection states and WiFi link quality — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Every module is opt-in**: only the ones named in `modules` run, and one that is off costs no command, no metric and no widget. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
+Collects a host's networking signals — interface throughput, TCP connection states and WiFi link quality — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Modules have a working default**: omit `modules` and the monitor runs `throughput` and `connections`, both of which read `/proc` on any host. `wifi` is opt-in because a wired host has no link to report on. Name anything in `modules` and the config is driving: only what you name runs, and the defaults no longer apply. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
 
 | Option    | Description                                                                 |
 |-----------|-----------------------------------------------------------------------------|
-| `modules` | Which modules to run, and their options — a mapping of module name → options, or a plain list of names to take their defaults. Nothing runs until a module is named here, and a named module can be turned back off with `false` (or `enabled: false`) without deleting its options. |
+| `modules` | Which modules to run. A plain list of names — `modules: ["cpu", "memory"]` — takes each one's defaults; use a mapping of name → options when you need to tune one. Omit the key entirely for the default set above. A named module can be turned back off with `false` (or `enabled: false`) without deleting its options, and an empty list selects nothing at all. |
 | `interval`| Polling frequency (default: `60`). Shorter intervals give finer-grained trend history. |
 | `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below              |
 
@@ -601,6 +623,17 @@ The overall status is the worst status of the enabled modules (`online` < `offli
 Both interface-based modules auto-detect when no `interface` is given: `throughput` picks the non-virtual, non-loopback interface with the highest cumulative byte count (ignoring `lo`, `veth`, `docker`, `virbr`, `br-`, `tun`, `tap` prefixes), and `wifi` picks the interface with the best link quality. The interface actually in use is persisted and shown on its card.
 
 ```yaml
+# The default set — throughput and connections
+- name: "Heimdall Network"
+  id: "heimdall-network"
+  type: "network"
+  interval: 30s
+  ssh_config:
+    host: "heimdall.example.com"
+```
+
+```yaml
+# Naming modules replaces the defaults rather than adding to them
 - name: "Heimdall Network"
   id: "heimdall-network"
   type: "network"

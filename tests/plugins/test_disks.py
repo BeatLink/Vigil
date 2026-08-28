@@ -91,8 +91,11 @@ class TestModuleSelection:
         assert [m.key for m in p.modules] == ['smart', 'io']
         assert len(p.commands()) == 2
 
-    def test_an_absent_modules_block_enables_nothing(self, make_plugin):
-        assert make_plugin(Disks, BASE_CFG).modules == []
+    def test_an_absent_modules_block_enables_the_defaults(self, make_plugin):
+        assert [m.key for m in make_plugin(Disks, BASE_CFG).modules] == ['io']
+
+    def test_an_empty_modules_block_enables_nothing(self, make_plugin):
+        assert make_plugin(Disks, dict(BASE_CFG, modules=[])).modules == []
 
     def test_mapping_form_disables_module(self, make_plugin):
         p = make_plugin(Disks, dict(BASE_CFG, modules={
@@ -194,7 +197,7 @@ class TestCollection:
         assert _latest_status() == "online"
 
     async def test_no_modules_reports_offline(self, make_plugin, run_cycle):
-        run_cycle(make_plugin(Disks, BASE_CFG))
+        run_cycle(make_plugin(Disks, dict(BASE_CFG, modules=[])))
         assert _latest_status() == "offline"
 
     async def test_active_device_persisted(self, plugin, run_cycle):

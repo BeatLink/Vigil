@@ -556,8 +556,27 @@ out so they're reusable without dragging in the rest of `plugin_base.py`.
 (`system_stats`, `network`, `disks`) share: the `Module` contract, the `modules`
 block resolver, the severity ordering, and the `ModularPlugin` base that
 concatenates due modules' commands, slices the results back out positionally, and
-assembles the composite `UI_SPEC`. A modular plugin declares `MODULE_TYPES` and
-`MODULE_LABEL` and adds only what is genuinely its own.
+assembles the composite `UI_SPEC`. A modular plugin declares `MODULE_TYPES`,
+`MODULE_LABEL` and `DEFAULT_MODULES`, and adds only what is genuinely its own.
+
+**Defaults are all-or-nothing, deliberately.** Omitting `modules` selects
+`DEFAULT_MODULES`; naming *anything* means the config is driving and only what it
+names runs. The alternative — merging the named modules over the defaults, with
+`false` to opt back out — makes the effective set a function of two places at
+once, and the failure it produces is a module the user never asked for quietly
+collecting. One rule, stated in the plugin's docs, beats a merge users have to
+simulate in their heads.
+
+A default set must therefore be safe on a host that has nothing: every module in
+one reads `/proc` or `/sys` with no extra package, no privileges and no
+particular hardware. That is why `smart` (needs `smartctl` and `sudo`), `zfs`
+(needs a pool), `gpu` (`nvidia-smi`-only), `wifi` (needs a radio) and
+`temperature` (needs sensors) are all opt-in: defaulting them on would make a
+bare monitor report offline for hardware the host simply does not have, and
+`offline` outranks `online` in the roll-up.
+
+An empty `modules` list is still an error, since it can only be deliberate: it is
+the one way to ask for a monitor that collects nothing.
 
 ## Testing
 

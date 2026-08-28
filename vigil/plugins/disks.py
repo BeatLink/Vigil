@@ -370,14 +370,12 @@ class _IoModule(_Module):
 _MODULE_TYPES = [_SmartModule, _ZfsModule, _IoModule]
 
 
-def _module_options(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Resolve this plugin's `modules` block to {module key: options}."""
-    return module_options('disks', config, _MODULE_TYPES)
-
-
 class Disks(ModularPlugin):
     MODULE_TYPES = _MODULE_TYPES
     MODULE_LABEL = 'disks'
+    # smart needs smartctl and privileges, zfs needs a pool; both are opt-in so
+    # that a bare monitor works on a VM with neither.
+    DEFAULT_MODULES = ('io',)
 
     @property
     def _io_device(self) -> str:
@@ -396,3 +394,10 @@ def _nonzero_failed(v):
     if v is None:
         return None
     return 'failed' if v else 'online'
+
+
+
+def _module_options(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Resolve this plugin's `modules` block to {module key: options}."""
+    return module_options('disks', config, _MODULE_TYPES,
+                          Disks.DEFAULT_MODULES)

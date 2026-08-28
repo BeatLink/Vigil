@@ -338,14 +338,11 @@ class _WifiModule(_Module):
 _MODULE_TYPES = [_ThroughputModule, _ConnectionsModule, _WifiModule]
 
 
-def _module_options(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Resolve this plugin's `modules` block to {module key: options}."""
-    return module_options('network', config, _MODULE_TYPES)
-
-
 class Network(ModularPlugin):
     MODULE_TYPES = _MODULE_TYPES
     MODULE_LABEL = 'network'
+    # wifi stays opt-in: a wired host has no link to report on.
+    DEFAULT_MODULES = ('throughput', 'connections')
 
     @property
     def _throughput_interface(self) -> str:
@@ -356,3 +353,9 @@ class Network(ModularPlugin):
     def _wifi_interface(self) -> str:
         module = self._module('wifi')
         return module.active_interface_text if module else '--'
+
+
+def _module_options(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Resolve this plugin's `modules` block to {module key: options}."""
+    return module_options('network', config, _MODULE_TYPES,
+                          Network.DEFAULT_MODULES)

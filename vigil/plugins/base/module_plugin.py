@@ -95,14 +95,16 @@ class Module:
 # ---------------------------------------------------------------------------
 
 def module_options(label: str, config: Dict[str, Any],
-                   module_types: Sequence[type]) -> Dict[str, Dict[str, Any]]:
-    """Resolve the `modules` config block to {module key: options}, where every
-    module is opt-in and an absent one is off."""
+                   module_types: Sequence[type],
+                   defaults: Sequence[str] = ()) -> Dict[str, Dict[str, Any]]:
+    """Resolve the `modules` config block to {module key: options}. Omitting the
+    block entirely selects `defaults`; naming anything means the config is
+    driving, and only what it names is on."""
     known = [t.key for t in module_types]
     raw = config.get('modules')
 
     if raw is None:
-        return {}
+        return {key: {} for key in known if key in defaults}
 
     if isinstance(raw, list):
         requested = {key: {} for key in raw}
@@ -135,9 +137,15 @@ class ModularPlugin(Plugin):
     MODULE_TYPES: Sequence[type] = ()
     MODULE_LABEL = ''
 
+    # The modules a monitor runs when its config names none. Every one must work
+    # on an ordinary Linux host with no extra packages, no privileges and no
+    # particular hardware, so a default set never reports offline for absence.
+    DEFAULT_MODULES: Sequence[str] = ()
+
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        options = module_options(self.MODULE_LABEL, config, self.MODULE_TYPES)
+        options = module_options(self.MODULE_LABEL, config, self.MODULE_TYPES,
+                                 self.DEFAULT_MODULES)
         self.modules: List[Module] = [
             module_type(self, options[module_type.key])
             for module_type in self.MODULE_TYPES if module_type.key in options
@@ -185,8 +193,10 @@ class ModularPlugin(Plugin):
         that sat this cycle out."""
         if not self.modules:
             return CollectResult.failed(
-                "No modules enabled — every module is opt-in, so `modules` must "
-                f"name at least one of {[t.key for t in self.MODULE_TYPES]}",
+                "No modules enabled — an empty `modules` block selects nothing. "
+                f"Name at least one of {[t.key for t in self.MODULE_TYPES]}, or "
+                "omit `modules` for the defaults "
+                f"({list(self.DEFAULT_MODULES)}).",
                 level="WARNING", status='offline')
 
         metrics: Dict[str, float] = {}

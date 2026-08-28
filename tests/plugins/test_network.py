@@ -114,8 +114,12 @@ class TestModuleSelection:
         assert [m.key for m in p.modules] == ['throughput', 'wifi']
         assert len(p.commands()) == 2
 
-    def test_an_absent_modules_block_enables_nothing(self, make_plugin):
-        assert make_plugin(Network, BASE_CFG).modules == []
+    def test_an_absent_modules_block_enables_the_defaults(self, make_plugin):
+        assert [m.key for m in make_plugin(Network, BASE_CFG).modules] == [
+            'throughput', 'connections']
+
+    def test_an_empty_modules_block_enables_nothing(self, make_plugin):
+        assert make_plugin(Network, dict(BASE_CFG, modules=[])).modules == []
 
     def test_mapping_form_disables_module(self, make_plugin):
         p = make_plugin(Network, dict(BASE_CFG, modules={
@@ -227,7 +231,7 @@ class TestCollection:
         assert _latest_status() == "online"
 
     async def test_no_modules_reports_offline(self, make_plugin, run_cycle):
-        p = make_plugin(Network, BASE_CFG)
+        p = make_plugin(Network, dict(BASE_CFG, modules=[]))
         run_cycle(p)
         assert _latest_status() == "offline"
 

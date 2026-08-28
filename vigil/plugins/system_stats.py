@@ -717,11 +717,16 @@ _MODULE_TYPES = [_CpuModule, _MemoryModule, _LoadModule, _TemperatureModule,
                  _InterruptsModule, _GpuModule, _OomModule]
 
 
-def _module_options(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Resolve this plugin's `modules` block to {module key: options}."""
-    return module_options('system_stats', config, _MODULE_TYPES)
-
-
 class SystemStats(ModularPlugin):
     MODULE_TYPES = _MODULE_TYPES
     MODULE_LABEL = 'system_stats'
+    # temperature, interrupts and gpu stay opt-in: the first two are absent on
+    # plenty of hosts and gpu is nvidia-smi-only, so defaulting them on would
+    # report offline for hardware the host simply does not have.
+    DEFAULT_MODULES = ('cpu', 'memory', 'load', 'oom')
+
+
+def _module_options(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """Resolve this plugin's `modules` block to {module key: options}."""
+    return module_options('system_stats', config, _MODULE_TYPES,
+                          SystemStats.DEFAULT_MODULES)

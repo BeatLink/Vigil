@@ -89,7 +89,7 @@ plugins:
         id: "server-system"
         type: "system_stats"
         interval: 1m
-        modules:                 # every module is opt-in; an undeclared one is off
+        modules:                 # omit for the defaults; naming any turns the rest off
           cpu:
             warning: 70          # CPU % (warn / fail)
             threshold: 85
@@ -170,7 +170,7 @@ plugins:
         id: "server-disks"
         type: "disks"
         interval: 1m
-        modules:                 # every module is opt-in; an undeclared one is off
+        modules:                 # omit for the defaults; naming any turns the rest off
           smart:
             interval: 1h         # smartctl is slow and rarely changes its answer
           zfs:
@@ -178,6 +178,14 @@ plugins:
             threshold: 90
             # pools: ["tank"]    # optional; omit to list every pool
           io: {}                 # device: "nvme0n1" — omit to auto-detect the busiest disk
+        ssh_config:
+          host: "server.example.com"
+      # Omit `modules` entirely and the monitor runs its defaults — for
+      # system_stats that is cpu, memory, load and oom.
+      - name: "Host"
+        id: "server-host"
+        type: "system_stats"
+        interval: 1m
         ssh_config:
           host: "server.example.com"
       - name: "Interrupts"
