@@ -144,6 +144,16 @@ iteration at boot. Exceptions are caught per-iteration, so one crashing monitor
 never stops its own future polls or anyone else's. Group plugins get a loop too;
 they re-read live child status from the DB each cycle.
 
+A modular monitor subdivides its own cycle: a module in the `modules` block may
+carry an `interval` of its own, and the plugin issues the commands of only the
+modules due that cycle. The monitor's `interval` is therefore the floor, not the
+schedule — a module asking for less than it gets collected every cycle. Because a
+resting module contributes no result, the plugin holds its last status and folds
+that into the worst-status roll-up, so an hourly `smart` check does not read as
+online for the 59 minutes between probes. Metrics are deliberately *not* carried:
+`latest_metric` already returns the last value written, and forging samples would
+put points on a chart that were never measured.
+
 `run_cycle_now` is single-flight per plugin (`_collecting[id]`), shared by the
 scheduler and any out-of-band (dashboard-triggered) collection, so a slow cycle
 never overlaps itself.
@@ -511,6 +521,13 @@ helpers (`parse_duration`, `format_duration`, `format_bytes`, `level_for`), spli
 out so they're reusable without dragging in the rest of `plugin_base.py`.
 `parse_duration` accepts plain numbers or strings like `'1w'`, `'7d'`,
 `'2h30m'`, `'30s'`, including compound forms like `'1d12h'`.
+
+`plugins/base/module_plugin.py` holds the scaffolding the modular monitors
+(`system_stats`, `network`, `disks`) share: the `Module` contract, the `modules`
+block resolver, the severity ordering, and the `ModularPlugin` base that
+concatenates due modules' commands, slices the results back out positionally, and
+assembles the composite `UI_SPEC`. A modular plugin declares `MODULE_TYPES` and
+`MODULE_LABEL` and adds only what is genuinely its own.
 
 ## Testing
 

@@ -136,16 +136,11 @@ theme:
 | [`ddns_updater`](#ddns_updater)         | Dynamic DNS record kept current       | Public IP lookup + DNS query (in-process)        | `in_sync`, `last_update_epoch`                   | Force Update |
 | [`systemd_service`](#systemd_service)   | systemd unit state / last run         | SSH (`systemctl`)                                | `active` *or* `last_run_epoch`, `last_run_success` | Restart, Stop, Enable, Disable |
 | [`service_list`](#service_list)         | Systemd unit browser and control      | SSH (`systemctl`)                                | `services_total`, `services_active`, `services_failed` | Start, Stop, Restart, Enable, Disable, View Status |
-| [`smart_disk`](#smart_disk)             | Physical disk SMART health            | SSH (`smartctl`)                                 | `disks_total`, `disks_ok`, `disks_failed`       | — |
-| [`zfs_health`](#zfs_health)             | ZFS pool health state                 | SSH (`zpool list`)                               | `pools_total`, `pools_ok`, `pools_degraded`     | — |
-| [`zfs_pool`](#zfs_pool)                 | ZFS pool capacity                     | SSH (`zpool list`)                               | `usage_pct`                                     | — |
+| [`disks`](#disks)                       | SMART disk health, ZFS pool state and capacity, disk I/O throughput | SSH (`smartctl`, `zpool list`, `/proc/diskstats`) | per enabled module — see below | — |
 | [`disk_space`](#disk_space)             | Filesystem usage for a path           | SSH (`df`)                                       | `used_pct`, `size_gb`, `used_gb`, `avail_gb`    | — |
 | [`system_stats`](#system_stats)         | CPU, memory, load, temperature, interrupts, GPU and OOM kills | SSH (`/proc/*`, `/sys/class/thermal`, `nvidia-smi`) | per enabled module — see below | — |
 | [`processes`](#processes)               | Running processes by CPU              | SSH (`ps`)                                       | `process_count`, `top_cpu_pct` *(ephemeral)*    | SIGTERM, SIGKILL |
-| [`network_usage`](#network_usage)       | Network interface throughput          | SSH (`/proc/net/dev`, 2-sample)                  | `rx_kbps`, `tx_kbps`                            | — |
-| [`diskio`](#diskio)                     | Per-disk read/write throughput        | SSH (`/proc/diskstats`, 2-sample)                | `read_kbps`, `write_kbps`                       | — |
-| [`connections`](#connections)           | TCP connection counts by state        | SSH (`/proc/net/tcp`)                            | `total` + per-state (`established`, `listen`, …) | — |
-| [`wifi`](#wifi)                         | WiFi link quality & signal            | SSH (`/proc/net/wireless`)                       | `link_quality`, `signal_dbm`                    | — |
+| [`network`](#network)                   | Interface throughput, TCP connection states and WiFi link | SSH (`/proc/net/dev`, `/proc/net/tcp`, `/proc/net/wireless`) | per enabled module — see below | — |
 | [`ports`](#ports)                       | TCP port / URL reachability           | SSH (`/dev/tcp`, `curl`)                         | `<check>_up`, `<check>_latency_ms`              | — |
 | [`borg`](#borg)                         | Borg backup freshness                 | SSH (`borg list`)                                | `archive_count`, `last_backup_epoch`            | — |
 | [`containers`](#containers)             | Docker / Podman container states      | SSH (`docker`/`podman ps`)                       | `containers_total`, `containers_running`, `containers_stopped` | Restart (per expected container) |
@@ -163,7 +158,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `smart_disk`, `zfs_health`, `zfs_pool`, `disk_space`, `network_usage`, `diskio`, `connections`, `wifi`, `ports`, `system_stats`, `processes`, `borg`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `disks`, `disk_space`, `network`, `ports`, `system_stats`, `processes`, `borg`, `containers`, `raid`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -411,44 +406,51 @@ The service browser renders a sortable table of all units, and offers per-unit a
 
 ---
 
-### `smart_disk`
-Monitors SMART health of all physical disks over SSH. Discovers disks automatically via `lsblk` and runs `smartctl -H` on each one. USB-attached disks are probed with `-d sat`.
+### `disks`
+Collects a host's storage signals — SMART disk health, ZFS pool state and capacity, and disk I/O throughput — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Every module is opt-in**: only the ones named in `modules` run, and one that is off costs no command, no metric and no widget. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
 
-> The SSH user must have passwordless `sudo` access to `smartctl` (e.g. `vigil ALL=(ALL) NOPASSWD: /usr/bin/smartctl`).
+> The `smart` module needs passwordless `sudo` access to `smartctl` for the SSH user (e.g. `vigil ALL=(ALL) NOPASSWD: /usr/bin/smartctl`).
 
-| Option      | Description                                                        |
-|-------------|--------------------------------------------------------------------|
-| `interval`  | Polling frequency in seconds (default: `60`, recommend `3600`)     |
-| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below      |
+| Option    | Description                                                                 |
+|-----------|-----------------------------------------------------------------------------|
+| `modules` | Which modules to run, and their options — a mapping of module name → options, or a plain list of names to take their defaults. Nothing runs until a module is named here, and a named module can be turned back off with `false` (or `enabled: false`) without deleting its options. |
+| `interval`| Polling frequency (default: `60`), and the floor for any module's own `interval`. `smartctl` is slow and its answer changes rarely, so give the `smart` module an `interval` of its own. |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below              |
 
-**Metrics**: `disks_total`, `disks_ok`, `disks_failed`
+| Module  | Collected via | Options | Metrics |
+|---------|---------------|---------|---------|
+| `smart` | `lsblk` to discover disks, then `smartctl -H` on each (USB-attached disks with `-d sat`) | — | `disks_total`, `disks_ok`, `disks_failed`, `disks_unknown` |
+| `zfs`   | `zpool list -H -o name,health,capacity` | `warning` (default `80`), `threshold` (default `90`) — pool capacity %; `pools` — pool names to list (omit for all) | `pools_total`, `pools_ok`, `pools_degraded`, `zfs_usage_max`, `pool_usage_<pool>` per pool |
+| `io`    | two `/proc/diskstats` samples 1s apart, in one command | `device` — disk to measure (omit to auto-detect the busiest) | `read_kbps`, `write_kbps` |
+
+The overall status is the worst status of the enabled modules (`online` < `offline` < `warning` < `failed`), and each module logs its own line every cycle. A failed command is contained to its own module — a host with no ZFS leaves `smart` and `io` collecting normally.
+
+`smart` classifies by positive assertion: only an explicit `PASSED` verdict counts as healthy, and a disk whose health could not be read counts as **failed**, never as fine. Virtual block devices that `lsblk` calls disks (`zram`, ZFS zvols, `loop`, `md`, `dm-`) are skipped rather than probed. `zfs` fails a pool in a `DEGRADED`, `FAULTED`, `OFFLINE`, `UNAVAIL` or `REMOVED` state regardless of its capacity. `io` auto-detects the physical disk with the most sector traffic across the two samples, ignoring partitions and virtual nodes, and persists the disk actually in use to show on its card.
 
 ```yaml
-- name: "Ragnarok SMART"
-  id: "ragnarok-smart"
-  type: "smart_disk"
-  interval: 3600
+- name: "Ragnarok Disks"
+  id: "ragnarok-disks"
+  type: "disks"
+  interval: 1m
+  modules:
+    zfs:
+      warning: 80
+      threshold: 90
+    io: {}
   ssh_config:
     host: "ragnarok.technet"
 ```
 
----
-
-### `zfs_health`
-Monitors ZFS pool health states over SSH via `zpool list -H -o name,health`. Reports failed if any pool is in a `DEGRADED`, `FAULTED`, `OFFLINE`, `UNAVAIL`, or `REMOVED` state. Complements `zfs_pool` (capacity) with structural integrity monitoring.
-
-| Option      | Description                                                        |
-|-------------|--------------------------------------------------------------------|
-| `interval`  | Polling frequency in seconds (default: `60`, recommend `3600`)     |
-| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below      |
-
-**Metrics**: `pools_total`, `pools_ok`, `pools_degraded`
-
 ```yaml
-- name: "Ragnarok ZFS Health"
-  id: "ragnarok-zfs-health"
-  type: "zfs_health"
-  interval: 3600
+# One monitor, but smartctl runs hourly instead of every minute
+- name: "Ragnarok Disks"
+  id: "ragnarok-disks"
+  type: "disks"
+  interval: 1m
+  modules:
+    smart:
+      interval: 1h
+    io: {}
   ssh_config:
     host: "ragnarok.technet"
 ```
@@ -481,7 +483,7 @@ Monitors disk space usage for a path or mountpoint over SSH via `df`. Works on a
 ---
 
 ### `system_stats`
-Collects the basic health signals of a host — CPU, memory, load average, temperature, interrupts, GPU and kernel OOM kills — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Every module is opt-in**: only the ones named in `modules` run, and one that is off costs no command, no metric and no widget.
+Collects the basic health signals of a host — CPU, memory, load average, temperature, interrupts, GPU and kernel OOM kills — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Every module is opt-in**: only the ones named in `modules` run, and one that is off costs no command, no metric and no widget. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
 
 | Option    | Description                                                                 |
 |-----------|-----------------------------------------------------------------------------|
@@ -579,34 +581,51 @@ Monitors running processes over SSH via `ps`, sorted by CPU usage. Process data 
 
 ---
 
-### `network_usage`
-Monitors network interface throughput over SSH. Takes two snapshots of `/proc/net/dev` one second apart in a single SSH command — no extra tools required on the remote host.
+### `network`
+Collects a host's networking signals — interface throughput, TCP connection states and WiFi link quality — as **one** monitor, instead of one plugin instance per signal. Each signal is a module, configured independently, contributing its own cards and charts to the page. **Every module is opt-in**: only the ones named in `modules` run, and one that is off costs no command, no metric and no widget. Each module may also set its own `interval`, so an expensive signal can run far less often than the monitor around it; the monitor holds a resting module's last verdict, so a slow check's status never lapses between runs.
 
-The interface to monitor can be specified explicitly or auto-detected. In auto-detect mode, Vigil picks the non-virtual, non-loopback interface with the highest cumulative byte count, ignoring interfaces with prefixes like `lo`, `veth`, `docker`, `virbr`, `br-`, `tun`, and `tap`.
+| Option    | Description                                                                 |
+|-----------|-----------------------------------------------------------------------------|
+| `modules` | Which modules to run, and their options — a mapping of module name → options, or a plain list of names to take their defaults. Nothing runs until a module is named here, and a named module can be turned back off with `false` (or `enabled: false`) without deleting its options. |
+| `interval`| Polling frequency (default: `60`). Shorter intervals give finer-grained trend history. |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below              |
 
-| Option       | Description                                                                            |
-|--------------|----------------------------------------------------------------------------------------|
-| `interface`  | *(Optional)* Interface name to monitor (e.g. `eth0`). Omit to auto-detect.            |
-| `interval`   | Polling frequency (default: `60`). Shorter intervals give finer-grained trend history. |
-| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below                           |
+| Module        | Collected via | Options | Metrics |
+|---------------|---------------|---------|---------|
+| `throughput`  | two `/proc/net/dev` samples 1s apart, in one command | `interface` — interface to measure (omit to auto-detect the busiest) | `rx_kbps`, `tx_kbps` |
+| `connections` | `/proc/net/tcp` and `/proc/net/tcp6` | `warning` (default `500`), `threshold` (default `1000`) — total sockets per state | `conn_total`; `conn_<state>` per TCP state (`conn_established`, `conn_listen`, `conn_time_wait`, …) |
+| `wifi`        | `/proc/net/wireless` | `interface` (omit to auto-detect the strongest link); `quality_warning` (default `40`), `quality_threshold` (default `20`) — link-quality **floors**, so lower is worse | `link_quality`, `signal_dbm` |
 
-**Metrics**: `rx_kbps`, `tx_kbps`
+The overall status is the worst status of the enabled modules (`online` < `offline` < `warning` < `failed`), and each module logs its own line every cycle. A failed command is contained to its own module — a host with no wireless leaves `throughput` and `connections` collecting normally.
+
+Both interface-based modules auto-detect when no `interface` is given: `throughput` picks the non-virtual, non-loopback interface with the highest cumulative byte count (ignoring `lo`, `veth`, `docker`, `virbr`, `br-`, `tun`, `tap` prefixes), and `wifi` picks the interface with the best link quality. The interface actually in use is persisted and shown on its card.
 
 ```yaml
-# Auto-detect the primary interface
 - name: "Heimdall Network"
   id: "heimdall-network"
-  type: "network_usage"
+  type: "network"
   interval: 30s
+  modules:
+    throughput: {}
+    connections:
+      warning: 500
+      threshold: 1000
+    wifi:
+      quality_warning: 40
+      quality_threshold: 20
   ssh_config:
     host: "heimdall.example.com"
+```
 
-# Monitor a specific interface
+```yaml
+# Throughput on a named interface, and nothing else
 - name: "Ragnarok Network"
   id: "ragnarok-network"
-  type: "network_usage"
+  type: "network"
   interval: 30s
-  interface: "eth0"
+  modules:
+    throughput:
+      interface: "eth0"
   ssh_config:
     host: "ragnarok.example.com"
 ```
@@ -890,11 +909,9 @@ Each named widget within a plugin can be overridden:
 | `systemd_service`  | `host_card`, `service_card`, `status_card`, `time_card`, `logs` *(continuous)* / `host_card`, `service_card`, `maxage_card`, `state_card`, `history`, `logs` *(oneshot)* |
 | `system_stats`     | `host_card`, the enabled modules' cards (`cpu_card`, `mem_pct_card`, `mem_used_card`, `load_1m_card`, `load_5m_card`, `load_15m_card`, `temp_card`, `sensors`, `irq_card`, `ctxt_card`, `gpu_util_card`, `gpu_mem_card`, `gpu_temp_card`, `gpus`, `oom_total_card`, `oom_recent_card`) and charts (`cpu_chart`, `memory_chart`, `load_chart`, `temp_chart`, `irq_chart`, `ctxt_chart`, `gpu_chart`, `oom_chart`), `events` |
 | `processes`        | `host_card`, `count_card`, `top_cpu_card`, `table`, `logs`                  |
-| `network_usage`    | `host_card`, `iface_card`, `rx_card`, `tx_card`, `rx_chart`, `tx_chart`, `logs` |
-| `smart_disk`       | `host_card`, `total_card`, `ok_card`, `failed_card`, `logs`                 |
+| `network`          | `host_card`, the enabled modules' cards (`iface_card`, `rx_card`, `tx_card`, `conn_total_card`, `conn_established_card`, `conn_listen_card`, `conn_timewait_card`, `wifi_iface_card`, `quality_card`, `signal_card`) and charts (`rx_chart`, `tx_chart`, `conn_total_chart`, `conn_established_chart`, `quality_chart`, `signal_chart`), `events` |
+| `disks`            | `host_card`, the enabled modules' cards (`smart_total_card`, `smart_ok_card`, `smart_failed_card`, `zfs_total_card`, `zfs_ok_card`, `zfs_degraded_card`, `zfs_usage_card`, `zfs_pools`, `io_device_card`, `read_card`, `write_card`) and charts (`zfs_chart`, `read_chart`, `write_chart`), `events` |
 | `disk_space`       | `host_card`, `path_card`, `threshold_card`, `usage_card`, `avail_card`, `total_card`, `chart`, `logs` |
-| `zfs_health`       | `host_card`, `total_card`, `ok_card`, `degraded_card`, `logs`               |
-| `zfs_pool`         | `host_card`, `pool_card`, `usage_card`, `threshold_card`, `chart`, `logs`   |
 
 **Examples:**
 
@@ -1087,7 +1104,7 @@ sudo grants the SSH user had rather than as root.
 
 ### SSH Config
 
-All SSH-based plugins (`systemd_service`, `smart_disk`, `zfs_health`, `disk_space`, `network_usage`) accept an `ssh_config` block:
+All SSH-based plugins (`systemd_service`, `disks`, `disk_space`, `network`) accept an `ssh_config` block:
 
 | Field        | Description                                                         |
 |--------------|---------------------------------------------------------------------|

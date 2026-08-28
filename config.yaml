@@ -166,11 +166,18 @@ plugins:
     type: "group"
     grid_columns: 4
     children:
-      - name: "Disk I/O"
-        id: "server-diskio"
-        type: "diskio"
+      - name: "Disks"
+        id: "server-disks"
+        type: "disks"
         interval: 1m
-        # device: "nvme0n1"   # optional; auto-detects the busiest physical disk
+        modules:                 # every module is opt-in; an undeclared one is off
+          smart:
+            interval: 1h         # smartctl is slow and rarely changes its answer
+          zfs:
+            warning: 80          # pool capacity % (warn / fail)
+            threshold: 90
+            # pools: ["tank"]    # optional; omit to list every pool
+          io: {}                 # device: "nvme0n1" — omit to auto-detect the busiest disk
         ssh_config:
           host: "server.example.com"
       - name: "Interrupts"
@@ -183,21 +190,19 @@ plugins:
             threshold: 50000
         ssh_config:
           host: "server.example.com"
-      - name: "Connections"
-        id: "server-connections"
-        type: "connections"
+      - name: "Network"
+        id: "server-network"
+        type: "network"
         interval: 1m
-        total_warning: 500     # total TCP connections
-        total_threshold: 1000
-        ssh_config:
-          host: "server.example.com"
-      - name: "WiFi"
-        id: "server-wifi"
-        type: "wifi"
-        interval: 1m
-        # interface: "wlan0"   # optional; auto-detects the strongest link
-        quality_warning: 40    # link quality floor (warn below)
-        quality_threshold: 20  # link quality floor (fail below)
+        modules:
+          throughput: {}       # interface: "eth0" — omit to auto-detect the busiest
+          connections:
+            warning: 500       # total TCP connections
+            threshold: 1000
+          wifi:
+            # interface: "wlan0"   # optional; auto-detects the strongest link
+            quality_warning: 40    # link quality floor (warn below)
+            quality_threshold: 20  # link quality floor (fail below)
         ssh_config:
           host: "server.example.com"
 

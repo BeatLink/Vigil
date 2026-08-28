@@ -29,7 +29,7 @@ Nothing here is committed work — this is the candidate list.
       already shows this as a `command` example; promoting it to a dedicated plugin removes the
       per-distro shell snippet from every user's config.
 - [ ] **Network interface inventory** — LNXlink `interfaces` lists active NICs and their assigned
-      IPs. Vigil's `network_usage` auto-detects *one* interface for throughput but never reports the
+      IPs. The `network` plugin's `throughput` module auto-detects *one* interface but never reports the
       set of interfaces or their addressing. Useful for catching a dropped link or a changed DHCP lease.
 - [ ] **Logged-in users / active sessions** — LNXlink `current_user` reports the active graphical
       user. The server-side reframing is `who`/`loginctl`/`last`: who is logged in, from where, since
@@ -57,17 +57,20 @@ Nothing here is committed work — this is the candidate list.
 
 `system_stats` now covers the cheap per-host `/proc` and `/sys` signals as opt-in modules
 (cpu, memory, load, temperature, interrupts, gpu, oom), each with its own thresholds, cards
-and charts. Two more consolidations follow the same shape:
+and charts. [network.py](vigil/plugins/network.py) follows the same shape for throughput,
+connections and wifi, and [disks.py](vigil/plugins/disks.py) for smart, zfs and io. One
+consolidation is left:
 
-- [ ] **Networking module** — fold [network_usage.py](vigil/plugins/network_usage.py),
-      [connections.py](vigil/plugins/connections.py) and [wifi.py](vigil/plugins/wifi.py) into one
-      networking monitor built on the same `_Module` contract.
-- [ ] **Filesystem module** — fold [diskio.py](vigil/plugins/diskio.py),
-      [filesystems.py](vigil/plugins/filesystems.py), [smart_disk.py](vigil/plugins/smart_disk.py),
-      [raid.py](vigil/plugins/raid.py) and [zfs_health.py](vigil/plugins/zfs_health.py) similarly.
-      `smartctl` wants a far longer interval than a `/proc` read, so this needs per-module
-      intervals or a separate monitor — a plugin currently has one interval for all its modules.
-- [ ] **Shared delta sampling** — `cpu`, `interrupts`, `diskio` and `network_usage` each take their
+- [ ] **Filesystem modules** — fold [filesystems.py](vigil/plugins/filesystems.py) and
+      [raid.py](vigil/plugins/raid.py) into [disks.py](vigil/plugins/disks.py) as further modules.
+      No longer blocked: a module now takes its own `interval`, so `smartctl` can run hourly
+      inside a monitor that reads `/proc` every minute.
+- [x] **Per-module intervals** — a module may set its own `interval` in the `modules` block;
+      the plugin only issues the commands of the modules due that cycle and holds a resting
+      module's last status, so a slow check never lapses to online between runs. Implemented on
+      the shared [module_plugin.py](vigil/plugins/base/module_plugin.py) scaffolding that
+      `system_stats`, `network` and `disks` now share.
+- [ ] **Shared delta sampling** — `cpu`, `interrupts`, `io` and `throughput` each take their
       own 1s sample, so enabling several costs one sleep apiece. A single snapshot-sleep-snapshot
       command whose output the delta modules slice would collapse them to one.
 
@@ -159,7 +162,7 @@ Of the remaining 17, almost everything is phone↔desktop sync.
 
 - `notification` (sync notifications) and `connectivity_report` (link/carrier status) are weak
   analogues of the roadmap's alerting item and of Vigil's existing
-  [wifi.py](vigil/plugins/wifi.py) / [uptime.py](vigil/plugins/uptime.py). No new work implied.
+  [network.py](vigil/plugins/network.py) / [uptime.py](vigil/plugins/uptime.py). No new work implied.
 - `ping` is covered by [uptime.py](vigil/plugins/uptime.py); `runcommand` by
   [command.py](vigil/plugins/command.py) plus the action framework.
 

@@ -13,61 +13,15 @@ positionally, and reports the worst module status as the overall one.
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
-from vigil.plugins.base.plugin_base import Plugin
+from vigil.plugins.base.module_plugin import (
+    LOG_LEVEL as _LOG_LEVEL, Module as _Module, ModularPlugin, SEVERITY as _SEVERITY,
+    module_options, worst_status as _worst,
+)
 from vigil.core.connectors.types import CmdResult, Command, CollectResult
 from vigil.plugins.base.plugin_helpers import (
     level_for as _level_for, format_bytes as _fmt_gb,
 )
 from vigil_agent.protocol import StreamSpec
-
-# 'offline' sits below 'warning': a module that cannot measure (no GPU, no
-# oom_kill counter) is less alarming than one measuring a bad number.
-_SEVERITY = {'online': 0, 'offline': 1, 'warning': 2, 'failed': 3}
-
-_LOG_LEVEL = {'online': 'INFO', 'warning': 'WARNING', 'offline': 'WARNING', 'failed': 'ERROR'}
-
-
-def _worst(statuses: List[str]) -> str:
-    return max(statuses, key=lambda s: _SEVERITY.get(s, 1)) if statuses else 'online'
-
-
-class _Module:
-    """One collected signal. Subclasses stay pure: no IO, no persistence."""
-
-    key = ''
-
-    def __init__(self, plugin: 'SystemStats', options: Dict[str, Any]):
-        self.plugin = plugin
-        self.options = options
-
-    def commands(self) -> List[Command]:
-        raise NotImplementedError
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        raise NotImplementedError
-
-    def subscriptions(self) -> List[StreamSpec]:
-        """Agent-pushed event streams this module wants; poll-only by default."""
-        return []
-
-    def parse_event(self, payload: Dict[str, Any]) -> Optional[CollectResult]:
-        """One pushed event in, a CollectResult to persist out, or None to
-        ignore it — including when the event isn't this module's to handle."""
-        return None
-
-    def cards(self) -> Dict[str, Dict[str, Any]]:
-        return {}
-
-    def charts(self) -> Dict[str, Dict[str, Any]]:
-        return {}
-
-    def card_row(self) -> List[str]:
-        """Cards that join the shared top row; the rest are placed by rows()."""
-        return list(self.cards())
-
-    def rows(self) -> List[List[str]]:
-        """Full-width layout rows this module adds above its charts."""
-        return []
 
 
 def _parse_cpu_line(line: str) -> Tuple[int, int]:
@@ -764,109 +718,10 @@ _MODULE_TYPES = [_CpuModule, _MemoryModule, _LoadModule, _TemperatureModule,
 
 
 def _module_options(config: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-    """Resolve the `modules` config block to {module key: options}. Every
-    module is opt-in: only the ones named here run, so an absent `modules`
-    block — like an absent module within it — enables nothing. Accepts a
-    mapping of options (`enabled: false` or a false value disables one) or a
-    plain list of names to take a module's defaults."""
-    known = [t.key for t in _MODULE_TYPES]
-    raw = config.get('modules')
-
-    if raw is None:
-        return {}
-
-    if isinstance(raw, list):
-        requested = {key: {} for key in raw}
-    elif isinstance(raw, dict):
-        requested = {}
-        for key, options in raw.items():
-            if options is False:
-                continue
-            options = {} if options in (True, None) else dict(options)
-            if options.get('enabled', True):
-                requested[key] = options
-    else:
-        raise ValueError(f"system_stats: `modules` must be a mapping or a list, got {raw!r}")
-
-    unknown = [key for key in requested if key not in known]
-    if unknown:
-        raise ValueError(
-            f"system_stats: unknown module(s) {unknown} — known modules are {known}")
-
-    return {key: requested[key] for key in known if key in requested}
+    """Resolve this plugin's `modules` block to {module key: options}."""
+    return module_options('system_stats', config, _MODULE_TYPES)
 
 
-class SystemStats(Plugin):
-    def __init__(self, name: str, config: Dict[str, Any]):
-        super().__init__(name, config)
-        options = _module_options(config)
-        self.modules: List[_Module] = [
-            module_type(self, options[module_type.key])
-            for module_type in _MODULE_TYPES if module_type.key in options
-        ]
-        self._spans: List[Tuple[_Module, int, int]] = []
-
-    def commands(self) -> List[Command]:
-        """Concatenate the enabled modules' commands, remembering the half-open
-        range each module's own commands occupy so parse() can hand every module
-        back exactly its results. Recorded here rather than derived in parse()
-        because a module's command count can vary per cycle — the gpu module
-        issues none while its breaker is tripped."""
-        commands, spans = [], []
-        for module in self.modules:
-            start = len(commands)
-            commands.extend(module.commands())
-            spans.append((module, start, len(commands)))
-        self._spans = spans
-        return commands
-
-    def subscriptions(self) -> List[StreamSpec]:
-        return [spec for module in self.modules for spec in module.subscriptions()]
-
-    def parse_event(self, stream_id: str, payload: Dict[str, Any],
-                    timestamp: float) -> Optional[CollectResult]:
-        for module in self.modules:
-            result = module.parse_event(payload)
-            if result is not None:
-                return result
-        return None
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        if not self.modules:
-            return CollectResult.failed(
-                "No modules enabled — every module is opt-in, so `modules` must "
-                f"name at least one of {[t.key for t in _MODULE_TYPES]}",
-                level="WARNING", status='offline')
-
-        metrics: Dict[str, float] = {}
-        logs: List[Tuple[str, str]] = []
-        statuses: List[str] = []
-
-        for module, start, end in self._spans:
-            result = module.parse(results[start:end])
-            metrics.update(result.metrics)
-            logs.extend(result.logs)
-            if result.status:
-                statuses.append(result.status)
-
-        return CollectResult(metrics=metrics, logs=logs, status=_worst(statuses))
-
-    @property
-    def UI_SPEC(self):
-        cards, charts, module_rows, card_row = {}, {}, [], ['host_card']
-        for module in self.modules:
-            cards.update(module.cards())
-            charts.update(module.charts())
-            card_row.extend(module.card_row())
-            module_rows.extend(module.rows() + [[name] for name in module.charts()])
-        layout = [card_row] + module_rows + [['events']]
-        return {
-            'layout': layout,
-            'cards': cards,
-            'charts': charts,
-            'events': True,
-        }
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
+class SystemStats(ModularPlugin):
+    MODULE_TYPES = _MODULE_TYPES
+    MODULE_LABEL = 'system_stats'
