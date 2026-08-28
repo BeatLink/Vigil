@@ -172,7 +172,7 @@ def _dialog_spec_for(plugin: Any, dialog_name: str) -> Optional[Dict[str, Any]]:
 
 
 def generic_render(plugin: Any, context: str = 'page', spec: Optional[UISpec] = None,
-                   page=None, start: bool = True):
+                   page=None, start: bool = True, layout=None):
     from nicegui import ui
     from vigil.core.ui.layout import PluginLayout, make_inline_layout
     from vigil.core.ui.components import (
@@ -200,23 +200,28 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[UISpec] = 
     buttons = spec.get('buttons', {})
     job_panel_spec = spec.get('job_panel')
 
-    layout = PluginLayout(
-        plugin.config,
-        layout_rows if context == 'page' else make_inline_layout(layout_rows),
-    )
+    if layout is None:
+        layout = PluginLayout(
+            plugin.config,
+            layout_rows if context == 'page' else make_inline_layout(layout_rows),
+        )
 
     if page is None:
         metric_names = [c['metric'] for name, c in cards.items()
-                        if 'metric' in c and name != 'status_card']
-        for c in cards.values():
-            metric_names += c.get('metrics', [])
-        metric_names += [c['metric'] for c in charts.values()]
+                        if 'metric' in c and name != 'status_card' and layout.renders(name)]
+        for name, c in cards.items():
+            if layout.renders(name):
+                metric_names += c.get('metrics', [])
+        metric_names += [c['metric'] for name, c in charts.items() if layout.renders(name)]
         page = plugin.ui.page(metric_names=metric_names)
 
     color_updates = []
 
     for widget_name, card_spec in cards.items():
         if widget_name == 'host_card' or widget_name == 'status_card':
+            continue
+
+        if not layout.renders(widget_name):
             continue
 
         if 'repeat' in card_spec:
@@ -301,11 +306,11 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[UISpec] = 
                 return _update
             color_updates.append(_make_update())
 
-    if 'host_card' in _flatten_layout(layout_rows):
+    if layout.hosts('host_card') and layout.renders('host_card'):
         with layout.cell('host_card'):
             plugin.ui.host_card()
 
-    if 'status_card' in cards:
+    if 'status_card' in cards and layout.renders('status_card'):
         sc = cards['status_card']
         with layout.cell('status_card'):
             plugin.ui.status_card(
@@ -317,35 +322,41 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[UISpec] = 
             )
 
     for widget_name, cs in charts.items():
+        if not layout.renders(widget_name):
+            continue
         with layout.cell(widget_name):
             history_chart(page, cs.get('title', cs['metric'].upper()),
                           plugin.id, cs['metric'])
 
     dynamic_charts_spec = spec.get('dynamic_charts')
-    if dynamic_charts_spec:
+    if dynamic_charts_spec and layout.renders(dynamic_charts_spec.get('widget', 'charts')):
         with layout.cell(dynamic_charts_spec.get('widget', 'charts')):
             for chart_title, chart_metric in getattr(plugin, dynamic_charts_spec['items_attr']):
                 history_chart(page, chart_title, plugin.id, chart_metric)
 
-    if show_events:
+    if show_events and layout.renders('events'):
         events_kwargs = show_events if isinstance(show_events, dict) else {}
         with layout.cell('events'):
             plugin.ui.events_table(page, **events_kwargs)
 
-    if show_logs:
+    if show_logs and layout.renders('logs'):
         logs_kwargs = show_logs if isinstance(show_logs, dict) else {}
         with layout.cell('logs'):
             plugin.ui.logs_table(page, **logs_kwargs)
 
     for widget_name, table_spec in tables.items():
+        if not layout.renders(widget_name):
+            continue
         with layout.cell(widget_name):
             render_table_with_actions(plugin, page, table_spec, filters.get(widget_name))
 
     for widget_name, button_specs in buttons.items():
+        if not layout.renders(widget_name):
+            continue
         with layout.cell(widget_name):
             render_buttons(plugin, button_specs)
 
-    if job_panel_spec:
+    if job_panel_spec and layout.renders(job_panel_spec.get('widget', 'jobs')):
         with layout.cell(job_panel_spec.get('widget', 'jobs')):
             render_job_panel(plugin, job_panel_spec)
 
@@ -359,9 +370,3 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[UISpec] = 
         page.start()
 
     return page
-
-
-def _flatten_layout(rows):
-    for row in rows:
-        for item in row:
-            yield item if isinstance(item, str) else item['widget']

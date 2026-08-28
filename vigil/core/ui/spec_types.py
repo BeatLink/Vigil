@@ -156,10 +156,9 @@ class JobPanelSpec(TypedDict, total=False):
 
 
 # UI_SPEC['layout'] rows: each row is a list of either a bare widget-name
-# string, or {'widget': name, **PluginLayout per-widget overrides
-# (visible, height, flex, ...)}. See layout.py's PluginLayout for the
-# override keys; not enumerated here since they're consumed positionally
-# by ui.column()/ui.row() kwargs, not by generic_render() itself.
+# string, or {'widget': name, **per-widget cell overrides}. layout.py's
+# resolve_rows() is what reads them (visible, height, flex, min_width, title),
+# and a group's own layout uses the same shape with '<child_id>.<widget>' names.
 LayoutRow = List[Union[str, Dict[str, Any]]]
 
 
