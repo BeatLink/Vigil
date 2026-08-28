@@ -52,6 +52,7 @@ class AgentClient:
             except asyncio.CancelledError:
                 await self._stop_streams()
                 raise
+            # Any session failure becomes a redial; a network blip must not end the agent.
             except Exception as e:
                 logging.warning(f"connection to {self.url} ended: {e}")
 
