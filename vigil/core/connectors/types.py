@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from enum import Enum
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -14,6 +15,51 @@ class CmdResult:
     exit_code: int
     stdout: str
     stderr: str
+
+
+class Status(str, Enum):
+    """Canonical monitor status. A str subclass, so comparisons against stored
+    strings, STATUS_COLORS lookups and JSON serialisation all keep working.
+
+    'offline' ranks below 'warning': a monitor that cannot measure is less
+    alarming than one measuring a bad number."""
+
+    ONLINE = 'online'
+    OFFLINE = 'offline'
+    WARNING = 'warning'
+    FAILED = 'failed'
+
+    # str() and f-strings must yield the bare value, not 'Status.ONLINE'.
+    __str__ = str.__str__
+    __format__ = str.__format__
+
+    @property
+    def severity(self) -> int:
+        return _SEVERITY[self]
+
+    @property
+    def log_level(self) -> str:
+        return _LOG_LEVEL[self]
+
+    @classmethod
+    def worst(cls, statuses: Iterable[str]) -> "Status":
+        """The most severe of the given statuses, defaulting to online; an
+        unrecognised value ranks as offline."""
+        worst = cls.ONLINE
+        for value in statuses:
+            try:
+                candidate = cls(value)
+            except ValueError:
+                candidate = cls.OFFLINE
+            if candidate.severity > worst.severity:
+                worst = candidate
+        return worst
+
+
+_SEVERITY = {Status.ONLINE: 0, Status.OFFLINE: 1, Status.WARNING: 2, Status.FAILED: 3}
+
+_LOG_LEVEL = {Status.ONLINE: 'INFO', Status.OFFLINE: 'WARNING',
+              Status.WARNING: 'WARNING', Status.FAILED: 'ERROR'}
 
 
 @dataclass(frozen=True)

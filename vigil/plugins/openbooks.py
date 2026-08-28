@@ -1,3 +1,10 @@
+"""OpenBooks IRC-bridge health, probed by piping a connect request into its
+WebSocket with websocat — one command over SSH, sampled locally by the agent
+on agent-backed hosts. Config: ws_url, probe_timeout. A connect reply with a
+success appearance is online; a refused or timed-out socket, a reported IRC
+connection failure, or an unparseable reply is failed — there is no warning
+tier."""
+
 import json
 import shlex
 from typing import Any, Dict, List, Tuple
@@ -105,10 +112,6 @@ class Openbooks(Plugin):
         'chart': {'metric': 'bridge_connected', 'title': 'IRC BRIDGE CONNECTED'},
         'events': True,
     }
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 from vigil.core.ui.spec import register_formatter, register_color_rule

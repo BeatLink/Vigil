@@ -1,0 +1,35 @@
+# Roadmap
+
+- [x] Core engine with YAML config loader
+- [x] Core database utility (SQLite)
+- [x] Core SSH utility for remote access
+- [x] Hierarchical plugin/group support
+- [x] Ping/ICMP uptime module
+- [x] Web dashboard (NiceGUI)
+- [x] Disk space monitor (any path/mountpoint via `df`, threshold alerting)
+- [x] ZFS pool health monitor (DEGRADED/FAULTED detection)
+- [x] SMART disk health monitor
+- [x] System stats monitor (CPU, memory, load average, temperature, interrupts, NVIDIA GPU and OOM kills as one monitor, opt-in per-module configuration)
+- [x] Network usage monitor (RX/TX throughput via `/proc/net/dev`, auto-detect or explicit interface)
+- [x] Container monitor (Docker/Podman, with per-container restart)
+- [x] Software RAID (mdadm) health monitor
+- [x] Generic command monitor (arbitrary check, exit-code or regex-extracted value)
+- [x] Filesystem auto-discovery monitor (all mounts via `df`)
+- [x] Folder size monitor (arbitrary directories via `du`)
+- [x] VM monitor (libvirt/KVM via `virsh`, with start/shutdown)
+- [x] Cloud instance metadata monitor (AWS/GCP/Azure)
+- [x] Push monitor (dead man's switch — external heartbeat via REST API, per-monitor token)
+- [x] DNS record monitor (A/AAAA/CNAME/MX/TXT/NS/SOA via dnspython, custom resolver, expected-value pinning)
+- [x] Dynamic DNS updater (public IP lookup + FreeDNS-style update URL, drift-triggered with rate limiting, Force Update action)
+- [x] Unified, filterable events feed
+- [x] REST API for monitors, metrics, and events
+- [x] Prometheus `/metrics` export endpoint (pull)
+- [x] InfluxDB export (push, 1.x and 2.x)
+- [ ] Basic alerting (Email, Slack, or Webhook)
+- [x] Authentication for the dashboard and REST API (HTTP Basic Auth)
+- [ ] HTTPS for the dashboard and REST API
+- [ ] Boot-uptime monitor (`uptime -p` — how long the host has been up, distinct from ping reachability)
+- [ ] Public IP / geolocation monitor
+- [ ] CSV / JSON file export (flat-file dump alongside the Prometheus/InfluxDB exporters)
+- [ ] Additional export backends (Graphite, MQTT, Elasticsearch, …)
+- [ ] Per-core CPU breakdown in the CPU monitor

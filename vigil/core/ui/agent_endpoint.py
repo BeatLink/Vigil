@@ -59,6 +59,7 @@ def register_agent_endpoint(app: Any, registry: AgentRegistry) -> None:
             await _serve(websocket, registry, conn, agent_id)
         except WebSocketDisconnect:
             pass
+        # One misbehaving connection (bad frame, mid-handshake drop) must not take the endpoint down.
         except Exception as e:
             logging.warning(f"agent endpoint: connection ended with an error: {e}")
         finally:

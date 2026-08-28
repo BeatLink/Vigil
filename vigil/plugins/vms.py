@@ -1,3 +1,11 @@
+"""Libvirt VM states via `virsh list --all` over SSH — sampled locally by the
+agent on agent-backed hosts — with start/shutdown actions for expected VMs.
+Config: uri (the libvirt connection), expect_running, offline_warning. Any VM
+named in expect_running that is not running makes the status failed; VMs in
+other unexpected states are warning when offline_warning is on, while cleanly
+shut-off VMs count as benign. A missing virsh reports offline, and an
+unreachable libvirt is failed."""
+
 from typing import Dict, Any, List, Optional, Union
 
 from vigil.plugins.base.plugin_base import Plugin
@@ -33,6 +41,24 @@ def _parse_row(line: str):
     return name, state
 
 
+def _classify_vms(stdout: str):
+    """Split the virsh list rows into running, stopped (error-state), and benign (shut-off) name lists."""
+    running: List[str] = []
+    stopped: List[str] = []
+    benign: List[str] = []
+    for line in stdout.splitlines():
+        name, state = _parse_row(line)
+        if name is None:
+            continue
+        if state in _RUNNING_STATES:
+            running.append(name)
+        elif state in _BENIGN_STATES:
+            benign.append(name)
+        else:
+            stopped.append(name)
+    return running, stopped, benign
+
+
 class Vms(Plugin):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
@@ -49,6 +75,10 @@ class Vms(Plugin):
         return [Command(f"{self._virsh('list --all')} 2>&1")]
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        """Turns the `virsh list --all` output into a CollectResult with total/
+        running/stopped counts and a status where a missing expected VM is failed,
+        VMs in unexpected states are warning (when offline_warning), and a missing
+        virsh is offline."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         combined = f"{stdout}\n{stderr}".lower()
@@ -59,20 +89,7 @@ class Vms(Plugin):
         if ret != 0:
             return CollectResult.failed(f"virsh list failed: {stderr}")
 
-        running: List[str] = []
-        stopped: List[str] = []
-        benign: List[str] = []
-        for line in stdout.splitlines():
-            name, state = _parse_row(line)
-            if name is None:
-                continue
-            if state in _RUNNING_STATES:
-                running.append(name)
-            elif state in _BENIGN_STATES:
-                benign.append(name)
-            else:
-                stopped.append(name)
-
+        running, stopped, benign = _classify_vms(stdout)
         total = len(running) + len(stopped) + len(benign)
         metrics = {
             'vms_total': float(total),
@@ -146,10 +163,6 @@ class Vms(Plugin):
         },
         'events': True,
     }
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 from vigil.core.ui.spec import register_color_rule

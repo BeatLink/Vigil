@@ -1,3 +1,11 @@
+"""A push (heartbeat) monitor for targets Vigil cannot reach itself: the
+target reports in through the REST API and the plugin never polls —
+commands() is empty, and each cycle only re-evaluates the staleness of the
+last heartbeat recorded via record_push(). Config: max_age (defaults to twice
+the interval), token (authenticates the pushing client), target_host for
+display. A fresh heartbeat that reported 'up' is online; no heartbeat yet,
+one older than max_age, or a last-reported 'down' is failed."""
+
 import time
 from typing import Any, Dict, List, Optional
 
@@ -89,6 +97,3 @@ class Push(Plugin):
             'events': True,
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

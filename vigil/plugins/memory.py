@@ -2,19 +2,17 @@
 
 from typing import Any, Dict, List
 
-from vigil.plugins.base.signal_plugin import (
-    LOG_LEVEL as _LOG_LEVEL, SignalPlugin,
-)
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.signal_plugin import SignalPlugin
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
 from vigil.core.settings.config_schema import PluginConfig
-from vigil.plugins.base.plugin_helpers import level_for as _level_for, format_bytes as _fmt_gb
+from vigil.plugins.base.plugin_helpers import level_for, format_bytes
 
 
 def _format_memory_used(values: Dict[str, Any]) -> str:
     used, total = values.get('memory_used_gb'), values.get('memory_total_gb')
     if used is None or total is None:
         return '--'
-    return f'{_fmt_gb(used)} / {_fmt_gb(total)}'
+    return f'{format_bytes(used)} / {format_bytes(total)}'
 
 
 class Memory(SignalPlugin):
@@ -59,7 +57,7 @@ class Memory(SignalPlugin):
         except (ValueError, IndexError, ZeroDivisionError) as e:
             return CollectResult.failed(f"Failed to parse memory output: {e}")
 
-        status = _level_for(memory_pct, self.warning, self.threshold)
+        status = level_for(memory_pct, self.warning, self.threshold)
         return CollectResult(
             metrics={
                 'memory_pct':      memory_pct,
@@ -67,9 +65,9 @@ class Memory(SignalPlugin):
                 'memory_total_gb': memory_total_gb,
             },
             logs=[(
-                f"MEM {memory_pct:.1f}% ({_fmt_gb(memory_used_gb)} / {_fmt_gb(memory_total_gb)}, "
+                f"MEM {memory_pct:.1f}% ({format_bytes(memory_used_gb)} / {format_bytes(memory_total_gb)}, "
                 f"warn {self.warning:g}% / fail {self.threshold:g}%)",
-                _LOG_LEVEL[status],
+                Status(status).log_level,
             )],
             status=status,
         )

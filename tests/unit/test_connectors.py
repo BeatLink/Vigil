@@ -2,14 +2,14 @@
 former local_call() plugins now lives in HttpConnector/DnsConnector/
 IcmpConnector, so its behavior is verified here at the connector level."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import dns.exception
 import dns.resolver
 import pytest
 
 from vigil.core.connectors.types import (
-    Command, CmdResult, DnsQuery, HttpRequest, PingRequest,
+    Command, DnsQuery, HttpRequest, PingRequest,
 )
 
 pytestmark = pytest.mark.asyncio
@@ -26,18 +26,16 @@ class TestDnsConnector:
                 captured['configure'] = configure
                 self.nameservers = []
                 self.port = 53
-                self.timeout = None
-                self.lifetime = None
 
-            def resolve(self, domain, rtype):
+            async def resolve(self, domain, rtype, lifetime=None):
                 captured['domain'] = domain
                 captured['rtype'] = rtype
                 captured['nameservers'] = self.nameservers
                 captured['port'] = self.port
-                captured['timeout'] = self.timeout
+                captured['lifetime'] = lifetime
                 return MagicMock()
 
-        with patch('dns.resolver.Resolver', FakeResolver):
+        with patch('dns.asyncresolver.Resolver', FakeResolver):
             result = await DnsConnector().resolve(
                 DnsQuery('example.com', 'A', resolver='1.1.1.1', port=5353, timeout=2)
             )
@@ -45,7 +43,7 @@ class TestDnsConnector:
         assert captured['configure'] is False
         assert captured['nameservers'] == ['1.1.1.1']
         assert captured['port'] == 5353
-        assert captured['timeout'] == 2
+        assert captured['lifetime'] == 2
 
     async def test_default_resolver_is_system_configured(self):
         from vigil.core.connectors.dns_connector import DnsConnector
@@ -57,13 +55,11 @@ class TestDnsConnector:
                 captured['configure'] = configure
                 self.nameservers = []
                 self.port = 53
-                self.timeout = None
-                self.lifetime = None
 
-            def resolve(self, domain, rtype):
+            async def resolve(self, domain, rtype, lifetime=None):
                 return MagicMock()
 
-        with patch('dns.resolver.Resolver', FakeResolver):
+        with patch('dns.asyncresolver.Resolver', FakeResolver):
             await DnsConnector().resolve(DnsQuery('example.com', 'A'))
         assert captured['configure'] is True
 
@@ -79,13 +75,11 @@ class TestDnsConnector:
             def __init__(self, configure=True):
                 self.nameservers = []
                 self.port = 53
-                self.timeout = None
-                self.lifetime = None
 
-            def resolve(self, domain, rtype):
+            async def resolve(self, domain, rtype, lifetime=None):
                 raise exc()
 
-        with patch('dns.resolver.Resolver', FakeResolver):
+        with patch('dns.asyncresolver.Resolver', FakeResolver):
             result = await DnsConnector().resolve(DnsQuery('example.com', 'A'))
         assert result.kind == kind
 
@@ -96,13 +90,11 @@ class TestDnsConnector:
             def __init__(self, configure=True):
                 self.nameservers = []
                 self.port = 53
-                self.timeout = None
-                self.lifetime = None
 
-            def resolve(self, domain, rtype):
+            async def resolve(self, domain, rtype, lifetime=None):
                 raise dns.exception.DNSException('boom')
 
-        with patch('dns.resolver.Resolver', FakeResolver):
+        with patch('dns.asyncresolver.Resolver', FakeResolver):
             result = await DnsConnector().resolve(DnsQuery('example.com', 'A'))
         assert result.kind == 'dns_error'
         assert 'boom' in (result.error or '')
@@ -114,7 +106,7 @@ class TestHttpConnector:
 
         conn = HttpConnector()
         resp = MagicMock(status_code=200, text='hello')
-        with patch.object(conn._session, 'request', return_value=resp) as req:
+        with patch.object(conn._client, 'request', AsyncMock(return_value=resp)) as req:
             result = await conn.fetch(HttpRequest('https://x/', timeout=3))
         assert result.status_code == 200
         assert result.text == 'hello'
@@ -122,12 +114,12 @@ class TestHttpConnector:
         req.assert_called_once()
 
     async def test_request_exception_becomes_error(self):
-        import requests as _requests
+        import httpx as _httpx
         from vigil.core.connectors.http_connector import HttpConnector
 
         conn = HttpConnector()
-        with patch.object(conn._session, 'request',
-                          side_effect=_requests.RequestException('no route')):
+        with patch.object(conn._client, 'request',
+                          AsyncMock(side_effect=_httpx.ConnectError('no route'))):
             result = await conn.fetch(HttpRequest('https://x/'))
         assert result.status_code is None
         assert 'no route' in (result.error or '')
@@ -138,7 +130,7 @@ class TestHttpConnector:
 
         conn = HttpConnector()
         resp = MagicMock(status_code=207, text='<multistatus/>')
-        with patch.object(conn._session, 'request', return_value=resp) as req:
+        with patch.object(conn._client, 'request', AsyncMock(return_value=resp)) as req:
             await conn.fetch(HttpRequest(
                 'https://dav/', method='PROPFIND',
                 headers={'Depth': '0'}, body='<propfind/>',
@@ -146,14 +138,14 @@ class TestHttpConnector:
         _, kwargs = req.call_args
         assert kwargs['auth'] == ('user', 'pw')
         assert kwargs['headers'] == {'Depth': '0'}
-        assert kwargs['data'] == '<propfind/>'
+        assert kwargs['content'] == '<propfind/>'
 
     async def test_elapsed_ms_measured_on_success(self):
         from vigil.core.connectors.http_connector import HttpConnector
 
         conn = HttpConnector()
         resp = MagicMock(status_code=200, text='ok')
-        with patch.object(conn._session, 'request', return_value=resp):
+        with patch.object(conn._client, 'request', AsyncMock(return_value=resp)):
             result = await conn.fetch(HttpRequest('https://x/'))
         assert result.elapsed_ms >= 0.0
 
@@ -185,15 +177,15 @@ class TestIcmpConnector:
 
 class TestConnectorEngineRouting:
     async def test_routes_command_to_ssh_network(self):
-        from vigil.core.connectors import ConnectorEngine, SSHContext
+        from vigil.core.connectors import ConnectorEngine, ExecContext
         from unittest.mock import AsyncMock
 
         engine = ConnectorEngine()
         conn = MagicMock()
         conn.host = 'test.host'
         conn.execute = AsyncMock(return_value=(0, 'out', ''))
-        ctx = SSHContext(conn=conn, collect_timeout=30.0)
-        results = await engine.run(ctx, [Command('echo hi')])
+        ctx = ExecContext(conn=conn, collect_timeout=30.0)
+        results = await engine.dispatch(ctx, [Command('echo hi')])
         assert results[0].stdout == 'out'
         conn.execute.assert_awaited_once()
 
@@ -207,7 +199,7 @@ class TestConnectorEngineRouting:
         engine._dns = MagicMock(resolve=AsyncMock(return_value=DnsResult('ok')))
         engine._icmp = MagicMock(ping=AsyncMock(return_value=PingResult(None, 0)))
 
-        results = await engine.run(None, [
+        results = await engine.dispatch(None, [
             HttpRequest('https://x/'), DnsQuery('d'), PingRequest('h'),
         ])
         assert isinstance(results[0], HttpResult)

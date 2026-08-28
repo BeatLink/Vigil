@@ -1,7 +1,15 @@
+"""Sizes of configured folders, measured with one `du -sb` per folder over
+SSH (with a single folder that one command is agent-sampled; more than one
+keeps the poll, since only single-command plugins form a sample stream).
+Config: folders (list of {path, warning, threshold} with limits in GB) and
+timeout for each du. A folder at or above its own warning or threshold makes
+the status warning or failed; a du timeout, failure, or unparseable output
+fails the whole monitor."""
+
 from typing import Dict, Any, List
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.plugin_helpers import format_bytes as _format_gb
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
+from vigil.plugins.base.plugin_helpers import format_bytes
 
 
 def _sanitize(path: str) -> str:
@@ -59,7 +67,6 @@ class Folders(Plugin):
 
         folders = self._valid_folders()
 
-        severity = {'online': 0, 'warning': 1, 'failed': 2}
         worst_level = 'online'
         worst_gb = 0.0
         any_error = False
@@ -90,11 +97,11 @@ class Folders(Plugin):
             metrics[f'folder_{_sanitize(path)}_gb'] = gb
             level = self._level_for(gb, folder)
             worst_gb = max(worst_gb, gb)
-            if severity[level] > severity[worst_level]:
+            if Status(level).severity > Status(worst_level).severity:
                 worst_level = level
             logs.append((
-                f"{path}: {_format_gb(gb)}",
-                "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO",
+                f"{path}: {format_bytes(gb)}",
+                Status(level).log_level,
             ))
 
         metrics['worst_folder_gb'] = worst_gb
@@ -136,6 +143,3 @@ class Folders(Plugin):
             'events': True,
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

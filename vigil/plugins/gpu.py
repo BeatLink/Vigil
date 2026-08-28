@@ -4,12 +4,47 @@ import time
 
 from typing import Any, Dict, List
 
-from vigil.plugins.base.signal_plugin import (
-    LOG_LEVEL as _LOG_LEVEL, SignalPlugin, worst_status as _worst,
-)
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.signal_plugin import SignalPlugin, worst_status as _worst
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
 from vigil.core.settings.config_schema import PluginConfig
-from vigil.plugins.base.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.plugin_helpers import level_for
+
+
+def _parse_gpu_table(stdout: str):
+    """Parse nvidia-smi CSV rows into per-card metrics plus the peak utilization, VRAM percent, temperature, and card count."""
+    metrics: Dict[str, float] = {}
+    max_util = max_mem_pct = max_temp = 0.0
+    count = 0
+    for line in stdout.splitlines():
+        fields = [field.strip() for field in line.split(',')]
+        if len(fields) != 5:
+            continue
+        try:
+            index     = int(fields[0])
+            util      = float(fields[1])
+            mem_used  = float(fields[2])
+            mem_total = float(fields[3])
+            temp      = float(fields[4])
+        except ValueError:
+            continue
+
+        mem_pct = (100.0 * mem_used / mem_total) if mem_total > 0 else 0.0
+        metrics[f'gpu{index}_util'] = util
+        metrics[f'gpu{index}_mem_pct'] = mem_pct
+        metrics[f'gpu{index}_temp'] = temp
+
+        max_util    = max(max_util, util)
+        max_mem_pct = max(max_mem_pct, mem_pct)
+        max_temp    = max(max_temp, temp)
+        count += 1
+    return metrics, max_util, max_mem_pct, max_temp, count
+
+
+def _looks_absent(exit_code: int, stdout: str, stderr: str) -> bool:
+    """True when the failure output says nvidia-smi or the GPU itself is missing rather than broken."""
+    combined = f"{stdout}\n{stderr}".lower()
+    return exit_code != 0 and ('command not found' in combined or 'not found' in combined
+                               or "couldn't communicate" in combined or 'no devices' in combined)
 
 
 class Gpu(SignalPlugin):
@@ -43,7 +78,7 @@ class Gpu(SignalPlugin):
         from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
         self._item_color_rule = f'gpu_util_{self.id}'
         register_item_color_rule(self._item_color_rule)(
-            lambda item: _level_for(item.get('value') or 0.0, self.util_warning, self.util_threshold))
+            lambda item: level_for(item.get('value') or 0.0, self.util_warning, self.util_threshold))
         self._util_color_rule = f'gpu_util_card_{self.id}'
         register_color_rule(self._util_color_rule)(
             threshold_color(warning=self.util_warning, threshold=self.util_threshold))
@@ -70,6 +105,10 @@ class Gpu(SignalPlugin):
             level="WARNING", status='offline')
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        """Turns the nvidia-smi CSV output into a CollectResult with per-card and
+        peak util/VRAM/temperature metrics, one summary log line, and the worst
+        threshold breach as status; a wedged driver trips the suspend breaker and
+        an absent GPU reports offline."""
         if not results:
             return self._suspended_result()
 
@@ -83,39 +122,13 @@ class Gpu(SignalPlugin):
             return CollectResult.failed(f"GPU collection failed: {stderr}")
         self._consecutive_timeouts = 0
 
-        combined = f"{stdout}\n{stderr}".lower()
-        if ret != 0 and ('command not found' in combined or 'not found' in combined
-                         or "couldn't communicate" in combined or 'no devices' in combined):
+        if _looks_absent(ret, stdout, stderr):
             return CollectResult.failed("nvidia-smi unavailable or no NVIDIA GPU present",
                                         level="WARNING", status='offline')
         if ret != 0:
             return CollectResult.failed(f"GPU collection failed: {stderr}")
 
-        metrics: Dict[str, float] = {}
-        max_util = max_mem_pct = max_temp = 0.0
-        count = 0
-        for line in stdout.splitlines():
-            parts = [p.strip() for p in line.split(',')]
-            if len(parts) != 5:
-                continue
-            try:
-                idx       = int(parts[0])
-                util      = float(parts[1])
-                mem_used  = float(parts[2])
-                mem_total = float(parts[3])
-                temp      = float(parts[4])
-            except ValueError:
-                continue
-
-            mem_pct = (100.0 * mem_used / mem_total) if mem_total > 0 else 0.0
-            metrics[f'gpu{idx}_util'] = util
-            metrics[f'gpu{idx}_mem_pct'] = mem_pct
-            metrics[f'gpu{idx}_temp'] = temp
-
-            max_util    = max(max_util, util)
-            max_mem_pct = max(max_mem_pct, mem_pct)
-            max_temp    = max(max_temp, temp)
-            count += 1
+        metrics, max_util, max_mem_pct, max_temp, count = _parse_gpu_table(stdout)
 
         if count == 0:
             return CollectResult.failed(f"No GPUs parsed from output: {stdout!r}",
@@ -126,16 +139,16 @@ class Gpu(SignalPlugin):
         metrics['gpu_temp'] = max_temp
 
         status = _worst([
-            _level_for(max_util,    self.util_warning, self.util_threshold),
-            _level_for(max_mem_pct, self.mem_warning,  self.mem_threshold),
-            _level_for(max_temp,    self.temp_warning, self.temp_threshold),
+            level_for(max_util,    self.util_warning, self.util_threshold),
+            level_for(max_mem_pct, self.mem_warning,  self.mem_threshold),
+            level_for(max_temp,    self.temp_warning, self.temp_threshold),
         ])
         return CollectResult(
             metrics=metrics,
             logs=[(
                 f"{count} GPU(s): peak {max_util:.0f}% util, {max_mem_pct:.0f}% VRAM, "
                 f"{max_temp:.0f}°C",
-                _LOG_LEVEL[status],
+                Status(status).log_level,
             )],
             status=status,
         )

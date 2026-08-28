@@ -1,3 +1,11 @@
+"""Mosquitto broker health, proved by a full publish/subscribe round trip:
+one shell script over SSH — sampled locally by the agent on agent-backed
+hosts — subscribes to a probe topic, publishes a nonce, and requires that
+same nonce back. Config: host, port, username, password / password_command,
+probe_topic, probe_timeout. A completed round trip is online; a delivery
+timeout, a payload mismatch, or any other script failure is failed — there is
+no warning tier."""
+
 import shlex
 import time
 import uuid
@@ -120,10 +128,6 @@ class Mosquitto(Plugin):
         'chart': {'metric': 'roundtrip_ms', 'title': 'ROUND TRIP LATENCY (ms)'},
         'events': True,
     }
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 from vigil.core.ui.spec import register_formatter, register_color_rule

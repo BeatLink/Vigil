@@ -4,12 +4,10 @@ from collections import Counter
 
 from typing import Any, Dict, List
 
-from vigil.plugins.base.signal_plugin import (
-    LOG_LEVEL as _LOG_LEVEL, SignalPlugin,
-)
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.signal_plugin import SignalPlugin
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
 from vigil.core.settings.config_schema import PluginConfig
-from vigil.plugins.base.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.plugin_helpers import level_for
 
 
 _TCP_STATES = {
@@ -73,11 +71,11 @@ class Connections(SignalPlugin):
                    for state in _TCP_STATES.values()}
         metrics['conn_total'] = float(total)
 
-        status = _level_for(total, self.warning, self.threshold)
+        status = level_for(total, self.warning, self.threshold)
         summary = ', '.join(f"{s}={counts[s]}" for s in sorted(counts)) or "no connections"
         return CollectResult(
             metrics=metrics,
-            logs=[(f"{total} TCP connections ({summary})", _LOG_LEVEL[status])],
+            logs=[(f"{total} TCP connections ({summary})", Status(status).log_level)],
             status=status,
         )
 

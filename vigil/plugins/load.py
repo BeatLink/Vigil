@@ -2,12 +2,10 @@
 
 from typing import Any, Dict, List
 
-from vigil.plugins.base.signal_plugin import (
-    LOG_LEVEL as _LOG_LEVEL, SignalPlugin,
-)
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.signal_plugin import SignalPlugin
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
 from vigil.core.settings.config_schema import PluginConfig
-from vigil.plugins.base.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.plugin_helpers import level_for
 
 
 class Load(SignalPlugin):
@@ -53,7 +51,7 @@ class Load(SignalPlugin):
             return CollectResult.failed(f"Failed to parse load output: {e}")
 
         if self.warning is not None and self.threshold is not None:
-            status = _level_for(load_pct_1m, self.warning, self.threshold)
+            status = level_for(load_pct_1m, self.warning, self.threshold)
         else:
             status = 'online'
 
@@ -66,7 +64,7 @@ class Load(SignalPlugin):
             logs=[(
                 f"LOAD {load_pct_1m:.0f}% / {load_pct_5m:.0f}% / {load_pct_15m:.0f}% (1m/5m/15m, "
                 f"{cpu_count} cores)",
-                _LOG_LEVEL[status],
+                Status(status).log_level,
             )],
             status=status,
         )

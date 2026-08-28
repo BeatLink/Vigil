@@ -1,14 +1,13 @@
 import json
 import shlex
 import subprocess
-from unittest.mock import AsyncMock
 
 import pytest
 
 from vigil.plugins.qbittorrent import (
     Qbittorrent,
     _AUTH_FAILED,
-    _SEP,
+    SCRIPT_SEP,
     _build_action_script,
     _build_fetch_script,
     _format_rate,
@@ -57,7 +56,7 @@ def _torrents(downloading=2, stalled=0, errored=0, seeding=5):
 def _response(transfer=None, torrents=None):
     t = json.dumps(transfer if transfer is not None else _transfer())
     l = json.dumps(torrents if torrents is not None else _torrents())
-    return f"{t}\n{_SEP}\n{l}"
+    return f"{t}\n{SCRIPT_SEP}\n{l}"
 
 
 @pytest.fixture
@@ -105,7 +104,7 @@ class TestBuildFetchScript:
         assert "auth/login" not in script
         assert "/api/v2/transfer/info" in script
         assert "/api/v2/torrents/info" in script
-        assert _SEP in script
+        assert SCRIPT_SEP in script
 
     def test_password_command_runs_on_remote_host(self):
         script = _build_fetch_script(
@@ -220,23 +219,23 @@ class TestParseResponse:
 
     def test_forbidden_gives_actionable_message(self):
         with pytest.raises(ValueError, match="Forbidden"):
-            _parse_response(f"Forbidden\n{_SEP}\nForbidden")
+            _parse_response(f"Forbidden\n{SCRIPT_SEP}\nForbidden")
 
     def test_malformed_transfer_json_raises(self):
         with pytest.raises(ValueError, match="transfer info was not JSON"):
-            _parse_response(f"not json\n{_SEP}\n[]")
+            _parse_response(f"not json\n{SCRIPT_SEP}\n[]")
 
     def test_malformed_torrents_json_raises(self):
         with pytest.raises(ValueError, match="torrent list was not JSON"):
-            _parse_response(f'{{"connection_status": "connected"}}\n{_SEP}\nnot json')
+            _parse_response(f'{{"connection_status": "connected"}}\n{SCRIPT_SEP}\nnot json')
 
     def test_transfer_missing_connection_status_raises(self):
         with pytest.raises(ValueError, match="missing 'connection_status'"):
-            _parse_response(f'{{"dl_info_speed": 0}}\n{_SEP}\n[]')
+            _parse_response(f'{{"dl_info_speed": 0}}\n{SCRIPT_SEP}\n[]')
 
     def test_torrents_not_a_list_raises(self):
         with pytest.raises(ValueError, match="was not a list"):
-            _parse_response(f'{{"connection_status": "connected"}}\n{_SEP}\n{{}}')
+            _parse_response(f'{{"connection_status": "connected"}}\n{SCRIPT_SEP}\n{{}}')
 
 
 class TestCollect:

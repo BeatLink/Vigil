@@ -107,6 +107,25 @@ class ConfigFileManager:
             return self.log_retention_days
 
     @property
+    def metric_downsample_days(self) -> int:
+        """Age past which metrics are thinned to one row per series per hour.
+        0 (the default) disables downsampling."""
+        value = self.logging_settings.get('metric_downsample_days', 0)
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            logging.warning(
+                f"Invalid logging.metric_downsample_days={value!r}; disabling downsampling"
+            )
+            return 0
+
+    @property
+    def cycle_timings(self) -> bool:
+        """Whether the engine records cycle_collect/parse_seconds metrics; they
+        double the metric row count, so they can be turned off."""
+        return bool(self.logging_settings.get('cycle_timings', True))
+
+    @property
     def memory_settings(self) -> Dict[str, Any]:
         return self.data.get('memory', {})
 

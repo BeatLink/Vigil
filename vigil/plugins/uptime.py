@@ -1,10 +1,16 @@
+"""Basic host reachability: one ICMP ping request through the ping connector
+each cycle, with latency parsed out of the reply. It reads no config keys of
+its own — the shared ssh_config/target_host setting names the host to ping. A
+reply is online; no reply or a ping execution error is failed, with no
+warning tier."""
+
 import re
 import logging
 from typing import List
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (
-    CmdResult, Command, CollectResult, PingRequest, PingResult, Request, Result,
+    CollectResult, PingRequest, PingResult, Request, Result,
 )
 
 _DEFAULT_LAYOUT = [
@@ -15,12 +21,6 @@ _DEFAULT_LAYOUT = [
 
 
 class Uptime(Plugin):
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
-
     def requests(self) -> List[Request]:
         return [PingRequest(self.target)]
 
@@ -69,6 +69,3 @@ class Uptime(Plugin):
         'events': True,
     }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

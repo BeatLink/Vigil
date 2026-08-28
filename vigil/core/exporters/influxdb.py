@@ -66,6 +66,7 @@ class InfluxDBExporter:
     async def run(self) -> None:
         logging.info(f"InfluxDB exporter started -> {self.url} every {self.interval}s")
         while True:
+            # A failed push must not end the exporter loop; the next interval retries.
             try:
                 await asyncio.to_thread(self._push_once)
             except Exception as e:

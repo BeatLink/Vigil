@@ -1,6 +1,5 @@
 import json
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock
 
 import pytest
 

@@ -1,8 +1,13 @@
+"""Disk usage of one filesystem path, read with df over SSH — sampled locally
+by the agent on agent-backed hosts. Config: path (default /) and threshold
+(percent used, default 90). Usage at or above the threshold is failed, as is
+a df or parse error; this monitor has no separate warning tier."""
+
 from typing import Dict, Any, List
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import CmdResult, Command, CollectResult
 
-from vigil.plugins.base.plugin_helpers import format_bytes as _format_gb
+from vigil.plugins.base.plugin_helpers import format_bytes
 
 
 _DEFAULT_LAYOUT = [
@@ -59,8 +64,8 @@ class DiskSpace(Plugin):
             metrics=metrics,
             logs=[(
                 f"{self.path}: {used_pct:.1f}% used "
-                f"({_format_gb(used_gb)} of {_format_gb(size_gb)}, "
-                f"{_format_gb(avail_gb)} free, threshold {self.threshold}%)",
+                f"({format_bytes(used_gb)} of {format_bytes(size_gb)}, "
+                f"{format_bytes(avail_gb)} free, threshold {self.threshold}%)",
                 level,
             )],
             status='failed' if used_pct >= self.threshold else 'online',
@@ -84,6 +89,3 @@ class DiskSpace(Plugin):
             'events': True,
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

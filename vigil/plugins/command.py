@@ -1,9 +1,18 @@
+"""A user-defined shell command as a monitor. The single command runs over
+SSH; on an agent-backed host the agent samples it locally at the monitor's
+interval and pushes the results instead. Config: command, timeout, pattern,
+warning, threshold, invert, nonzero_is_warning, value_label, value_unit.
+Without a pattern, exit 0 is online and non-zero is failed (or warning when
+nonzero_is_warning is set); with one, the first captured number is ranked
+against warning/threshold (reversed when invert is set), and a timeout or a
+non-matching output is failed."""
+
 import re
 from typing import Dict, Any, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.plugin_helpers import level_for as _level_for
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
+from vigil.plugins.base.plugin_helpers import level_for
 
 _DEFAULT_LAYOUT_METRIC = [
     ['host_card', 'exit_card', 'value_card'],
@@ -46,8 +55,8 @@ class CommandPlugin(Plugin):
         if self.warning is None or self.threshold is None:
             return 'online'
         if self.invert:
-            return _level_for(-value, -float(self.warning), -float(self.threshold))
-        return _level_for(value, float(self.warning), float(self.threshold))
+            return level_for(-value, -float(self.warning), -float(self.threshold))
+        return level_for(value, float(self.warning), float(self.threshold))
 
     SAMPLED = True
 
@@ -82,7 +91,7 @@ class CommandPlugin(Plugin):
                 return CollectResult(metrics=metrics, logs=logs, status='failed')
             metrics['value'] = value
             overall = self._level_for_value(value)
-            log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
+            log_level = Status(overall).log_level
             logs.append((f"{self.value_label}: {value}{self.value_unit} -> {overall}", log_level))
             return CollectResult(metrics=metrics, logs=logs, status=overall)
 
@@ -108,8 +117,8 @@ class CommandPlugin(Plugin):
         if self.warning is None or self.threshold is None:
             return 'online'
         if self.invert:
-            return _level_for(-value, -float(self.warning), -float(self.threshold))
-        return _level_for(value, float(self.warning), float(self.threshold))
+            return level_for(-value, -float(self.warning), -float(self.threshold))
+        return level_for(value, float(self.warning), float(self.threshold))
 
     @property
     def UI_SPEC(self):
@@ -127,10 +136,6 @@ class CommandPlugin(Plugin):
                                    'format': self._value_format_name, 'color': self._value_color_name}
             spec['chart'] = {'metric': 'value', 'title': self.value_label}
         return spec
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 def _shquote(s: str) -> str:

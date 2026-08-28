@@ -2,10 +2,8 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from vigil.plugins.base.signal_plugin import (
-    LOG_LEVEL as _LOG_LEVEL, SignalPlugin,
-)
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.signal_plugin import SignalPlugin
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
 from vigil.core.settings.config_schema import PluginConfig
 
 
@@ -84,7 +82,7 @@ class Wifi(SignalPlugin):
         return CollectResult(
             metrics={'link_quality': quality, 'signal_dbm': signal},
             logs=[(f"{iface}: link quality {quality:.0f}, signal {signal:.0f} dBm",
-                   _LOG_LEVEL[status])],
+                   Status(status).log_level)],
             status=status,
             settings={self.setting_key: iface},
         )

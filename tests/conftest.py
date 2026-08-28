@@ -153,12 +153,12 @@ def make_plugin(db_manager):
             mock_conn.host = cfg.get("ssh_config", {}).get("host", "test.host")
             mock_conn.execute = AsyncMock(return_value=(0, "", ""))
             MockSSH.from_config.return_value = mock_conn
-            net = connectors.ssh_context(cfg, collect_timeout=plugin.timeout)
+            net = connectors.exec_context(cfg, collect_timeout=plugin.timeout)
         plugin.target = net.target
 
         plugin.network = net
         plugin.storage = _PluginStore(db_manager, plugin.target, plugin.name, plugin.id)
-        plugin.bind(PluginDataView(db_manager, plugin.id, plugin.target, plugin.name))
+        plugin.bind(PluginDataView(db_manager, plugin.id))
         plugin.engine = _FakeEngine(db_manager, plugin, connectors=connectors)
         return plugin
 

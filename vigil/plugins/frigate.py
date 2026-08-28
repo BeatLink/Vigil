@@ -1,9 +1,17 @@
+"""Frigate NVR camera health, from one GET of /api/stats over HTTP from the
+Vigil host. Config: api_url (required, Vigil-reachable), cameras (the subset
+to watch, default all), api_timeout. Status follows the worst watched
+camera's connection quality — 'poor' is warning and 'unusable' is failed —
+with fps, stalls, reconnects, and detector inference speed kept as metrics.
+An unreachable API or malformed stats payload is failed, and no matching
+cameras is a warning pointing at the 'cameras' list."""
+
 import json
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (
-    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+    CollectResult, HttpRequest, HttpResult, Request, Result, Status
 )
 
 _QUALITY_ORDER = {'unusable': 0, 'poor': 1, 'fair': 2, 'excellent': 3}
@@ -17,6 +25,60 @@ def _parse_response(stdout: str) -> Dict[str, Any]:
     if not isinstance(stats, dict) or 'cameras' not in stats:
         raise ValueError(f"stats missing 'cameras': {stdout[:200]!r}")
     return stats
+
+
+def _http_failure(result) -> Optional[CollectResult]:
+    """The failed CollectResult for a transport or HTTP error, or None when the response is usable."""
+    if result.error is not None:
+        return CollectResult.failed(f"Failed to query Frigate API: {result.error}")
+    if result.status_code != 200:
+        return CollectResult.failed(f"Frigate API returned HTTP {result.status_code}")
+    return None
+
+
+def _average_inference_ms(detectors: Dict[str, Any]) -> float:
+    """Mean detector inference speed in milliseconds, 0.0 when there are no detectors."""
+    if not detectors:
+        return 0.0
+    return sum(d.get('inference_speed', 0) or 0 for d in detectors.values()) / len(detectors)
+
+
+def _survey_cameras(watched: Dict[str, Any]):
+    """Find the worst connection quality across cameras and total their stalls, reconnects, and problem lines."""
+    worst_quality = 'excellent'
+    worst_camera = None
+    total_stalls = 0
+    total_reconnects = 0
+    problems = []
+
+    for camera_name, camera_data in watched.items():
+        quality = camera_data.get('connection_quality', 'unusable')
+        stalls = int(camera_data.get('stalls_last_hour', 0) or 0)
+        reconnects = int(camera_data.get('reconnects_last_hour', 0) or 0)
+        fps = float(camera_data.get('camera_fps', 0) or 0)
+
+        total_stalls += stalls
+        total_reconnects += reconnects
+
+        if _QUALITY_ORDER.get(quality, 0) < _QUALITY_ORDER.get(worst_quality, 3):
+            worst_quality = quality
+            worst_camera = camera_name
+
+        if quality == 'unusable':
+            problems.append(f"{camera_name}: unusable ({fps:.1f} fps)")
+        elif quality == 'poor':
+            problems.append(f"{camera_name}: poor ({fps:.1f} fps)")
+
+    return worst_quality, worst_camera, total_stalls, total_reconnects, problems
+
+
+def _quality_level(worst_quality: str) -> str:
+    """Map the worst camera quality onto a status: unusable failed, poor warning, else online."""
+    if worst_quality == 'unusable':
+        return 'failed'
+    if worst_quality == 'poor':
+        return 'warning'
+    return 'online'
 
 
 _DEFAULT_LAYOUT = [
@@ -36,12 +98,6 @@ class Frigate(Plugin):
         self.cameras: Optional[List[str]] = config.get('cameras') or None
         self.api_timeout = int(config.get('api_timeout', 10))
 
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
-
     def requests(self) -> List[Request]:
         if not self.api_url:
             return []
@@ -49,15 +105,17 @@ class Frigate(Plugin):
         return [HttpRequest(url=f"{base}/api/stats", timeout=self.api_timeout)]
 
     def parse_results(self, results: List[Result]) -> CollectResult:
+        """Turns the single /api/stats HTTP result into a CollectResult with
+        fps/stall/reconnect/inference metrics, one summary log line, and the
+        worst watched camera's connection quality as status (unusable failed,
+        poor warning)."""
         if not results:
             return CollectResult.failed("No 'api_url' configured")
 
         result: HttpResult = results[0]
-        if result.error is not None:
-            return CollectResult.failed(f"Failed to query Frigate API: {result.error}")
-        if result.status_code != 200:
-            return CollectResult.failed(
-                f"Frigate API returned HTTP {result.status_code}")
+        failure = _http_failure(result)
+        if failure is not None:
+            return failure
 
         try:
             stats = _parse_response(result.text)
@@ -75,51 +133,21 @@ class Frigate(Plugin):
                 level="WARNING", status='warning')
 
         detectors = stats.get('detectors', {})
-        avg_inference = (
-            sum(d.get('inference_speed', 0) or 0 for d in detectors.values())
-            / len(detectors)
-        ) if detectors else 0.0
+        avg_inference = _average_inference_ms(detectors)
+
+        worst_quality, worst_camera, total_stalls, total_reconnects, problems = (
+            _survey_cameras(watched))
 
         metrics = {
             'camera_fps_total': float(stats.get('camera_fps', 0) or 0),
             'detection_fps_total': float(stats.get('detection_fps', 0) or 0),
             'detector_inference_ms': float(avg_inference),
+            'stalls_last_hour': float(total_stalls),
+            'reconnects_last_hour': float(total_reconnects),
+            'worst_quality_rank': float(_QUALITY_ORDER.get(worst_quality, 0)),
         }
 
-        worst_quality = 'excellent'
-        worst_camera = None
-        total_stalls = 0
-        total_reconnects = 0
-        problems = []
-
-        for cam_name, cam_data in watched.items():
-            quality = cam_data.get('connection_quality', 'unusable')
-            stalls = int(cam_data.get('stalls_last_hour', 0) or 0)
-            reconnects = int(cam_data.get('reconnects_last_hour', 0) or 0)
-            fps = float(cam_data.get('camera_fps', 0) or 0)
-
-            total_stalls += stalls
-            total_reconnects += reconnects
-
-            if _QUALITY_ORDER.get(quality, 0) < _QUALITY_ORDER.get(worst_quality, 3):
-                worst_quality = quality
-                worst_camera = cam_name
-
-            if quality == 'unusable':
-                problems.append(f"{cam_name}: unusable ({fps:.1f} fps)")
-            elif quality == 'poor':
-                problems.append(f"{cam_name}: poor ({fps:.1f} fps)")
-
-        metrics['stalls_last_hour'] = float(total_stalls)
-        metrics['reconnects_last_hour'] = float(total_reconnects)
-        metrics['worst_quality_rank'] = float(_QUALITY_ORDER.get(worst_quality, 0))
-
-        if worst_quality == 'unusable':
-            level = 'failed'
-        elif worst_quality == 'poor':
-            level = 'warning'
-        else:
-            level = 'online'
+        level = _quality_level(worst_quality)
 
         parts = [
             f"{len(watched)} camera(s)",
@@ -132,7 +160,7 @@ class Frigate(Plugin):
         if problems:
             parts.append("| " + "; ".join(problems))
 
-        log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
+        log_level = Status(level).log_level
         return CollectResult(
             metrics=metrics,
             logs=[(' | '.join(p for p in parts if p), log_level)],
@@ -165,11 +193,8 @@ class Frigate(Plugin):
         'events': True,
     }
 
-    def render_ui(self, context: str = 'page'):
-        generic_render(self, context)
 
-
-from vigil.core.ui.spec import generic_render, register_formatter, register_color_rule
+from vigil.core.ui.spec import register_formatter, register_color_rule
 
 _RANK_TO_LABEL = {0: 'UNUSABLE', 1: 'POOR', 2: 'FAIR', 3: 'EXCELLENT'}
 

@@ -1,8 +1,16 @@
+"""Top processes by CPU from `ps` over SSH — sampled locally by the agent on
+agent-backed hosts — shown as a table with per-row kill actions (SIGTERM or
+SIGKILL). Config: max_processes, require_sudo, kill_signal, cpu_warning,
+cpu_threshold. When both CPU bounds are set, the busiest process's CPU share
+ranks against cpu_warning/cpu_threshold for warning/failed; otherwise the
+monitor only reports, and only a failed or unparseable collection is
+failed."""
+
 from typing import Dict, Any, List, Optional, Union
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.plugins.base.plugin_helpers import level_for as _level_for
+from vigil.core.connectors.types import ActionPlan, CmdResult, CollectResult, Command, Status
+from vigil.plugins.base.plugin_helpers import level_for
 
 _SEVERITY = {'online': 0, 'warning': 1, 'failed': 2}
 
@@ -49,7 +57,7 @@ class Processes(Plugin):
             from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
             self._cpu_color_rule_name = f'processes_cpu_{self.id}'
             register_item_color_rule(self._cpu_color_rule_name)(
-                lambda row: _level_for(row['cpu'], self.cpu_warning, self.cpu_threshold)
+                lambda row: level_for(row['cpu'], self.cpu_warning, self.cpu_threshold)
             )
             self._top_cpu_color_rule_name = f'processes_top_cpu_{self.id}'
             register_color_rule(self._top_cpu_color_rule_name)(
@@ -82,11 +90,11 @@ class Processes(Plugin):
         top_cpu = processes[0]['cpu'] if processes else 0.0
 
         if self.cpu_warning is not None and self.cpu_threshold is not None:
-            overall = _level_for(top_cpu, self.cpu_warning, self.cpu_threshold)
+            overall = level_for(top_cpu, self.cpu_warning, self.cpu_threshold)
         else:
             overall = 'online'
 
-        log_level = "ERROR" if overall == 'failed' else "WARNING" if overall == 'warning' else "INFO"
+        log_level = Status(overall).log_level
         return CollectResult(
             metrics={'process_count': float(process_count), 'top_cpu_pct': top_cpu},
             snapshot=processes,
@@ -151,6 +159,3 @@ class Processes(Plugin):
             'events': True,
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

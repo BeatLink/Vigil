@@ -1,8 +1,16 @@
+"""Existence and correctness of one DNS record, resolved through a DnsQuery
+request issued from the Vigil host. Config: domain, record_type, resolver,
+port, timeout, expected (list of acceptable answer values). NXDOMAIN, no
+answer, a query timeout or error, or any answer outside the expected list is
+failed; a resolving record, matching expected when that is set, is online.
+This monitor has no warning tier."""
+
+import json
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (
-    CmdResult, Command, CollectResult, DnsQuery, DnsResult, Request, Result,
+    CollectResult, DnsQuery, DnsResult, Request, Result,
 )
 
 _DEFAULT_LAYOUT = [
@@ -19,6 +27,25 @@ def _answer_to_str(record_type: str, rdata) -> str:
         return ''.join(part.decode('utf-8', 'replace') if isinstance(part, bytes) else part
                        for part in rdata.strings)
     return str(rdata).rstrip('.')
+
+
+def _failed_lookup(kind: str, error: Optional[str], domain: str, record_type: str,
+                   dns_timeout: float) -> Optional[CollectResult]:
+    """The failed CollectResult for a non-answer query kind, or None when the query succeeded."""
+    messages = {
+        'nxdomain': f"{domain} does not exist (NXDOMAIN)",
+        'no_answer': f"{domain} has no {record_type} record",
+        'timeout': f"Query for {domain} ({record_type}) timed out after {dns_timeout}s",
+        'dns_error': f"DNS query failed: {error}",
+    }
+    message = messages.get(kind)
+    if message is None:
+        return None
+    return CollectResult(
+        metrics={'resolved': 0.0},
+        logs=[(message, "ERROR")],
+        status='failed',
+    )
 
 
 class DnsRecord(Plugin):
@@ -39,12 +66,6 @@ class DnsRecord(Plugin):
         self._color_rule_name = f'dns_record_expected_{self.id}'
         register_item_color_rule(self._color_rule_name)(self._item_color)
 
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
-
     def requests(self) -> List[Request]:
         if not self.domain:
             return []
@@ -57,45 +78,23 @@ class DnsRecord(Plugin):
         )]
 
     def parse_results(self, results: List[Result]) -> CollectResult:
+        """Turns the single DnsResult into a CollectResult with resolved/ttl/match
+        metrics, the answer values stored as a setting, and a status that is
+        failed for NXDOMAIN, no answer, timeout, query error, or any answer
+        outside the expected list."""
         if not results:
             return CollectResult.failed("No 'domain' configured")
 
         result: DnsResult = results[0]
-        kind = result.kind
-
-        if kind == 'nxdomain':
-            return CollectResult(
-                metrics={'resolved': 0.0},
-                logs=[(f"{self.domain} does not exist (NXDOMAIN)", "ERROR")],
-                status='failed',
-            )
-        if kind == 'no_answer':
-            return CollectResult(
-                metrics={'resolved': 0.0},
-                logs=[(f"{self.domain} has no {self.record_type} record", "ERROR")],
-                status='failed',
-            )
-        if kind == 'timeout':
-            return CollectResult(
-                metrics={'resolved': 0.0},
-                logs=[(
-                    f"Query for {self.domain} ({self.record_type}) timed out after {self.dns_timeout}s",
-                    "ERROR",
-                )],
-                status='failed',
-            )
-        if kind == 'dns_error':
-            return CollectResult(
-                metrics={'resolved': 0.0},
-                logs=[(f"DNS query failed: {result.error}", "ERROR")],
-                status='failed',
-            )
+        failure = _failed_lookup(result.kind, result.error, self.domain,
+                                 self.record_type, self.dns_timeout)
+        if failure is not None:
+            return failure
 
         answers = result.answer
-        values = [_answer_to_str(self.record_type, r) for r in answers]
+        values = [_answer_to_str(self.record_type, rdata) for rdata in answers]
         ttl = answers.rrset.ttl if answers.rrset is not None else None
 
-        import json
         metrics = {'resolved': 1.0}
         if ttl is not None:
             metrics['ttl'] = float(ttl)
@@ -125,8 +124,8 @@ class DnsRecord(Plugin):
         )
 
     def _item_color(self, item: Dict[str, Any]) -> str:
-        v = item.get('value')
-        return 'online' if self.expected is None or v in self.expected else 'failed'
+        value = item.get('value')
+        return 'online' if self.expected is None or value in self.expected else 'failed'
 
     @property
     def UI_SPEC(self):
@@ -152,6 +151,3 @@ class DnsRecord(Plugin):
             'events': True,
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

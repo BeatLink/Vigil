@@ -1,12 +1,20 @@
+"""Traccar GPS-device freshness via one GET of /api/devices over HTTP from
+the Vigil host, basic-authenticated as a dedicated vigil account. Config:
+api_url (required, Vigil-reachable), username, password / password_command,
+devices (names to watch, default all enabled), stale_warning /
+stale_threshold (hours), api_timeout. A device silent past stale_warning is
+warning; one past stale_threshold, or that never reported, is failed, as are
+transport and auth errors; no matching enabled devices is a warning."""
+
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (
-    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+    CollectResult, HttpRequest, HttpResult, Request, Result,
 )
-from vigil.plugins.base.plugin_helpers import resolve_secret
+from vigil.plugins.base.plugin_helpers import StatusAccumulator, resolve_secret
 
 
 def _parse_response(stdout: str) -> List[Dict[str, Any]]:
@@ -31,6 +39,62 @@ def _age_hours(last_update: Optional[str]) -> Optional[float]:
     return (datetime.now(timezone.utc) - ts).total_seconds() / 3600.0
 
 
+def _http_failure(result) -> Optional[CollectResult]:
+    """The failed CollectResult for a transport, auth, or HTTP error, or None when the response is usable."""
+    if result.error is not None:
+        return CollectResult.failed(f"Failed to query Traccar API: {result.error}")
+    if result.status_code == 401:
+        return CollectResult.failed(
+            "Traccar rejected the configured credentials "
+            "(check username / password_command)")
+    if result.status_code != 200:
+        return CollectResult.failed(
+            f"Traccar API returned HTTP {result.status_code}")
+    return None
+
+
+def _survey_staleness(watched: List[Dict[str, Any]], stale_warning: float,
+                      stale_threshold: float):
+    """Bucket devices into warn/fail staleness lists (age -1 meaning never reported) and find the oldest update age."""
+    stale_warn: List[Tuple[str, float]] = []
+    stale_fail: List[Tuple[str, float]] = []
+    oldest_age = 0.0
+
+    for device in watched:
+        age = _age_hours(device.get('lastUpdate'))
+        name = device.get('name', '?')
+        if age is None:
+            stale_fail.append((name, -1))
+            continue
+        oldest_age = max(oldest_age, age)
+        if age >= stale_threshold:
+            stale_fail.append((name, age))
+        elif age >= stale_warning:
+            stale_warn.append((name, age))
+
+    return stale_warn, stale_fail, oldest_age
+
+
+def _accumulate_staleness(stale_warn: List[Tuple[str, float]],
+                          stale_fail: List[Tuple[str, float]],
+                          stale_warning: float, stale_threshold: float) -> StatusAccumulator:
+    """Fold the stale-device buckets into problem lines and a worst-of status."""
+    acc = StatusAccumulator()
+    if stale_fail:
+        names = ', '.join(
+            f"{name} (never reported)" if age < 0 else f"{name} ({age:.0f}h)"
+            for name, age in stale_fail[:3])
+        suffix = f" (+{len(stale_fail) - 3} more)" if len(stale_fail) > 3 else ""
+        acc.escalate('failed',
+                     f"{len(stale_fail)} stale >= {stale_threshold:.0f}h: {names}{suffix}")
+    if stale_warn:
+        names = ', '.join(f"{name} ({age:.0f}h)" for name, age in stale_warn[:3])
+        suffix = f" (+{len(stale_warn) - 3} more)" if len(stale_warn) > 3 else ""
+        acc.escalate('warning',
+                     f"{len(stale_warn)} stale >= {stale_warning:.0f}h: {names}{suffix}")
+    return acc
+
+
 _DEFAULT_LAYOUT = [
     ['host_card', 'stale_card', 'devices_card'],
     ['chart'],
@@ -52,12 +116,6 @@ class Traccar(Plugin):
         self.devices: Optional[List[str]] = config.get('devices') or None
         self.api_timeout = int(config.get('api_timeout', 10))
 
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
-
     def requests(self) -> List[Request]:
         if not self.api_url or not self.username:
             return []
@@ -68,6 +126,10 @@ class Traccar(Plugin):
         )]
 
     def parse_results(self, results: List[Result]) -> CollectResult:
+        """Turns the single /api/devices HTTP result into a CollectResult with
+        device-count and staleness metrics, one summary log line, and a status
+        where a device past stale_threshold (or never reporting) is failed and
+        one past stale_warning is warning."""
         if not self.api_url:
             return CollectResult.failed("No 'api_url' configured")
         if not self.username:
@@ -76,23 +138,17 @@ class Traccar(Plugin):
                 "for the dedicated Traccar vigil account")
 
         result: HttpResult = results[0]
-        if result.error is not None:
-            return CollectResult.failed(f"Failed to query Traccar API: {result.error}")
-        if result.status_code == 401:
-            return CollectResult.failed(
-                "Traccar rejected the configured credentials "
-                "(check username / password_command)")
-        if result.status_code != 200:
-            return CollectResult.failed(
-                f"Traccar API returned HTTP {result.status_code}")
+        failure = _http_failure(result)
+        if failure is not None:
+            return failure
 
         try:
             devices = _parse_response(result.text)
         except ValueError as e:
             return CollectResult.failed(str(e))
 
-        watched = [d for d in devices if not d.get('disabled')
-                   and (self.devices is None or d.get('name') in self.devices)]
+        watched = [device for device in devices if not device.get('disabled')
+                   and (self.devices is None or device.get('name') in self.devices)]
 
         if not watched:
             return CollectResult(
@@ -100,50 +156,24 @@ class Traccar(Plugin):
                 status='warning',
             )
 
-        metrics = {'devices_total': float(len(watched))}
+        stale_warn, stale_fail, oldest_age = _survey_staleness(
+            watched, self.stale_warning, self.stale_threshold)
 
-        stale_warn: List[Tuple[str, float]] = []
-        stale_fail: List[Tuple[str, float]] = []
-        oldest_age = 0.0
+        metrics = {
+            'devices_total': float(len(watched)),
+            'oldest_update_hours': oldest_age,
+            'devices_stale': float(len(stale_warn) + len(stale_fail)),
+        }
 
-        for device in watched:
-            age = _age_hours(device.get('lastUpdate'))
-            name = device.get('name', '?')
-            if age is None:
-                stale_fail.append((name, -1))
-                continue
-            oldest_age = max(oldest_age, age)
-            if age >= self.stale_threshold:
-                stale_fail.append((name, age))
-            elif age >= self.stale_warning:
-                stale_warn.append((name, age))
-
-        metrics['oldest_update_hours'] = oldest_age
-        metrics['devices_stale'] = float(len(stale_warn) + len(stale_fail))
-
-        level = 'online'
-        problems = []
-
-        if stale_fail:
-            names = ', '.join(
-                f"{n} (never reported)" if a < 0 else f"{n} ({a:.0f}h)"
-                for n, a in stale_fail[:3])
-            suffix = f" (+{len(stale_fail) - 3} more)" if len(stale_fail) > 3 else ""
-            problems.append(f"{len(stale_fail)} stale >= {self.stale_threshold:.0f}h: {names}{suffix}")
-            level = 'failed'
-        if stale_warn:
-            names = ', '.join(f"{n} ({a:.0f}h)" for n, a in stale_warn[:3])
-            suffix = f" (+{len(stale_warn) - 3} more)" if len(stale_warn) > 3 else ""
-            problems.append(f"{len(stale_warn)} stale >= {self.stale_warning:.0f}h: {names}{suffix}")
-            if level == 'online':
-                level = 'warning'
+        acc = _accumulate_staleness(stale_warn, stale_fail,
+                                    self.stale_warning, self.stale_threshold)
 
         parts = [f"{len(watched)} device(s)", f"oldest update {oldest_age:.0f}h ago"]
-        if problems:
-            parts.append("| " + "; ".join(problems))
+        if acc.problems:
+            parts.append("| " + "; ".join(acc.problems))
 
-        log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
+        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), acc.log_level)],
+                             status=acc.status)
 
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,
@@ -157,10 +187,6 @@ class Traccar(Plugin):
         'chart': {'metric': 'oldest_update_hours', 'title': 'OLDEST UPDATE (HOURS)'},
         'events': True,
     }
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 from vigil.core.ui.spec import register_color_rule

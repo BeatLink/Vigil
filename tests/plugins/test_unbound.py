@@ -1,10 +1,9 @@
-from unittest.mock import AsyncMock
 
 import pytest
 
 from vigil.plugins.unbound import (
     Unbound,
-    _SEP,
+    SCRIPT_SEP,
     _build_probe_script,
     _parse_stats,
     _resolved_ok,
@@ -48,7 +47,7 @@ def _query_fail():
 def _response(stats=None, query_output=None):
     stats_raw = stats if stats is not None else _stats()
     query_raw = query_output if query_output is not None else _query_ok()
-    return f"{stats_raw}\n{_SEP}\n{query_raw}"
+    return f"{stats_raw}\n{SCRIPT_SEP}\n{query_raw}"
 
 
 @pytest.fixture

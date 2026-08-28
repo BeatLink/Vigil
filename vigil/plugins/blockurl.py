@@ -1,9 +1,17 @@
+"""Health of a BlockURL blocklist service, checked over HTTP from the Vigil
+host with one X-API-Key-authenticated GET of its /urls/domains endpoint.
+Config: api_url (required, Vigil-reachable), api_key / api_key_command,
+min_domains, api_timeout. It counts the domains and blocked URLs in the
+response; fewer than min_domains domains is warning (the database may be
+empty or wiped), while an unreachable API, a non-200 reply, or a malformed
+response is failed."""
+
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (
-    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+    CollectResult, HttpRequest, HttpResult, Request, Result,
 )
 from vigil.plugins.base.plugin_helpers import resolve_secret
 
@@ -48,12 +56,6 @@ class Blockurl(Plugin):
             if v is None:
                 return None
             return "warning" if v < _min_domains else "online"
-
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
 
     def requests(self) -> List[Request]:
         if not self.api_url:
@@ -132,7 +134,3 @@ class Blockurl(Plugin):
             "events": True,
         }
 
-    def render_ui(self, context: str = "page"):
-        from vigil.core.ui.spec import generic_render
-
-        generic_render(self, context)

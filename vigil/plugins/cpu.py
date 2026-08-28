@@ -2,12 +2,10 @@
 
 from typing import Any, Dict, List, Tuple
 
-from vigil.plugins.base.signal_plugin import (
-    LOG_LEVEL as _LOG_LEVEL, SignalPlugin,
-)
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.signal_plugin import SignalPlugin
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
 from vigil.core.settings.config_schema import PluginConfig
-from vigil.plugins.base.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.plugin_helpers import level_for
 
 
 def _parse_cpu_line(line: str) -> Tuple[int, int]:
@@ -64,12 +62,12 @@ class Cpu(SignalPlugin):
         except (ValueError, IndexError) as e:
             return CollectResult.failed(f"Failed to parse CPU output: {e}")
 
-        status = _level_for(cpu_pct, self.warning, self.threshold)
+        status = level_for(cpu_pct, self.warning, self.threshold)
         return CollectResult(
             metrics={'cpu_pct': cpu_pct},
             logs=[(
                 f"CPU {cpu_pct:.1f}% (warn {self.warning:g}% / fail {self.threshold:g}%)",
-                _LOG_LEVEL[status],
+                Status(status).log_level,
             )],
             status=status,
         )

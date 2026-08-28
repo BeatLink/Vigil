@@ -8,8 +8,8 @@ contracts" section for the rationale behind each one.
 """
 
 from typing import (
-    Any, Awaitable, Callable, Dict, List, Optional, Protocol, TypedDict, Union,
-    runtime_checkable,
+    Any, Awaitable, Callable, Dict, List, Optional, Protocol, Tuple, TypedDict,
+    Union, runtime_checkable,
 )
 
 # A callback that may be a plain sync function or one returning an
@@ -18,6 +18,17 @@ from typing import (
 # whether to await the result. Reused by PluginPage._tick, _CallbackTick._tick
 # and on_data_event.
 RefreshCallback = Callable[[], Union[None, Awaitable[None]]]
+
+
+class TransportConnection(Protocol):
+    """The two-member surface SSHConnection and AgentConnection share — the
+    invariant the whole transport-swap design rests on. ExecContext holds one
+    of these and no plugin ever learns which."""
+
+    host: str
+
+    async def execute(self, command: str,
+                      timeout: Optional[float] = None) -> Tuple[int, str, str]: ...
 
 
 @runtime_checkable
@@ -76,11 +87,15 @@ class EngineLike(Protocol):
 
     async def run(self) -> None: ...
 
+    def shutdown(self) -> None: ...
+
     async def dispatch_action(self, plugin: Any, action_id: str, **kwargs) -> tuple: ...
 
     async def http_fetch(self, request: Any) -> Any: ...
 
     async def run_cycle_now(self, plugin: Any) -> bool: ...
+
+    def last_collected(self, plugin_id: str) -> float: ...
 
     # Job-control surface the UI Engine's job panel drives through the engine
     # (these touch the live JobController, which a pure plugin no longer holds).

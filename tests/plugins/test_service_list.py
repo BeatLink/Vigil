@@ -1,8 +1,7 @@
 import pytest
-from unittest.mock import AsyncMock
 from vigil.plugins.service_list import ServiceList
 from vigil.core.connectors.types import CmdResult
-from vigil.core.database.database import db, StatusHistory, Metric, flush_writes
+from vigil.core.database.database import db, Metric, flush_writes
 
 CFG = {
     "name": "service-browser",

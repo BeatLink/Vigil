@@ -34,13 +34,14 @@ class ExporterEngine:
         from the Coordination Engine's run() once the event loop is live."""
         influx_cfg = self._cfg.get('influxdb')
         if influx_cfg and influx_cfg.get('url'):
+            # A broken exporter config must not stop the engine from starting.
             try:
                 from vigil.core.exporters.influxdb import InfluxDBExporter
                 exporter = InfluxDBExporter(self._db, influx_cfg)
                 self._tasks.append(asyncio.create_task(exporter.run()))
                 logging.info("InfluxDB exporter task started.")
             except Exception as e:
-                logging.error(f"Failed to start InfluxDB exporter: {e}")
+                logging.error(f"Failed to start InfluxDB exporter — metrics will not be pushed: {e}")
 
     @staticmethod
     def render_prometheus(db: Any) -> str:

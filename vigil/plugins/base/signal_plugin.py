@@ -4,21 +4,15 @@ it; this base assembles the usual host-card / charts / events page around them
 so every signal monitor lays out the same way.
 """
 
-from typing import Any, Dict, List
+from typing import Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
+from vigil.core.connectors.types import Status
 from vigil.core.ui.spec_types import CardSpec, ChartSpec, LayoutRow, UISpec
-
-# 'offline' sits below 'warning': a signal that cannot be measured is less
-# alarming than one measuring a bad number.
-SEVERITY = {'online': 0, 'offline': 1, 'warning': 2, 'failed': 3}
-
-LOG_LEVEL = {'online': 'INFO', 'warning': 'WARNING', 'offline': 'WARNING', 'failed': 'ERROR'}
-
 
 def worst_status(statuses: List[str]) -> str:
     """The most severe of the given statuses, defaulting to online."""
-    return max(statuses, key=lambda s: SEVERITY.get(s, 1)) if statuses else 'online'
+    return Status.worst(statuses)
 
 
 class SignalPlugin(Plugin):
@@ -54,6 +48,3 @@ class SignalPlugin(Plugin):
             'events': True,
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

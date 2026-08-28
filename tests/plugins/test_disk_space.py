@@ -1,7 +1,8 @@
 import pytest
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.disk_space import DiskSpace, _format_gb
+from vigil.plugins.disk_space import DiskSpace
+from vigil.plugins.base.plugin_helpers import format_bytes
 from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -52,19 +53,19 @@ def _latest_metric(name: str, metric: str) -> float | None:
 
 class TestFormatGb:
     def test_less_than_1gb_shows_mb(self):
-        assert _format_gb(0.5) == "512 MB"
+        assert format_bytes(0.5) == "512 MB"
 
     def test_exactly_1gb(self):
-        assert _format_gb(1.0) == "1.0 GB"
+        assert format_bytes(1.0) == "1.0 GB"
 
     def test_between_1_and_1024_shows_gb(self):
-        assert _format_gb(512.0) == "512.0 GB"
+        assert format_bytes(512.0) == "512.0 GB"
 
     def test_1024gb_shows_tb(self):
-        assert _format_gb(1024.0) == "1.0 TB"
+        assert format_bytes(1024.0) == "1.0 TB"
 
     def test_above_1024gb_shows_tb(self):
-        assert _format_gb(2048.0) == "2.0 TB"
+        assert format_bytes(2048.0) == "2.0 TB"
 
 
 class TestDiskSpaceCollection:

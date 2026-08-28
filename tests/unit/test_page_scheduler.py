@@ -32,7 +32,7 @@ def fake_client():
         aio.create_task = lambda coro: coro.close()
         aio.get_running_loop = MagicMock()
         # Client.instances membership drives _CallbackTick._detached().
-        with patch.object(model.Client, "instances", {client.id: client}):
+        with patch.object(model.ng.Client, "instances", {client.id: client}):
             yield client, bus
     _schedulers.clear()
 
@@ -118,7 +118,7 @@ class TestViewSwitchLifetime:
     def test_a_disconnected_client_detaches_a_live_anchor(self, fake_client):
         client, _ = fake_client
         anchor = self._anchor(client)
-        with patch.object(model.Client, "instances", {}):
+        with patch.object(model.ng.Client, "instances", {}):
             assert _is_detached(client, anchor) is True
 
     @pytest.mark.asyncio

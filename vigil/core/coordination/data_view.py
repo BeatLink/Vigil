@@ -17,14 +17,16 @@ from typing import Any, Dict, Optional
 
 
 class PluginDataView:
-    def __init__(self, db: Any, plugin_id: str, target: str, plugin_name: str):
+    def __init__(self, db: Any, plugin_id: str):
         self._db = db
         self._id = plugin_id
-        self._target = target
 
     # --- plugin-scoped reads (scoped to this plugin's id) ---
     def latest_metric(self, metric_name: str):
         return self._db.latest_metric(self._id, metric_name)
+
+    def latest_collector_metrics(self):
+        return self._db.latest_collector_metrics(self._id)
 
     def latest_snapshot(self, default: Any = None) -> Any:
         return self._db.latest_snapshot(self._id, default)

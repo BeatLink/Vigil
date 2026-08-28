@@ -52,6 +52,7 @@ class ChangeBus:
         with self._lock:
             subscribers = list(self._subscribers)
         for subscriber in subscribers:
+            # One failing subscriber must not poison the bus for the others or the publisher.
             try:
                 subscriber(kind, plugin_id)
             except Exception as e:

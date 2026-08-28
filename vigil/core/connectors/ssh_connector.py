@@ -41,6 +41,7 @@ class _TofuClient(asyncssh.SSHClient):
         path = _known_hosts_path()
         if not path.exists():
             return set()
+        # asyncssh raises assorted errors on a corrupt known_hosts; treat it as no stored key.
         try:
             exact = asyncssh.read_known_hosts(str(path)).match(self._alias, '', 0)[0]
             return {k.get_fingerprint() for k in exact}
@@ -71,6 +72,13 @@ class _TofuClient(asyncssh.SSHClient):
             return False
 
 
+def resolve_host(config: PluginConfig) -> str:
+    """The effective host a plugin config points at; the single definition the
+    connection pool key and the dialled connection both use."""
+    ssh_cfg = config.get('ssh_config', {})
+    return ssh_cfg.get('host', config.get('target_host', 'localhost'))
+
+
 class SSHConnection:
     """One lazily-opened, reused asyncssh connection to a single target. Its
     only public method is execute(); the connection is dialled on first use and
@@ -80,7 +88,7 @@ class SSHConnection:
     def from_config(cls, config: PluginConfig) -> "SSHConnection":
         ssh_cfg = config.get('ssh_config', {})
         return cls(
-            host=ssh_cfg.get('host', config.get('target_host', 'localhost')),
+            host=resolve_host(config),
             username=ssh_cfg.get('username'),
             key_path=ssh_cfg.get('key_path'),
             port=ssh_cfg.get('port'),
@@ -162,6 +170,7 @@ class SSHConnection:
 
     def close(self):
         if self._conn is not None:
+            # Closing an already-broken connection must not fail teardown.
             try:
                 self._conn.close()
             except Exception:

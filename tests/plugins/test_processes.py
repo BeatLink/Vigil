@@ -1,8 +1,8 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 pytestmark = pytest.mark.asyncio
-from vigil.plugins.processes import Processes, _parse_ps_output, _level_for
+from vigil.plugins.processes import Processes, _parse_ps_output
+from vigil.plugins.base.plugin_helpers import level_for
 from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -117,16 +117,16 @@ class TestParsePsOutput:
 
 class TestLevelFor:
     def test_below_warning_is_online(self):
-        assert _level_for(30.0, 50.0, 80.0) == 'online'
+        assert level_for(30.0, 50.0, 80.0) == 'online'
 
     def test_at_warning_is_warning(self):
-        assert _level_for(50.0, 50.0, 80.0) == 'warning'
+        assert level_for(50.0, 50.0, 80.0) == 'warning'
 
     def test_between_thresholds_is_warning(self):
-        assert _level_for(60.0, 50.0, 80.0) == 'warning'
+        assert level_for(60.0, 50.0, 80.0) == 'warning'
 
     def test_at_failed_is_failed(self):
-        assert _level_for(80.0, 50.0, 80.0) == 'failed'
+        assert level_for(80.0, 50.0, 80.0) == 'failed'
 
 
 class TestProcessesCollection:

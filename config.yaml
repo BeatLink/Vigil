@@ -15,6 +15,13 @@ logging:
   retention_days: 30          # Days to keep log lines; 0 disables pruning (keep forever)
   metric_retention_days: 30   # Days to keep metrics & status history (powers charts);
                               # 0 disables. Omit to reuse retention_days above.
+  # metric_downsample_days: 2 # Thin metrics older than this to one sample per
+                              # hour per series — charts only read the recent
+                              # tail, so this stretches retention for the same
+                              # disk footprint. 0 (default) disables.
+  # cycle_timings: true       # Record cycle_collect/parse_seconds metrics per
+                              # monitor; they double the metric row count, so
+                              # set false to shed them.
 
 # In-memory state (optional).
 # Live state is held in Python objects and served to the UI from there; the
@@ -194,7 +201,10 @@ plugins:
         # archive_prefix: "nightly"            # archives: "<prefix>-<UTC stamp>"
         # cache_dir: "/var/cache/vigil-borg"   # persistent BORG_BASE_DIR; must be
         #                                      # writable, else every backup is a
-        #                                      # full re-read instead of incremental
+        #                                      # full re-read instead of incremental;
+        #                                      # when set, monitoring polls reuse it
+        #                                      # too instead of rebuilding the chunks
+        #                                      # cache in a temp dir on every poll
         # backup_lock_wait: 600                # seconds to wait for the repo lock
         ssh_config:
           host: "server.example.com"

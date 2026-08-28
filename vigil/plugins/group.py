@@ -1,20 +1,38 @@
+"""A container monitor that aggregates its child monitors. It issues no
+requests of its own: each cycle it re-reads the children's latest statuses
+from the read-only data view and takes the worst as its own, counting a child
+with no status yet as offline. Config: layout (compose individual descendant
+widgets into the group's own grid) plus the grid_min_width default and the
+per-child grid_* sizing keys; without a layout it renders one collapsible
+card per child, persisting the expansion state as a setting."""
+
 import json
 import logging
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.core.connectors.types import CollectResult, Status
 from vigil.core.ui.spec_types import UISpec
-
-SEVERITY_ORDER = {
-    'online': 0,
-    'offline': 1,
-    'warning': 2,
-    'failed': 3
-}
 
 # Group-provided pseudo-widget: a status card for a child that has none of its own.
 STATUS_WIDGET = 'status'
+
+
+def _child_cell_style(child_config: Dict[str, Any], default_min_width: str) -> str:
+    """Pure: the flex-cell style string for one child card, from its grid_* config keys."""
+    col_span = int(child_config.get('grid_col_span', 1))
+    child_height = child_config.get('grid_height', None)
+    child_min_width = child_config.get('grid_min_width', default_min_width)
+    style = f'flex: {col_span} 1 calc({col_span} * {child_min_width}); min-width: {child_min_width};'
+    if child_height:
+        style += f' height: {child_height}; overflow-y: auto;'
+    return style
+
+
+def _chevron_style(text_secondary: str, is_open: bool) -> str:
+    """Pure: the expand-chevron style string, rotated 180 degrees when the card is open."""
+    angle = '180deg' if is_open else '0deg'
+    return f'color: {text_secondary}; transition: transform 0.2s; transform: rotate({angle})'
 
 
 def spec_with_titles(spec: Optional[UISpec], titles: Dict[str, str]) -> Optional[UISpec]:
@@ -35,12 +53,6 @@ def spec_with_titles(spec: Optional[UISpec], titles: Dict[str, str]) -> Optional
 
 
 class Group(Plugin):
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
-
     def parse_results(self, results: List[Any]) -> CollectResult:
         """A group issues no requests; each cycle it re-reads live child
         status from the Database Engine (via the read-only data view) and
@@ -49,18 +61,7 @@ class Group(Plugin):
         return CollectResult(status=self._aggregate_status(statuses))
 
     def _aggregate_status(self, statuses: Dict[str, str]) -> str:
-        current_max_severity = SEVERITY_ORDER['online']
-
-        for child in self.children:
-            child_status = statuses.get(child.id, 'offline')
-            child_severity = SEVERITY_ORDER.get(child_status, SEVERITY_ORDER['offline'])
-            if child_severity > current_max_severity:
-                current_max_severity = child_severity
-
-        return next(
-            (status for status, severity in SEVERITY_ORDER.items() if severity == current_max_severity),
-            'offline',
-        )
+        return Status.worst(statuses.get(child.id, 'offline') for child in self.children)
 
     def _descendants(self) -> Iterator[Any]:
         """Every monitor under this group, depth-first, so a layout can address a nested group's children."""
@@ -91,6 +92,7 @@ class Group(Plugin):
         self.engine.set_setting(self._setting_key(), json.dumps(self._expanded))
 
     def render_ui(self, context: str = 'page'):
+        """Render the configured composite grid, or the default one-card-per-child layout without one."""
         layout_rows = self.config.get('layout')
         if isinstance(layout_rows, list) and layout_rows:
             self._render_composite(layout_rows)
@@ -176,9 +178,8 @@ class Group(Plugin):
     # ------------------------------------------------------------------
 
     def _render_cards(self):
+        """Render the default layout: one collapsible status-dotted card per child in a wrapping flex row."""
         from nicegui import ui
-        from vigil.core.ui.theme import STATUS_COLORS, TEXT_SECONDARY
-        from vigil.core.ui.components import card
 
         min_card_width = self.config.get('grid_min_width', '320px')
         with ui.element('div').style(
@@ -186,53 +187,61 @@ class Group(Plugin):
         ):
             statuses = self.data.latest_statuses()
             for child in self.children:
-                child_status = statuses.get(child.id, 'offline')
-                child_color = STATUS_COLORS.get(child_status, STATUS_COLORS['offline'])
-                col_span = int(child.config.get('grid_col_span', 1))
-                child_height = child.config.get('grid_height', None)
-                child_min_width = child.config.get('grid_min_width', min_card_width)
+                self._render_child_card(child, statuses, min_card_width)
 
-                cell_style = f'flex: {col_span} 1 calc({col_span} * {child_min_width}); min-width: {child_min_width};'
-                if child_height:
-                    cell_style += f' height: {child_height}; overflow-y: auto;'
+    def _render_child_card(self, child: Any, statuses: Dict[str, str], min_card_width: str):
+        """One collapsible card: a header with the child's status dot, and a body that lazily renders the child's UI on first expand."""
+        from nicegui import ui
+        from vigil.core.ui.theme import STATUS_COLORS
+        from vigil.core.ui.components import card
 
-                is_open = self._expanded.get(child.id, False)
+        child_status = statuses.get(child.id, 'offline')
+        child_color = STATUS_COLORS.get(child_status, STATUS_COLORS['offline'])
+        is_open = self._expanded.get(child.id, False)
 
-                with ui.element('div').style(cell_style):
-                    with card('w-full h-full overflow-hidden', padding=False):
-                        with ui.row().classes(
-                            'w-full items-center gap-3 halon-panel-header halon-row-hover '
-                            'cursor-pointer select-none'
-                        ) as header_row:
-                            ui.element('div').style(
-                                f'width: 8px; height: 8px; border-radius: 50%; '
-                                f'background: {child_color}; flex-shrink: 0'
-                            )
-                            ui.label(child.name).classes('halon-title-row flex-1')
-                            chevron = ui.icon('expand_more', size='sm').style(
-                                f'color: {TEXT_SECONDARY}; transition: transform 0.2s; '
-                                + ('transform: rotate(180deg)' if is_open else 'transform: rotate(0deg)')
-                            )
+        with ui.element('div').style(_child_cell_style(child.config, min_card_width)):
+            with card('w-full h-full overflow-hidden', padding=False):
+                header_row, chevron = self._card_header(child, child_color, is_open)
+                body = ui.column().classes('w-full halon-card-body').style('min-width: 0')
+                body.set_visibility(is_open)
+                if is_open:
+                    with body:
+                        child.render_ui(context='inline')
 
-                        body = ui.column().classes('w-full halon-card-body').style('min-width: 0')
-                        body.set_visibility(is_open)
-                        rendered = False
-                        if is_open:
-                            with body:
-                                child.render_ui(context='inline')
-                            rendered = True
+            header_row.on('click', self._make_toggle(child, body, chevron, rendered=is_open))
 
-                    def _toggle(e=None, c=child, _body=body, _chev=chevron):
-                        self._expanded[c.id] = not self._expanded.get(c.id, False)
-                        open_now = self._expanded[c.id]
-                        _body.set_visibility(open_now)
-                        angle = '180deg' if open_now else '0deg'
-                        _chev.style(f'color: {TEXT_SECONDARY}; transition: transform 0.2s; transform: rotate({angle})')
-                        self._save_expanded()
-                        nonlocal rendered
-                        if open_now and not rendered:
-                            with _body:
-                                c.render_ui(context='inline')
-                            rendered = True
+    def _card_header(self, child: Any, child_color: str, is_open: bool):
+        """The clickable card header row: status dot, child name, and expand chevron."""
+        from nicegui import ui
+        from vigil.core.ui.theme import TEXT_SECONDARY
 
-                    header_row.on('click', _toggle)
+        with ui.row().classes(
+            'w-full items-center gap-3 halon-panel-header halon-row-hover '
+            'cursor-pointer select-none'
+        ) as header_row:
+            ui.element('div').style(
+                f'width: 8px; height: 8px; border-radius: 50%; '
+                f'background: {child_color}; flex-shrink: 0'
+            )
+            ui.label(child.name).classes('halon-title-row flex-1')
+            chevron = ui.icon('expand_more', size='sm').style(
+                _chevron_style(TEXT_SECONDARY, is_open))
+        return header_row, chevron
+
+    def _make_toggle(self, child: Any, body: Any, chevron: Any, rendered: bool):
+        """The click handler that flips a card open or shut, persists the state, and renders the child's UI the first time it opens."""
+        from vigil.core.ui.theme import TEXT_SECONDARY
+
+        def _toggle(e=None):
+            nonlocal rendered
+            self._expanded[child.id] = not self._expanded.get(child.id, False)
+            open_now = self._expanded[child.id]
+            body.set_visibility(open_now)
+            chevron.style(_chevron_style(TEXT_SECONDARY, open_now))
+            self._save_expanded()
+            if open_now and not rendered:
+                with body:
+                    child.render_ui(context='inline')
+                rendered = True
+
+        return _toggle

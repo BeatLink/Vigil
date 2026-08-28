@@ -1,10 +1,19 @@
+"""Vigil watching itself: process memory, CPU, and uptime from /proc/self,
+plus collection health across every other monitor, gathered through the
+io_call escape hatch since it reads local files and live engine state rather
+than issuing connector requests. Config: memory_warning / memory_threshold
+(MB of RSS), stale_warning / stale_threshold (how many intervals overdue a
+monitor may run). RSS past its bounds sets warning/failed, monitors overdue
+past stale_warning are warning ("late"), and any past stale_threshold makes
+the status failed ("stalled")."""
+
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.plugin_helpers import level_for as _level_for
+from vigil.core.connectors.types import CollectResult
+from vigil.plugins.base.plugin_helpers import level_for
 
 _CLOCK_TICKS = os.sysconf('SC_CLK_TCK') if hasattr(os, 'sysconf') else 100
 
@@ -46,24 +55,11 @@ class VigilSelfPlugin(Plugin):
         self._last_cpu_sample: Optional[Tuple[float, float]] = None
         self.target = 'vigil'
 
-        from vigil.core.ui.spec import register_color_rule, register_formatter, threshold_color, register_item_formatter
-        self._memory_color_name = f'vigil_self_memory_{self.id}'
-        register_color_rule(self._memory_color_name)(
-            threshold_color(warning=self.memory_warning, threshold=self.memory_threshold))
-        self._uptime_format_name = f'vigil_self_uptime_{self.id}'
-        register_formatter(self._uptime_format_name)(lambda v: '--' if v is None else _format_uptime(v))
-        self._memory_format_name = f'vigil_self_memory_fmt_{self.id}'
-        register_formatter(self._memory_format_name)(lambda v: '-- MB' if v is None else f'{v:.0f} MB')
-        self._monitors_format_name = f'vigil_self_monitors_{self.id}'
-        register_item_formatter(self._monitors_format_name)(self._monitors_text)
-        self._monitors_color_name = f'vigil_self_monitors_color_{self.id}'
-        register_item_formatter(self._monitors_color_name)(self._monitors_color)
-
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
+        from vigil.core.ui.spec import threshold_color
+        self._memory_color = threshold_color(
+            warning=self.memory_warning, threshold=self.memory_threshold)
+        self._uptime_format = lambda v: '--' if v is None else _format_uptime(v)
+        self._memory_format = lambda v: '-- MB' if v is None else f'{v:.0f} MB'
 
     def _walk_monitors(self):
         if self.engine is None:
@@ -84,7 +80,7 @@ class VigilSelfPlugin(Plugin):
             if p.children:
                 continue
             total += 1
-            last = self.engine._last_collected.get(p.id, 0.0) if self.engine else 0.0
+            last = self.engine.last_collected(p.id) if self.engine else 0.0
             if not last:
                 continue
             overdue = (now - last) / p.interval if p.interval else 0
@@ -143,7 +139,7 @@ class VigilSelfPlugin(Plugin):
             metrics['cpu_pct'] = cpu_pct
 
         mem_level = (
-            _level_for(rss_mb, self.memory_warning, self.memory_threshold)
+            level_for(rss_mb, self.memory_warning, self.memory_threshold)
             if rss_mb is not None else 'online'
         )
         if stalled:
@@ -202,20 +198,16 @@ class VigilSelfPlugin(Plugin):
             'layout': _DEFAULT_LAYOUT,
             'cards': {
                 'uptime_card': {'metric': 'uptime_seconds', 'title': 'VIGIL UPTIME',
-                                'format': self._uptime_format_name},
-                'memory_card': {'metric': 'memory_mb', 'title': 'MEMORY', 'format': self._memory_format_name,
-                                'color': self._memory_color_name},
+                                'format': self._uptime_format},
+                'memory_card': {'metric': 'memory_mb', 'title': 'MEMORY', 'format': self._memory_format,
+                                'color': self._memory_color},
                 'monitors_card': {'title': 'MONITORS',
                                   'metrics': ['monitors_total', 'monitors_late', 'monitors_stalled'],
-                                  'format_fn': self._monitors_format_name, 'color_fn': self._monitors_color_name},
+                                  'format_fn': self._monitors_text, 'color_fn': self._monitors_color},
             },
             'chart': {'metric': 'memory_mb', 'title': 'VIGIL MEMORY (MB)'},
             'events': True,
         }
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 def _format_uptime(seconds: float) -> str:

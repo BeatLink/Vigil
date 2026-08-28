@@ -6,7 +6,6 @@ from vigil.plugins.base.signal_plugin import (
     SignalPlugin,
 )
 from vigil.core.connectors.types import CmdResult, Command, CollectResult
-from vigil.core.settings.config_schema import PluginConfig
 
 
 # Classification is by positive assertion: any output other than an explicit

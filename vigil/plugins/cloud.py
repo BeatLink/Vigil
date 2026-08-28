@@ -1,4 +1,12 @@
-from typing import Dict, Any, List, Optional
+"""Cloud-instance detection: whether the target runs on AWS, GCP, or Azure,
+established by curling the 169.254.169.254 metadata endpoint via SSH commands
+on the target. Config: provider ('auto' tries all three, or name one to probe
+just it). A recognized provider is online, with its instance fields stored as
+a setting for the detail cards; no responding metadata endpoint is offline
+rather than failed, since not being a cloud host is a finding, not an
+error."""
+
+from typing import Dict, Any, List
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import CmdResult, Command, CollectResult
@@ -125,10 +133,6 @@ class Cloud(Plugin):
             },
             'events': True,
         }
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 def _parse_kv(text: str) -> Dict[str, str]:

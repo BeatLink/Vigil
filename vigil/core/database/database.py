@@ -47,7 +47,6 @@ from vigil.core.state import changes
 
 from .models import (
     ALL_MODELS,
-    BaseModel,
     Event,
     Job,
     JobOutput,
@@ -116,6 +115,10 @@ class _AsyncWriter:
         self._q.join()
 
     def _run(self):
+        """Writer-thread loop: batches everything arriving within batch_window of
+        the first item into one transaction; a failed item is logged and skipped
+        while the rest commit, a failed commit drops the whole batch but the thread
+        survives, and its blocking queue/SQLite calls must never touch the event loop."""
         while True:
             fn = self._q.get()
             if fn is None:
@@ -139,6 +142,8 @@ class _AsyncWriter:
                     break
                 batch.append(nxt)
 
+            # The commit itself must never kill this thread: a dead writer means
+            # every later submit() queues forever with nothing draining it.
             try:
                 with db.connection_context():
                     with db.atomic():
@@ -147,6 +152,8 @@ class _AsyncWriter:
                                 item_fn()
                             except Exception as e:
                                 logging.error(f"DB write failed: {e}")
+            except Exception as e:
+                logging.error(f"DB batch commit failed, dropping {len(batch)} write(s): {e}")
             finally:
                 for _ in batch:
                     self._q.task_done()
@@ -182,7 +189,8 @@ class DatabaseManager:
                 self.db_path,
                 pragmas={
                     "journal_mode": "wal",
-                    "synchronous": 0,
+                    # NORMAL: under WAL it fsyncs only at checkpoint; OFF risks corruption on power loss.
+                    "synchronous": 1,
                     "cache_size": -262144,
                     "mmap_size": 268435456,
                     "temp_store": 2,
@@ -228,6 +236,12 @@ class DatabaseManager:
         # live read path no longer queries SQLite, but startup hydration loads
         # recent history per series, and the retention prunes scan by
         # timestamp — both still benefit.
+        # Secondary indexes no read or prune uses; dropping them halves the
+        # per-insert index maintenance on the hottest table.
+        for index in ("metric_target", "metric_metric_name", "logline_source",
+                      "job_plugin_id", "job_target", "job_kind", "job_state"):
+            db.execute_sql(f"DROP INDEX IF EXISTS {index}")
+
         metric_indexes = {idx.name for idx in db.get_indexes("metric")}
         if "metric_collector_metric_name_timestamp" not in metric_indexes:
             db.execute_sql(
@@ -423,6 +437,9 @@ class DatabaseManager:
     def latest_metric(self, collector: str, metric_name: str) -> Optional[MetricRecord]:
         return self.store.latest_metric(collector, metric_name)
 
+    def latest_collector_metrics(self, collector: str) -> List[MetricRecord]:
+        return self.store.latest_collector_metrics(collector)
+
     def metric_history(
         self, collector: str, metric_name: str, limit: int = 30
     ) -> List[MetricRecord]:
@@ -615,6 +632,30 @@ class DatabaseManager:
 
         _writer.submit(_do_prune)
         return 0
+
+    def downsample_metrics(self, older_than_days: int) -> None:
+        """Thin metrics older than the window to one row per series per hour.
+        Charts and hydration only ever read a series' recent tail, so old
+        full-resolution rows serve nothing; thinning them stretches how far
+        back a chart can reach for the same disk footprint."""
+        if older_than_days is None or older_than_days <= 0:
+            return
+        cutoff = (datetime.now() - timedelta(days=older_than_days)).isoformat(sep=" ")
+
+        def _do_downsample():
+            cursor = db.execute_sql(
+                "DELETE FROM metric WHERE timestamp < ? AND id NOT IN ("
+                "SELECT MIN(id) FROM metric WHERE timestamp < ? "
+                "GROUP BY collector, metric_name, strftime('%Y%m%d%H', timestamp))",
+                (cutoff, cutoff),
+            )
+            if cursor.rowcount:
+                logging.info(
+                    f"Downsampled {cursor.rowcount} metric row(s) older than "
+                    f"{older_than_days}d to one per hour"
+                )
+
+        _writer.submit(_do_downsample)
 
     def prune_status(self, retention_days: int) -> int:
         """The newest row per collector is kept regardless of age so a restart
@@ -864,10 +905,18 @@ class DatabaseManager:
         """Fan a CollectResult out to the per-datatype writes. The one place
         that translates the plugin-facing CollectResult contract into store
         updates (each of which mirrors itself to disk)."""
+        metric_rows = []
         for name, value in result.metrics.items():
-            self.insert_metric(
+            record = self.store.add_metric(
                 target, plugin_id, name, value, result.metadata.get(name)
             )
+            metric_rows.append(dict(
+                timestamp=record.timestamp, target=target, collector=plugin_id,
+                metric_name=name, value=value, metadata=record.metadata,
+            ))
+        if metric_rows:
+            _writer.submit(lambda: Metric.insert_many(metric_rows).execute())
+            CHANGES.publish(changes.METRIC, plugin_id)
         for message, level in result.logs:
             self.write_event(target, plugin_id, plugin_name, message, level=level)
         for message, level, log_time in result.log_lines:

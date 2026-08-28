@@ -1,13 +1,21 @@
+"""FreshRSS feed freshness via the Fever API, queried over HTTP from the
+Vigil host using the Fever protocol's md5 username:password token. Config:
+api_url (required, Vigil-reachable), username, api_password /
+api_password_command, feed_stale_warning, feed_stale_threshold,
+refresh_stale_warning (all in hours), api_timeout. A stale refresh cycle or
+aging feeds are warning; any feed older than feed_stale_threshold is failed,
+as are transport, HTTP, and auth errors."""
+
 import hashlib
 import json
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (
-    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+    CollectResult, HttpRequest, HttpResult, Request, Result,
 )
-from vigil.plugins.base.plugin_helpers import resolve_secret
+from vigil.plugins.base.plugin_helpers import StatusAccumulator, resolve_secret
 
 
 def _fever_api_key(username: str, password: str) -> str:
@@ -36,6 +44,40 @@ def _format_age(hours: float) -> str:
     if hours < 48:
         return f"{hours:.1f}h"
     return f"{hours / 24:.1f}d"
+
+
+def _survey_feeds(feeds: List[Dict[str, Any]], now: float,
+                  feed_stale_warning: float, feed_stale_threshold: float):
+    """Bucket feeds into (title, age-in-hours) warn/fail lists by how long since each last updated."""
+    stale_warn = []
+    stale_fail = []
+    for feed in feeds:
+        last_updated = feed.get('last_updated_on_time', 0) or 0
+        age = (now - float(last_updated)) / 3600.0
+        title = feed.get('title', '?')
+        if age >= feed_stale_threshold:
+            stale_fail.append((title, age))
+        elif age >= feed_stale_warning:
+            stale_warn.append((title, age))
+    return stale_warn, stale_fail
+
+
+def _accumulate_freshness(refresh_age_hours: float, stale_warn, stale_fail,
+                          refresh_stale_warning: float) -> StatusAccumulator:
+    """Fold the refresh-cycle age and stale-feed buckets into problem lines and a worst-of status."""
+    acc = StatusAccumulator()
+    if refresh_age_hours >= refresh_stale_warning:
+        acc.escalate('warning',
+                     f"refresh cycle stale ({_format_age(refresh_age_hours)} since last run)")
+    if stale_fail:
+        names = ', '.join(f"{title} ({_format_age(age)})" for title, age in stale_fail[:3])
+        suffix = f" (+{len(stale_fail) - 3} more)" if len(stale_fail) > 3 else ""
+        acc.escalate('failed', f"{len(stale_fail)} feed(s) stale: {names}{suffix}")
+    if stale_warn:
+        names = ', '.join(f"{title} ({_format_age(age)})" for title, age in stale_warn[:3])
+        suffix = f" (+{len(stale_warn) - 3} more)" if len(stale_warn) > 3 else ""
+        acc.escalate('warning', f"{len(stale_warn)} feed(s) aging: {names}{suffix}")
+    return acc
 
 
 _DEFAULT_LAYOUT = [
@@ -69,12 +111,6 @@ class Freshrss(Plugin):
                 return None
             return 'warning' if v >= _warning else 'online'
 
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
-
     def requests(self) -> List[Request]:
         if not self.api_url or not self.username:
             return []
@@ -87,6 +123,10 @@ class Freshrss(Plugin):
         )]
 
     def parse_results(self, results: List[Result]) -> CollectResult:
+        """Turns the single Fever API HTTP result into a CollectResult with
+        refresh-age and feed-count metrics, one summary log line, and a status
+        where any feed past feed_stale_threshold is failed and a stale refresh
+        cycle or aging feeds are warning."""
         if not self.api_url:
             return CollectResult.failed("No 'api_url' configured")
         if not self.username:
@@ -107,57 +147,28 @@ class Freshrss(Plugin):
 
         feeds: List[Dict[str, Any]] = data.get('feeds', [])
         now = time.time()
-
         refresh_age_hours = (now - float(data.get('last_refreshed_on_time', 0) or 0)) / 3600.0
-        metrics = {'refresh_age_hours': refresh_age_hours, 'feeds_total': float(len(feeds))}
 
-        stale_warn = []
-        stale_fail = []
-        for feed in feeds:
-            last_updated = feed.get('last_updated_on_time', 0) or 0
-            age = (now - float(last_updated)) / 3600.0
-            title = feed.get('title', '?')
-            if age >= self.feed_stale_threshold:
-                stale_fail.append((title, age))
-            elif age >= self.feed_stale_warning:
-                stale_warn.append((title, age))
+        stale_warn, stale_fail = _survey_feeds(
+            feeds, now, self.feed_stale_warning, self.feed_stale_threshold)
 
-        metrics['feeds_stale'] = float(len(stale_warn) + len(stale_fail))
+        metrics = {
+            'refresh_age_hours': refresh_age_hours,
+            'feeds_total': float(len(feeds)),
+            'feeds_stale': float(len(stale_warn) + len(stale_fail)),
+        }
 
-        problems = []
-        level = 'online'
-
-        def _escalate(new_level: str):
-            nonlocal level
-            order = ('online', 'warning', 'failed')
-            if order.index(new_level) > order.index(level):
-                level = new_level
-
-        if refresh_age_hours >= self.refresh_stale_warning:
-            problems.append(
-                f"refresh cycle stale ({_format_age(refresh_age_hours)} since last run)")
-            _escalate('warning')
-
-        if stale_fail:
-            names = ', '.join(f"{t} ({_format_age(a)})" for t, a in stale_fail[:3])
-            suffix = f" (+{len(stale_fail) - 3} more)" if len(stale_fail) > 3 else ""
-            problems.append(f"{len(stale_fail)} feed(s) stale: {names}{suffix}")
-            _escalate('failed')
-        if stale_warn:
-            names = ', '.join(f"{t} ({_format_age(a)})" for t, a in stale_warn[:3])
-            suffix = f" (+{len(stale_warn) - 3} more)" if len(stale_warn) > 3 else ""
-            problems.append(f"{len(stale_warn)} feed(s) aging: {names}{suffix}")
-            _escalate('warning')
+        acc = _accumulate_freshness(refresh_age_hours, stale_warn, stale_fail,
+                                    self.refresh_stale_warning)
 
         parts = [
             f"{len(feeds)} feed(s)",
             f"refreshed {_format_age(refresh_age_hours)} ago",
         ]
-        if problems:
-            parts.append("| " + "; ".join(problems))
+        if acc.problems:
+            parts.append("| " + "; ".join(acc.problems))
 
-        log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
+        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), acc.log_level)], status=acc.status)
 
     @property
     def UI_SPEC(self):
@@ -177,10 +188,6 @@ class Freshrss(Plugin):
             'chart': {'metric': 'refresh_age_hours', 'title': 'REFRESH AGE (HOURS)'},
             'events': True,
         }
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 from vigil.core.ui.spec import register_formatter

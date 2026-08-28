@@ -1,6 +1,5 @@
 import json
 import time
-from unittest.mock import AsyncMock
 
 import pytest
 

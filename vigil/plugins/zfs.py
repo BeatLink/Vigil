@@ -2,12 +2,10 @@
 
 from typing import Any, Dict, List
 
-from vigil.plugins.base.signal_plugin import (
-    LOG_LEVEL as _LOG_LEVEL, SignalPlugin, worst_status as _worst,
-)
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.signal_plugin import SignalPlugin, worst_status as _worst
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
 from vigil.core.settings.config_schema import PluginConfig
-from vigil.plugins.base.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.plugin_helpers import level_for
 
 
 _UNHEALTHY = {'DEGRADED', 'FAULTED', 'OFFLINE', 'UNAVAIL', 'REMOVED'}
@@ -34,7 +32,7 @@ class Zfs(SignalPlugin):
             threshold_color(warning=self.warning, threshold=self.threshold))
         self._item_color_rule = f'zfs_pool_{self.id}'
         register_item_color_rule(self._item_color_rule)(
-            lambda item: _level_for(item.get('value') or 0.0, self.warning, self.threshold))
+            lambda item: level_for(item.get('value') or 0.0, self.warning, self.threshold))
 
     SAMPLED = True
 
@@ -65,12 +63,12 @@ class Zfs(SignalPlugin):
                 status = 'failed'
             else:
                 ok += 1
-                status = _level_for(usage_pct, self.warning, self.threshold)
+                status = level_for(usage_pct, self.warning, self.threshold)
             statuses.append(status)
             logs.append((
                 f"Pool {pool}: {health}, {usage_pct:.0f}% used "
                 f"(warn {self.warning:g}% / fail {self.threshold:g}%)",
-                _LOG_LEVEL[status],
+                Status(status).log_level,
             ))
 
         if not usage:

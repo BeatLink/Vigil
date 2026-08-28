@@ -15,8 +15,8 @@ from typing import Any, Callable, Dict, List, Optional, TypedDict, Union
 
 class CardSpec(TypedDict, total=False):
     """One info_card. Exactly one of `metric`, `metrics`, `value_attr`,
-    `value`, or `repeat` should be set — generic_render checks them in
-    that priority order and the first match wins."""
+    `value`, or `repeat` should be set — spec.py's module docstring is the
+    full reference, including the first-match order generic_render applies."""
     title: str
     metric: str                    # bind_text_from a single metric, live-updating
     format: str                    # FORMATTERS key: Optional[float] -> str
@@ -57,7 +57,6 @@ class RepeatSpec(TypedDict, total=False):
     metrics_prefix: str
     metrics_suffix: str
     metrics_exclude: List[str]
-    metrics_scan_limit: int
     fields: List["MetricFieldSpec"]
 
 
@@ -169,7 +168,6 @@ class UISpec(TypedDict, total=False):
     charts: Dict[str, ChartSpec]
     dynamic_charts: DynamicChartsSpec
     events: Union[bool, Dict[str, Any]]    # True, or kwargs forwarded to UIOrchestrator.events_table
-    logs: Union[bool, Dict[str, Any]]      # True, or kwargs forwarded to UIOrchestrator.logs_table
     tables: Dict[str, TableSpec]
     filters: Dict[str, FilterSpec]         # keyed by the same widget_name as `tables`
     buttons: Dict[str, List[ButtonSpec]]

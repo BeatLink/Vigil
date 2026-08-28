@@ -1,3 +1,11 @@
+"""Container states from `<runtime> ps` over SSH — sampled locally by the
+agent on agent-backed hosts — with a restart action for each expected
+container. Config: runtime (docker by default), expect_running,
+stopped_warning. Any container named in expect_running that is not running
+makes the status failed; other stopped containers are warning when
+stopped_warning is on, while created/paused ones count as benign. A missing
+runtime binary reports offline rather than failed."""
+
 from typing import Dict, Any, List, Optional, Union
 
 from vigil.plugins.base.plugin_base import Plugin
@@ -13,6 +21,28 @@ _DEFAULT_LAYOUT = [
     ['containers'],
     ['events'],
 ]
+
+
+def _classify_containers(stdout: str):
+    """Split the tab-separated name/state ps lines into running, stopped, and benign (created/paused) name lists."""
+    running: List[str] = []
+    stopped: List[str] = []
+    benign: List[str] = []
+    for line in stdout.splitlines():
+        if '\t' not in line:
+            continue
+        name, state = line.split('\t', 1)
+        name, state = name.strip(), state.strip().lower()
+        if not name:
+            continue
+        state_word = state.split()[0] if state else ''
+        if state_word in _RUNNING_STATES:
+            running.append(name)
+        elif state_word in _BENIGN_STATES:
+            benign.append(name)
+        else:
+            stopped.append(name)
+    return running, stopped, benign
 
 
 class Containers(Plugin):
@@ -44,6 +74,10 @@ class Containers(Plugin):
         return [Command(f"{self.runtime} {_PS_FMT} 2>&1")]
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        """Turns the `<runtime> ps` output into a CollectResult with total/running/
+        stopped counts and a status where a missing expected container is failed,
+        other stopped containers are warning (when stopped_warning), and a missing
+        runtime binary is offline."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         combined = f"{stdout}\n{stderr}".lower()
@@ -53,24 +87,7 @@ class Containers(Plugin):
         if ret != 0:
             return CollectResult.failed(f"'{self.runtime} ps' failed: {stderr}")
 
-        running: List[str] = []
-        stopped: List[str] = []
-        benign: List[str] = []
-        for line in stdout.splitlines():
-            if '\t' not in line:
-                continue
-            cname, state = line.split('\t', 1)
-            cname, state = cname.strip(), state.strip().lower()
-            if not cname:
-                continue
-            state_word = state.split()[0] if state else ''
-            if state_word in _RUNNING_STATES:
-                running.append(cname)
-            elif state_word in _BENIGN_STATES:
-                benign.append(cname)
-            else:
-                stopped.append(cname)
-
+        running, stopped, benign = _classify_containers(stdout)
         total = len(running) + len(stopped) + len(benign)
         metrics = {
             'containers_total': float(total),
@@ -126,10 +143,6 @@ class Containers(Plugin):
             cname = action_id.split(':', 1)[1]
             return CollectResult.failed(f"Restart of {cname} failed: {result.stderr}")
         return result.exit_code == 0
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 from vigil.core.ui.spec import register_color_rule

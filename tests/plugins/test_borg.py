@@ -3,7 +3,6 @@ import re
 import time
 from datetime import datetime
 import pytest
-from unittest.mock import AsyncMock
 
 from vigil.plugins.borg import Borg
 from vigil.core.connectors.types import CmdResult
@@ -393,6 +392,13 @@ class TestBackupCommand:
 
     def test_poll_still_uses_throwaway_base_dir(self, make_plugin):
         assert "$(mktemp -d)" in make_plugin(Borg, BACKUP_CFG)._list_command()
+
+    def test_configured_cache_dir_applies_to_polls(self, make_plugin):
+        p = make_plugin(Borg, {**BASE_CFG, "cache_dir": "/srv/borgcache"})
+        for cmd in (p._list_command(), p._info_command()):
+            assert "BORG_BASE_DIR=/srv/borgcache" in cmd
+            assert "mktemp" not in cmd
+            assert "rm -rf" not in cmd
 
     def test_poll_removes_throwaway_base_dir(self, make_plugin):
         for cmd in (make_plugin(Borg, BACKUP_CFG)._list_command(),

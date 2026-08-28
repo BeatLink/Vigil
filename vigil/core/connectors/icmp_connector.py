@@ -34,5 +34,6 @@ class IcmpConnector:
                 stdout=stdout.decode(),
                 stderr=stderr.decode(),
             )
+        # Any spawn or read failure becomes a failed PingResult, the one shape parse code handles.
         except Exception as e:
             return PingResult(exception=str(e), returncode=None)

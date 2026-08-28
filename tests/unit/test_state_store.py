@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 import pytest
 
 from vigil.core.state import BufferSizes, StateStore
-from vigil.core.state.records import LogLineRecord, MetricRecord
 
 
 @pytest.fixture

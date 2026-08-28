@@ -1,3 +1,11 @@
+"""Reachability and latency of TCP ports and HTTP URLs as seen from the
+target host itself: one shell script over SSH (curl for URLs, /dev/tcp for
+ports) — sampled locally by the agent on agent-backed hosts — so each check
+is measured from the target's own vantage point. Config: checks (a list of
+{url} or {host, port} entries, optionally named) and timeout per probe.
+Every check reachable is online; any check down is failed — there is no
+warning tier."""
+
 from typing import Dict, Any, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
@@ -178,6 +186,3 @@ class Ports(Plugin):
             'events': True,
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

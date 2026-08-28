@@ -195,7 +195,8 @@ class TestCollectOnConnect:
 
         engine = object.__new__(VigilEngine)
         engine.plugins = [mine, theirs]
-        engine._net = {
+        engine._tasks = set()
+        engine._exec_contexts = {
             mine.id: ExecContext(conn=AgentConnection('node-a', 'a.lan'), collect_timeout=30.0),
             theirs.id: ExecContext(conn=AgentConnection('node-b', 'b.lan'), collect_timeout=30.0),
         }

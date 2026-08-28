@@ -26,17 +26,18 @@ change and no plugin code is transport-aware.
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, List, Optional
+from typing import List, Optional
 
 from vigil.core.connectors.agent_connector import AgentConnection, AgentRegistry
 from vigil.core.connectors.ssh_connector import (
-    SSHConnection, COLLECT_TIMEOUT, CONTROL_TIMEOUT,
+    SSHConnection, COLLECT_TIMEOUT, CONTROL_TIMEOUT, resolve_host,
 )
 from vigil.core.connectors.types import (
     ActionPlan, CmdResult, Command, DnsQuery, HttpRequest, PingRequest,
     Request, Result,
 )
 from vigil.core.settings.config_schema import PluginConfig
+from vigil.core.contracts import TransportConnection
 
 _SSHPoolKey = tuple  # (host, port, username, key_path)
 
@@ -55,7 +56,7 @@ class ExecContext:
     ``target`` is the effective host the transport resolved the config to,
     exposed so the engine can keep a plugin's labels/reads in sync with what's
     collected."""
-    conn: Any
+    conn: TransportConnection
     collect_timeout: float
 
     @property
@@ -65,11 +66,6 @@ class ExecContext:
     @property
     def is_agent(self) -> bool:
         return isinstance(self.conn, AgentConnection)
-
-
-# The transport-neutral name is ExecContext; SSHContext stays as an alias
-# because it is the name the rest of the tree and the test suite import.
-SSHContext = ExecContext
 
 
 class ConnectorEngine:
@@ -103,9 +99,8 @@ class ConnectorEngine:
                                collect_timeout=collect_timeout)
 
         ssh_cfg = config.get('ssh_config', {})
-        host = ssh_cfg.get('host', config.get('target_host', 'localhost'))
         key: _SSHPoolKey = (
-            host,
+            resolve_host(config),
             ssh_cfg.get('port') or 22,
             ssh_cfg.get('username'),
             ssh_cfg.get('key_path'),
@@ -116,31 +111,20 @@ class ConnectorEngine:
             self._ssh_conns[key] = conn
         return ExecContext(conn=conn, collect_timeout=collect_timeout)
 
-    # The pre-agent name for the above, kept so existing call sites and tests
-    # that only ever meant "give me this plugin's command handle" still work.
-    ssh_context = exec_context
-
-    async def _ssh_exec(self, ctx: ExecContext, command: str,
-                        timeout: Optional[float], default: float) -> CmdResult:
+    async def _command(self, ctx: ExecContext, text: str,
+                       timeout: Optional[float], default: float) -> CmdResult:
         """Run one command through the context's connection, falling back to
-        `default` when the command carries no explicit timeout. Both transports
-        already map their own failures to (-1, "", err), so no wrapper
-        try/except is needed here."""
+        `default` when it carries no explicit timeout. Both transports already
+        map their own failures to (-1, "", err), so no wrapper try/except is
+        needed here."""
         ret, out, err = await ctx.conn.execute(
-            command, timeout=timeout if timeout is not None else default
+            text, timeout=timeout if timeout is not None else default
         )
         return CmdResult(ret, out, err)
 
-    async def _ssh_run(self, ctx: ExecContext, commands: List[Command]) -> List[CmdResult]:
-        async def _one(cmd: Command) -> CmdResult:
-            default = CONTROL_TIMEOUT if cmd.action else ctx.collect_timeout
-            return await self._ssh_exec(ctx, cmd.text, cmd.timeout, default)
-
-        return list(await asyncio.gather(*(_one(c) for c in commands)))
-
     async def execute(self, ctx: ExecContext, plan: ActionPlan) -> CmdResult:
         """Run a named action's short command (control-cycle timeout)."""
-        return await self._ssh_exec(ctx, plan.command, plan.timeout, CONTROL_TIMEOUT)
+        return await self._command(ctx, plan.command, plan.timeout, CONTROL_TIMEOUT)
 
     async def execute_raw(self, ctx: ExecContext, command: str,
                           timeout: Optional[float] = None) -> CmdResult:
@@ -180,8 +164,8 @@ class ConnectorEngine:
 
     # --- Unified routing ---
 
-    async def run(self, ssh_ctx: Optional[ExecContext],
-                  requests: List[Request]) -> List[Result]:
+    async def dispatch(self, ssh_ctx: Optional[ExecContext],
+                       requests: List[Request]) -> List[Result]:
         """Route each request to its sub-connector and gather the results,
         preserving order so parse_results() can match by position.
 
@@ -190,7 +174,8 @@ class ConnectorEngine:
 
         async def _one(req: Request) -> Result:
             if isinstance(req, Command):
-                return (await self._ssh_run(ssh_ctx, [req]))[0]
+                default = CONTROL_TIMEOUT if req.action else ssh_ctx.collect_timeout
+                return await self._command(ssh_ctx, req.text, req.timeout, default)
             if isinstance(req, HttpRequest):
                 return await self.http.fetch(req)
             if isinstance(req, DnsQuery):

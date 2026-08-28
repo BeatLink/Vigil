@@ -8,7 +8,7 @@ degrades the same way it always has (per-field try/except with a logged
 fallback, or a KeyError deep in whichever module reads the bad key).
 """
 
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, TypedDict
 
 
 class SSHConfig(TypedDict, total=False):

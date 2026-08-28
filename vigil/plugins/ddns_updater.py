@@ -1,3 +1,12 @@
+"""Dynamic-DNS drift: keeps a domain's public record pointed at this
+network's real public IP. Uses the io_call escape hatch for sequential local
+IO on the Vigil host — fetch the public IP from echo services, resolve the
+record, and on drift GET the provider's update URL, throttled by
+min_interval. Config: domain, record_type, resolver, timeout, min_interval,
+update_url / update_url_file / update_url_command. In sync, or freshly
+updated, is online; drift with the update throttled is warning; a failed or
+unconfigured update, or no determinable public IP, is failed."""
+
 import subprocess
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -7,7 +16,7 @@ import dns.resolver
 import requests
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult, IoActionPlan
+from vigil.core.connectors.types import CollectResult, IoActionPlan
 from vigil.plugins.base.plugin_helpers import format_age
 
 _IP_ECHO_SERVICES = (
@@ -57,7 +66,8 @@ class DdnsUpdater(Plugin):
                 if result.returncode != 0:
                     return None, f"update_url_command failed: {result.stderr.strip()}"
                 return result.stdout.strip(), None
-            except Exception as e:
+            # subprocess.run raises OSError or SubprocessError (incl. TimeoutExpired) here.
+            except (OSError, subprocess.SubprocessError) as e:
                 return None, f"update_url_command failed: {e}"
         return None, None
 
@@ -129,12 +139,6 @@ class DdnsUpdater(Plugin):
             result['update_log'] = log_message
 
         return result
-
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
 
     def io_call(self) -> Optional[Callable[[], Any]]:
         # DDNS is genuinely sequential local IO (fetch public IP, resolve DNS,
@@ -258,6 +262,3 @@ class DdnsUpdater(Plugin):
             'events': True,
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

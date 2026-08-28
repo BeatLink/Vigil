@@ -13,7 +13,7 @@ from database rows. Two shapes exist:
     reads it, so it is absent.
 """
 
-from typing import Any, List, Optional, Tuple, TypedDict
+from typing import Any, Optional, TypedDict
 
 
 class JobDict(TypedDict):
@@ -47,7 +47,7 @@ class JobOutputDict(TypedDict):
 
 
 class EventDict(TypedDict):
-    """Returned by DatabaseManager.recent_events/recent_events_cached."""
+    """Returned by DatabaseManager.recent_events."""
 
     timestamp: str
     level: str
@@ -77,9 +77,9 @@ class MetricRowDict(TypedDict):
 
 
 class MetricModelDict(TypedDict):
-    """peewee Metric.__data__ as returned by collector_metrics_cached/
-    recent_metrics_raw_cached — includes every Metric column, unlike
-    MetricRowDict's hand-picked subset."""
+    """The column-keyed row shape collector_metrics/recent_metrics_raw
+    return — every Metric column, unlike MetricRowDict's hand-picked
+    subset."""
 
     id: int
     timestamp: Any  # datetime, not yet isoformat()'d
@@ -91,7 +91,7 @@ class MetricModelDict(TypedDict):
 
 
 class LogLineModelDict(TypedDict):
-    """peewee LogLine.__data__ as returned by log_lines_cached."""
+    """The column-keyed row shape log_lines returns."""
 
     id: int
     timestamp: Any
@@ -103,7 +103,7 @@ class LogLineModelDict(TypedDict):
 
 
 class EventModelDict(TypedDict):
-    """peewee Event.__data__ as returned by recent_events_raw_cached."""
+    """The column-keyed row shape recent_events_raw returns."""
 
     id: int
     timestamp: Any
@@ -112,12 +112,3 @@ class EventModelDict(TypedDict):
     target: Optional[str]
     source_id: Optional[str]
 
-
-# ssh_connector.py's (exit_code, stdout, stderr) and
-# (exit_code, output) command-result shapes are already-adequate plain
-# tuples, not dicts — no TypedDict needed there. Kept here only as a
-# pointer for anyone looking for "the rest of the DB-adjacent row types":
-# CmdResult (connectors/types.py) is the typed equivalent for command
-# results; nothing analogous wraps these SSH-layer tuples since they never
-# cross a module boundary un-parsed.
-CmdResultTuple = Tuple[int, str, str]

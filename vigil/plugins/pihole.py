@@ -1,30 +1,41 @@
+"""Pi-hole effectiveness via the FTL v6 API, fetched by one curl script over
+SSH — sampled locally by the agent on agent-backed hosts — that authenticates
+for a session, reads /api/stats/summary and /api/dns/blocking, and releases
+the session on exit. Config: api_url, api_password / api_password_command,
+block_rate_warning, block_rate_threshold, gravity_max_age, min_queries,
+api_timeout, gravity_timeout. Disabled blocking, an empty gravity list, or a
+block rate under block_rate_threshold (once min_queries is reached) is
+failed; a merely low block rate or a stale gravity list is warning."""
+
 import json
 import shlex
+import time
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from vigil.plugins.base.plugin_helpers import parse_duration
+from vigil.plugins.base.plugin_helpers import (
+    SCRIPT_SEP, StatusAccumulator, dq, parse_duration, password_line,
+)
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
-
-_SEP = "@@VIGIL_SPLIT@@"
-
 
 def _auth_preamble(base: str, timeout: int, password_command: Optional[str],
                    password: Optional[str]) -> Tuple[List[str], str]:
     if not (password_command or password):
         return [], ''
 
-    lines = []
-    if password_command:
-        lines.append(f"__pw=$({password_command})")
-    else:
-        lines.append(f"__pw={shlex.quote(password)}")
-
+    lines = [password_line(password_command, password)]
     lines.append(
         f'__sid=$(curl -s -m {timeout} -X POST {shlex.quote(base + "/api/auth")} '
         f'-H "Content-Type: application/json" '
         f'''--data "{{\\"password\\":\\"$__pw\\"}}" '''
         f"""| sed -n 's/.*"sid"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p')"""
+    )
+    # Release the session however the script exits: FTL's session table is
+    # finite, and an unreleased sid per poll can crowd out real logins.
+    lines.append(
+        "trap '[ -n \"$__sid\" ] && curl -s -m %d -X DELETE "
+        '-H \"X-FTL-SID: $__sid\" %s >/dev/null 2>&1 || true\' EXIT'
+        % (timeout, dq(base + "/api/auth"))
     )
     return lines, '-H "X-FTL-SID: $__sid"'
 
@@ -38,7 +49,7 @@ def _build_fetch_script(api_url: str, timeout: int, password_command: Optional[s
     lines.extend(auth_lines)
 
     lines.append(f'curl -s -m {timeout} {auth} {shlex.quote(base + "/api/stats/summary")}')
-    lines.append(f'echo "{_SEP}"')
+    lines.append(f'echo "{SCRIPT_SEP}"')
     lines.append(f'curl -s -m {timeout} {auth} {shlex.quote(base + "/api/dns/blocking")}')
     return '\n'.join(lines)
 
@@ -77,9 +88,9 @@ def _build_gravity_script(api_url: str, timeout: int, password_command: Optional
 
 
 def _parse_response(stdout: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    if _SEP not in stdout:
+    if SCRIPT_SEP not in stdout:
         raise ValueError(f"unexpected API response: {stdout[:200]!r}")
-    summary_raw, blocking_raw = stdout.split(_SEP, 1)
+    summary_raw, blocking_raw = stdout.split(SCRIPT_SEP, 1)
     try:
         summary = json.loads(summary_raw.strip())
     except json.JSONDecodeError as e:
@@ -98,7 +109,71 @@ def _parse_response(stdout: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     return summary, blocking
 
 
-def _format_age(seconds: float) -> str:
+def _collect_metrics(summary: Dict[str, Any], blocking: Dict[str, Any]) -> Dict[str, float]:
+    """Flatten the summary and blocking payloads into the metric dict."""
+    queries = summary.get('queries', {})
+    gravity = summary.get('gravity', {})
+    clients = summary.get('clients', {})
+    return {
+        'block_rate_pct': _block_rate(queries),
+        'queries_total': float(queries.get('total', 0) or 0),
+        'queries_blocked': float(queries.get('blocked', 0) or 0),
+        'queries_forwarded': float(queries.get('forwarded', 0) or 0),
+        'queries_cached': float(queries.get('cached', 0) or 0),
+        'unique_domains': float(queries.get('unique_domains', 0) or 0),
+        'gravity_domains': float(gravity.get('domains_being_blocked', 0) or 0),
+        'clients_active': float(clients.get('active', 0) or 0),
+        'blocking_enabled': 1.0 if blocking.get('blocking') == 'enabled' else 0.0,
+    }
+
+
+def _block_rate(queries: Dict[str, Any]) -> float:
+    """The blocked-query percentage, computed from the totals when the API omits it."""
+    rate = queries.get('percent_blocked')
+    if rate is None:
+        total = float(queries.get('total', 0) or 0)
+        blocked = float(queries.get('blocked', 0) or 0)
+        rate = (100.0 * blocked / total) if total else 0.0
+    return float(rate)
+
+
+def _gravity_age_seconds(gravity: Dict[str, Any], now: float) -> Optional[float]:
+    """Seconds since the last gravity update, or None if it never ran."""
+    last_update = gravity.get('last_update')
+    if not last_update:
+        return None
+    return max(0.0, now - float(last_update))
+
+
+def _evaluate_health(metrics: Dict[str, float], gravity_age: Optional[float],
+                     block_rate_warning: float, block_rate_threshold: float,
+                     gravity_max_age: int, min_queries: int) -> StatusAccumulator:
+    """Judge blocking state, block rate, and gravity freshness against the thresholds."""
+    acc = StatusAccumulator()
+    block_rate = metrics['block_rate_pct']
+
+    if metrics['blocking_enabled'] != 1.0:
+        acc.escalate('failed', "blocking is DISABLED")
+
+    if metrics['gravity_domains'] <= 0:
+        acc.escalate('failed', "gravity list is empty")
+
+    if metrics['queries_total'] >= min_queries:
+        if block_rate < block_rate_threshold:
+            acc.escalate('failed',
+                         f"block rate {block_rate:.1f}% below {block_rate_threshold}%")
+        elif block_rate < block_rate_warning:
+            acc.escalate('warning',
+                         f"block rate {block_rate:.1f}% below {block_rate_warning}%")
+
+    if gravity_age is None:
+        acc.escalate('warning', "gravity has never been updated")
+    elif gravity_age > gravity_max_age:
+        acc.escalate('warning', f"gravity list is {_format_age_compact(gravity_age)} old")
+    return acc
+
+
+def _format_age_compact(seconds: float) -> str:
     seconds = int(seconds)
     days, rem = divmod(seconds, 86400)
     hours = rem // 3600
@@ -131,20 +206,9 @@ class Pihole(Plugin):
         self.api_timeout = int(config.get('api_timeout', 10))
         self.gravity_timeout = int(config.get('gravity_timeout', 120))
 
-        from vigil.core.ui.spec import register_color_rule, register_item_formatter, register_formatter
-        self._block_rate_rule_name = f'pihole_block_rate_{self.id}'
-        register_color_rule(self._block_rate_rule_name)(self._block_rate_color)
-
-        self._gravity_format_name = f'pihole_gravity_text_{self.id}'
-        register_item_formatter(self._gravity_format_name)(self._gravity_text)
-        self._gravity_color_name = f'pihole_gravity_color_{self.id}'
-        register_item_formatter(self._gravity_color_name)(self._gravity_color)
-
-        self._blocking_format_name = f'pihole_blocking_text_{self.id}'
-        register_formatter(self._blocking_format_name)(
+        self._blocking_format = (
             lambda v: '--' if v is None else ('ENABLED' if v >= 1.0 else 'DISABLED'))
-        self._blocking_color_name = f'pihole_blocking_color_{self.id}'
-        register_color_rule(self._blocking_color_name)(
+        self._blocking_color = (
             lambda v: None if v is None else ('online' if v >= 1.0 else 'failed'))
 
     SAMPLED = True
@@ -157,6 +221,10 @@ class Pihole(Plugin):
         return [Command(script)]
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        """Turns the summary+blocking curl output into a CollectResult with
+        query/gravity/client metrics, one summary log line, and a status where
+        disabled blocking, an empty gravity list, or a block rate under the
+        threshold is failed and a low rate or stale gravity is warning."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
             return CollectResult.failed(f"Failed to query Pi-hole API: {stderr.strip()}")
@@ -166,91 +234,30 @@ class Pihole(Plugin):
         except ValueError as e:
             return CollectResult.failed(str(e))
 
-        queries = summary.get('queries', {})
-        gravity = summary.get('gravity', {})
-        clients = summary.get('clients', {})
-
-        total = float(queries.get('total', 0) or 0)
-        blocked = float(queries.get('blocked', 0) or 0)
-        block_rate = queries.get('percent_blocked')
-        if block_rate is None:
-            block_rate = (100.0 * blocked / total) if total else 0.0
-        block_rate = float(block_rate)
-
-        domains_blocked = float(gravity.get('domains_being_blocked', 0) or 0)
-        blocking_enabled = blocking.get('blocking') == 'enabled'
-
-        metrics = {
-            'block_rate_pct': block_rate,
-            'queries_total': total,
-            'queries_blocked': blocked,
-            'queries_forwarded': float(queries.get('forwarded', 0) or 0),
-            'queries_cached': float(queries.get('cached', 0) or 0),
-            'unique_domains': float(queries.get('unique_domains', 0) or 0),
-            'gravity_domains': domains_blocked,
-            'clients_active': float(clients.get('active', 0) or 0),
-            'blocking_enabled': 1.0 if blocking_enabled else 0.0,
-        }
-
-        gravity_age: Optional[float] = None
-        last_update = gravity.get('last_update')
-        if last_update:
-            import time as _time
-            gravity_age = max(0.0, _time.time() - float(last_update))
+        metrics = _collect_metrics(summary, blocking)
+        gravity_age = _gravity_age_seconds(summary.get('gravity', {}), time.time())
+        if gravity_age is not None:
             metrics['gravity_age_seconds'] = gravity_age
 
-        problems = []
-        level = 'online'
-
-        def _escalate(new_level: str):
-            nonlocal level
-            order = ('online', 'warning', 'failed')
-            if order.index(new_level) > order.index(level):
-                level = new_level
-
-        if not blocking_enabled:
-            problems.append("blocking is DISABLED")
-            _escalate('failed')
-
-        if domains_blocked <= 0:
-            problems.append("gravity list is empty")
-            _escalate('failed')
-
-        if total >= self.min_queries:
-            if block_rate < self.block_rate_threshold:
-                problems.append(
-                    f"block rate {block_rate:.1f}% below {self.block_rate_threshold}%"
-                )
-                _escalate('failed')
-            elif block_rate < self.block_rate_warning:
-                problems.append(
-                    f"block rate {block_rate:.1f}% below {self.block_rate_warning}%"
-                )
-                _escalate('warning')
-
-        if gravity_age is None:
-            problems.append("gravity has never been updated")
-            _escalate('warning')
-        elif gravity_age > self.gravity_max_age:
-            problems.append(f"gravity list is {_format_age(gravity_age)} old")
-            _escalate('warning')
+        acc = _evaluate_health(metrics, gravity_age,
+                               self.block_rate_warning, self.block_rate_threshold,
+                               self.gravity_max_age, self.min_queries)
 
         parts = [
-            f"{block_rate:.1f}% blocked",
-            f"{int(total):,} queries",
-            f"{int(domains_blocked):,} domains on list",
-            f"{int(clients.get('active', 0) or 0)} active clients",
+            f"{metrics['block_rate_pct']:.1f}% blocked",
+            f"{int(metrics['queries_total']):,} queries",
+            f"{int(metrics['gravity_domains']):,} domains on list",
+            f"{int(metrics['clients_active'])} active clients",
         ]
         if gravity_age is not None:
-            parts.append(f"list {_format_age(gravity_age)} old")
-        if problems:
-            parts.append("| " + "; ".join(problems))
+            parts.append(f"list {_format_age_compact(gravity_age)} old")
+        if acc.problems:
+            parts.append("| " + "; ".join(acc.problems))
 
-        log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
         return CollectResult(
             metrics=metrics,
-            logs=[(' | '.join(parts), log_level)],
-            status=level,
+            logs=[(' | '.join(parts), acc.log_level)],
+            status=acc.status,
         )
 
     def get_actions(self) -> List[Dict[str, str]]:
@@ -307,7 +314,7 @@ class Pihole(Plugin):
         text = f'{int(domains):,} domains'
         age = values.get('gravity_age_seconds')
         if age is not None:
-            text += f' ({_format_age(age)} old)'
+            text += f' ({_format_age_compact(age)} old)'
         return text
 
     def _gravity_color(self, values: Dict[str, Any]) -> Optional[str]:
@@ -322,18 +329,15 @@ class Pihole(Plugin):
             'layout': _DEFAULT_LAYOUT,
             'cards': {
                 'block_rate_card': {'metric': 'block_rate_pct', 'title': 'BLOCK RATE', 'format': 'percent1',
-                                    'color': self._block_rate_rule_name},
+                                    'color': self._block_rate_color},
                 'queries_card': {'metric': 'queries_total', 'title': 'QUERIES', 'format': 'count_comma'},
                 'gravity_card': {'title': 'BLOCKLIST', 'metrics': ['gravity_domains', 'gravity_age_seconds'],
-                                 'format_fn': self._gravity_format_name, 'color_fn': self._gravity_color_name},
+                                 'format_fn': self._gravity_text, 'color_fn': self._gravity_color},
                 'clients_card': {'metric': 'clients_active', 'title': 'ACTIVE CLIENTS', 'format': 'int'},
                 'blocking_card': {'metric': 'blocking_enabled', 'title': 'BLOCKING',
-                                  'format': self._blocking_format_name, 'color': self._blocking_color_name},
+                                  'format': self._blocking_format, 'color': self._blocking_color},
             },
             'chart': {'metric': 'block_rate_pct', 'title': 'BLOCK RATE (%)'},
             'events': True,
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

@@ -1,7 +1,18 @@
+"""Borg backup repository freshness and size, collected by running borg over
+SSH on the target: `borg list --json` each cycle, `borg info --json` when
+collect_stats is on, and a detached `borg create` job that actions launch and
+later cycles poll to completion. Config: repo, max_age, passphrase /
+passphrase_file / passphrase_command, borg_bin, ssh_key / rsh, require_sudo,
+list_archives, collect_stats, cache_dir, lock_wait / backup_lock_wait, and the
+backup set (source_paths, exclude*, one_file_system, compression,
+archive_prefix). A failed list, an empty repo, or a newest archive older than
+max_age is failed; this monitor has no warning tier."""
+
 import json
 import re
 import shlex
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 
@@ -30,7 +41,8 @@ def _as_list(value: Any) -> List[str]:
     return [str(v) for v in value]
 
 
-def _format_bytes(size: float) -> str:
+def _format_size(size: float) -> str:
+    """Formats a raw byte count, unlike plugin_helpers.format_bytes which takes GB."""
     for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
         if abs(size) < 1024.0 or unit == 'TB':
             return f"{size:.1f} {unit}" if unit != 'B' else f"{int(size)} B"
@@ -89,6 +101,63 @@ def _parse_archive_time(value: str) -> int:
     return int(dt.timestamp())
 
 
+def _decode_json(stdout: str) -> Dict[str, Any]:
+    """Decodes a borg --json payload, returning {} when it is not a JSON object."""
+    try:
+        data = json.loads(stdout)
+    except (json.JSONDecodeError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+@dataclass(frozen=True)
+class RepoView:
+    """Decoded `borg list --json` output shared by the parse helpers."""
+    valid: bool = False
+    raw_count: int = 0
+    newest_epoch: int = 0
+    archives: List[Dict[str, Any]] = field(default_factory=list)
+    info: Dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_stdout(cls, stdout: str) -> 'RepoView':
+        """Parses the payload once, returning an invalid view on malformed output."""
+        try:
+            data = json.loads(stdout)
+        except (json.JSONDecodeError, ValueError):
+            return cls()
+        if not isinstance(data, dict):
+            return cls()
+        raw = data.get('archives') or []
+        if not isinstance(raw, list):
+            return cls()
+
+        archives = []
+        for archive in raw:
+            if not isinstance(archive, dict):
+                continue
+            archives.append({
+                'name': archive.get('name') or archive.get('archive') or '?',
+                'epoch': _parse_archive_time(
+                    archive.get('start') or archive.get('time', '')
+                ),
+            })
+        archives.sort(key=lambda a: a['epoch'], reverse=True)
+        newest = max((a['epoch'] for a in archives if a['epoch'] > 0), default=0)
+
+        info = {}
+        repo = data.get('repository')
+        if isinstance(repo, dict):
+            info['location'] = repo.get('location') or ''
+            info['last_modified'] = repo.get('last_modified') or ''
+        enc = data.get('encryption')
+        if isinstance(enc, dict):
+            info['encryption'] = enc.get('mode') or ''
+
+        return cls(valid=True, raw_count=len(raw), newest_epoch=newest,
+                   archives=archives, info=info)
+
+
 class Borg(Plugin):
     DEFAULT_TIMEOUT = 180.0
 
@@ -117,6 +186,8 @@ class Borg(Plugin):
         self.compression = config.get('compression', 'zstd')
         self.archive_prefix = config.get('archive_prefix', name)
         self.cache_dir = config.get('cache_dir', '/var/cache/vigil-borg')
+        # Only an explicitly configured dir is known-writable on a monitor-only target, so polls fall back to mktemp under the default
+        self.cache_dir_configured = bool(config.get('cache_dir'))
         self.backup_lock_wait = config.get('backup_lock_wait', 600)
 
         from vigil.core.ui.spec import register_enabled_predicate
@@ -176,7 +247,7 @@ class Borg(Plugin):
             "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             self.repo,
-        ])
+        ], persistent_cache=self.cache_dir_configured)
 
     def _info_command(self) -> str:
         return self._build([
@@ -186,7 +257,7 @@ class Borg(Plugin):
             "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             self.repo,
-        ])
+        ], persistent_cache=self.cache_dir_configured)
 
     def _backup_command(self, archive_name: Optional[str] = None,
                         dry_run: bool = False) -> str:
@@ -258,28 +329,27 @@ class Borg(Plugin):
                 logs.append((hint, "ERROR"))
             return CollectResult(logs=logs, status='failed')
 
-        latest_epoch, archive_count = self._newest_archive(stdout)
+        view = RepoView.from_stdout(stdout)
 
-        if latest_epoch is None:
+        if not view.valid:
             logs.append(("Could not parse borg output — no archive timestamps found", "ERROR"))
             snippet = (stdout or stderr or "").strip()[:500]
             if snippet:
                 logs.append((f"Raw output was: {snippet}", "ERROR"))
             return CollectResult(logs=logs, status='failed')
 
-        logs.extend(self._repo_detail_logs(stdout))
-        archives, archive_info = self._archive_details(stdout)
-        metrics = {'archive_count': float(archive_count), 'last_backup_epoch': float(latest_epoch)}
+        logs.extend(self._repo_detail_logs(view))
+        metrics = {'archive_count': float(view.raw_count), 'last_backup_epoch': float(view.newest_epoch)}
         metadata = {}
-        if archives:
-            metrics['archive_list'] = float(len(archives))
-            metadata['archive_list'] = json.dumps({'archives': archives, 'repository': archive_info})
+        if view.archives:
+            metrics['archive_list'] = float(len(view.archives))
+            metadata['archive_list'] = json.dumps({'archives': view.archives, 'repository': view.info})
 
-        if archive_count == 0 or latest_epoch == 0:
+        if view.raw_count == 0 or view.newest_epoch == 0:
             logs.append(("No archives in repository", "WARNING"))
             return CollectResult(metrics=metrics, metadata=metadata, logs=logs, status='failed')
 
-        age = int(time.time()) - latest_epoch
+        age = int(time.time()) - view.newest_epoch
         if age > self.max_age:
             logs.append((
                 f"Last archive was {format_age(age)}, exceeds max_age of "
@@ -293,78 +363,19 @@ class Borg(Plugin):
 
         if self.collect_stats and len(results) > 1:
             stats_metrics, stats_metadata, stats_logs, merged_archives = self._parse_repo_stats(
-                results[1], archives, archive_info,
+                results[1], view.archives,
             )
             metrics.update(stats_metrics)
             metadata.update(stats_metadata)
             logs.extend(stats_logs)
             if merged_archives is not None:
                 metrics['archive_list'] = float(len(merged_archives))
-                metadata['archive_list'] = json.dumps({'archives': merged_archives, 'repository': archive_info})
+                metadata['archive_list'] = json.dumps({'archives': merged_archives, 'repository': view.info})
 
         return CollectResult(metrics=metrics, metadata=metadata, logs=logs, status=status)
 
-    def _newest_archive(self, stdout: str) -> (Optional[int], int):
-        try:
-            data = json.loads(stdout)
-        except (json.JSONDecodeError, ValueError):
-            return None, 0
-
-        if not isinstance(data, dict):
-            return None, 0
-
-        archives = data.get('archives') or []
-        if not isinstance(archives, list):
-            return None, 0
-
-        newest = 0
-        for archive in archives:
-            if not isinstance(archive, dict):
-                continue
-            epoch = _parse_archive_time(archive.get('start') or archive.get('time', ''))
-            if epoch > newest:
-                newest = epoch
-
-        return newest, len(archives)
-
-    def _archive_details(self, stdout: str) -> (List[Dict[str, Any]], Dict[str, Any]):
-        try:
-            data = json.loads(stdout)
-        except (json.JSONDecodeError, ValueError):
-            return [], {}
-
-        if not isinstance(data, dict):
-            return [], {}
-
-        raw = data.get('archives') or []
-        if not isinstance(raw, list):
-            return [], {}
-
-        archives = []
-        for archive in raw:
-            if not isinstance(archive, dict):
-                continue
-            archives.append({
-                'name': archive.get('name') or archive.get('archive') or '?',
-                'epoch': _parse_archive_time(
-                    archive.get('start') or archive.get('time', '')
-                ),
-            })
-        archives.sort(key=lambda a: a['epoch'], reverse=True)
-
-        repo = data.get('repository')
-        info = {}
-        if isinstance(repo, dict):
-            info['location'] = repo.get('location') or ''
-            info['last_modified'] = repo.get('last_modified') or ''
-        enc = data.get('encryption')
-        if isinstance(enc, dict):
-            info['encryption'] = enc.get('mode') or ''
-
-        return archives, info
-
-    def _repo_detail_logs(self, stdout: str) -> List[tuple]:
-        archives, info = self._archive_details(stdout)
+    def _repo_detail_logs(self, view: RepoView) -> List[tuple]:
+        archives, info = view.archives, view.info
         logs = []
 
         if info:
@@ -390,15 +401,15 @@ class Borg(Plugin):
             logs.append((f"  {archive['name']} ({age})", "INFO"))
         return logs
 
-    def _parse_repo_stats(self, info_result: CmdResult, archives: List[Dict[str, Any]],
-                          archive_info: Dict[str, Any]):
+    def _parse_repo_stats(self, info_result: CmdResult, archives: List[Dict[str, Any]]):
         """Pure: parses `borg info` output. Returns
         (metrics, metadata, logs, merged_archives_or_None)."""
         ret, stdout, stderr = info_result.exit_code, info_result.stdout, info_result.stderr
         if ret != 0:
             return {}, {}, [(f"borg info failed (exit {ret}): {(stderr or stdout).strip()[:200]}", "WARNING")], None
 
-        sizes = self._parse_archive_sizes(stdout)
+        data = _decode_json(stdout)
+        sizes = self._parse_archive_sizes(data)
         merged_archives = None
         if sizes and archives:
             merged_archives = [dict(a) for a in archives]
@@ -407,7 +418,7 @@ class Borg(Plugin):
                 if entry:
                     archive.update(entry)
 
-        stats = self._parse_stats(stdout)
+        stats = self._parse_stats(data)
         if not stats:
             return {}, {}, [("Could not parse borg info output", "WARNING")], merged_archives
 
@@ -419,20 +430,13 @@ class Borg(Plugin):
             ratio = original / deduplicated
             metrics['dedup_ratio'] = ratio
             logs.append((
-                f"Repo size: {_format_bytes(deduplicated)} on disk for "
-                f"{_format_bytes(original)} of data ({ratio:.1f}x reduction)",
+                f"Repo size: {_format_size(deduplicated)} on disk for "
+                f"{_format_size(original)} of data ({ratio:.1f}x reduction)",
                 "INFO",
             ))
         return metrics, {}, logs, merged_archives
 
-    def _parse_stats(self, stdout: str) -> Dict[str, float]:
-        try:
-            data = json.loads(stdout)
-        except (json.JSONDecodeError, ValueError):
-            return {}
-        if not isinstance(data, dict):
-            return {}
-
+    def _parse_stats(self, data: Dict[str, Any]) -> Dict[str, float]:
         cache = data.get('cache')
         stats = cache.get('stats') if isinstance(cache, dict) else None
         if not isinstance(stats, dict):
@@ -451,14 +455,7 @@ class Borg(Plugin):
                 out[dest] = float(value)
         return out
 
-    def _parse_archive_sizes(self, stdout: str) -> Dict[str, Dict[str, float]]:
-        try:
-            data = json.loads(stdout)
-        except (json.JSONDecodeError, ValueError):
-            return {}
-        if not isinstance(data, dict):
-            return {}
-
+    def _parse_archive_sizes(self, data: Dict[str, Any]) -> Dict[str, Dict[str, float]]:
         out = {}
         for archive in data.get('archives') or []:
             if not isinstance(archive, dict):
@@ -604,7 +601,7 @@ class Borg(Plugin):
             if not (original or deduplicated or nfiles):
                 continue
             path = record.get('path') or ''
-            summary = f"{nfiles} files, {_format_bytes(original)} read, {_format_bytes(deduplicated)} new"
+            summary = f"{nfiles} files, {_format_size(original)} read, {_format_size(deduplicated)} new"
             if path:
                 summary += f" — {path}"
         return summary
@@ -613,44 +610,41 @@ class Borg(Plugin):
         m = self.data.latest_metric('last_backup_epoch')
         return m.value if m is not None else None
 
-    @property
-    def _state_text(self) -> str:
+    def _state_pair(self) -> (str, Optional[str]):
+        """Returns the (text, color) pair for the current-state card."""
         epoch = self._epoch()
         if epoch is None:
-            return 'UNKNOWN'
-        epoch = int(epoch)
-        if epoch == 0:
-            return 'NO ARCHIVES'
-        age = int(time.time()) - epoch
-        return 'OK' if age <= self.max_age else 'STALE'
+            return 'UNKNOWN', 'offline'
+        if int(epoch) == 0:
+            return 'NO ARCHIVES', 'failed'
+        age = int(time.time()) - int(epoch)
+        return ('OK', 'online') if age <= self.max_age else ('STALE', 'failed')
+
+    def _age_pair(self) -> (str, Optional[str]):
+        """Returns the (text, color) pair for the last-archive card."""
+        epoch = self._epoch()
+        if epoch is None:
+            return '--', 'failed'
+        if int(epoch) == 0:
+            return 'Never', 'failed'
+        age = int(time.time()) - int(epoch)
+        return format_age(age), 'online' if age <= self.max_age else 'failed'
+
+    @property
+    def _state_text(self) -> str:
+        return self._state_pair()[0]
 
     @property
     def _state_color(self) -> Optional[str]:
-        epoch = self._epoch()
-        if epoch is None:
-            return 'offline'
-        epoch = int(epoch)
-        if epoch == 0:
-            return 'failed'
-        age = int(time.time()) - epoch
-        return 'online' if age <= self.max_age else 'failed'
+        return self._state_pair()[1]
 
     @property
     def _last_archive_age_text(self) -> str:
-        epoch = self._epoch()
-        if epoch is None:
-            return '--'
-        if int(epoch) == 0:
-            return 'Never'
-        return format_age(int(time.time()) - int(epoch))
+        return self._age_pair()[0]
 
     @property
     def _last_archive_age_color(self) -> Optional[str]:
-        epoch = self._epoch()
-        if epoch is None or int(epoch) == 0:
-            return 'failed'
-        age = int(time.time()) - int(epoch)
-        return 'online' if age <= self.max_age else 'failed'
+        return self._age_pair()[1]
 
     @property
     def UI_SPEC(self):
@@ -704,15 +698,12 @@ class Borg(Plugin):
                     if a.get('epoch') else 'unknown'
                 ),
                 'age': format_age(now - a['epoch']) if a.get('epoch') else 'unknown',
-                'size': _format_bytes(a['original']) if 'original' in a else '--',
+                'size': _format_size(a['original']) if 'original' in a else '--',
                 'added': (
-                    _format_bytes(a['deduplicated']) if 'deduplicated' in a else '--'
+                    _format_size(a['deduplicated']) if 'deduplicated' in a else '--'
                 ),
                 'files': f"{int(a['nfiles']):,}" if 'nfiles' in a else '--',
             }
             for a in archives
         ]
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

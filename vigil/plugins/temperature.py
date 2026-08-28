@@ -2,12 +2,10 @@
 
 from typing import Any, Dict, List
 
-from vigil.plugins.base.signal_plugin import (
-    LOG_LEVEL as _LOG_LEVEL, SignalPlugin,
-)
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.signal_plugin import SignalPlugin
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
 from vigil.core.settings.config_schema import PluginConfig
-from vigil.plugins.base.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.plugin_helpers import level_for
 
 
 def _sanitize_zone(name: str) -> str:
@@ -37,7 +35,7 @@ class Temperature(SignalPlugin):
         from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
         self._item_color_rule = f'temp_zone_{self.id}'
         register_item_color_rule(self._item_color_rule)(
-            lambda item: _level_for(item.get('value') or 0.0, self.warning, self.threshold))
+            lambda item: level_for(item.get('value') or 0.0, self.warning, self.threshold))
         self._color_rule = f'temp_{self.id}'
         register_color_rule(self._color_rule)(
             threshold_color(warning=self.warning, threshold=self.threshold))
@@ -76,13 +74,13 @@ class Temperature(SignalPlugin):
         for key, temp_c in sensors.items():
             metrics[f'temp_zone_{key}'] = temp_c
 
-        status = _level_for(max_temp, self.warning, self.threshold)
+        status = level_for(max_temp, self.warning, self.threshold)
         return CollectResult(
             metrics=metrics,
             logs=[(
                 f"Max {max_temp:.1f}°C across {len(sensors)} zone(s) "
                 f"(warn {self.warning:g}°C / fail {self.threshold:g}°C)",
-                _LOG_LEVEL[status],
+                Status(status).log_level,
             )],
             status=status,
         )

@@ -163,6 +163,7 @@ class AgentConnection:
         without the server tracking what it already knows."""
         if self._socket is None:
             return
+        # A dying socket here is tolerable; the agent gets the full set again on reconnect.
         try:
             await self._send(proto.subscribe([s.to_wire() for s in self._streams.values()]))
         except Exception as e:
@@ -277,6 +278,7 @@ class AgentRegistry:
     def notify_connected(self, agent_id: str) -> None:
         if self._connect_sink is None:
             return
+        # The engine's connect handler must not kill the agent's socket task.
         try:
             self._connect_sink(agent_id)
         except Exception as e:
@@ -286,6 +288,7 @@ class AgentRegistry:
                        timestamp: float, payload: Dict[str, Any]) -> None:
         if self._event_sink is None:
             return
+        # The engine's event handler must not kill the agent's socket task.
         try:
             self._event_sink(agent_id, stream_id, timestamp, payload)
         except Exception as e:

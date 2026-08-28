@@ -1,10 +1,18 @@
+"""Trilium Notes liveness via one authenticated GET of the ETAPI metrics
+endpoint over HTTP from the Vigil host. Config: api_url (required,
+Vigil-reachable), token / token_command (the ETAPI token), stale_warning
+(hours), api_timeout. Note counts are recorded as metrics and the age of the
+last note modification drives status: older than stale_warning, or missing
+from the response, is warning; an unreachable API, a non-200 reply, or a
+malformed payload (usually a bad token) is failed."""
+
 import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (
-    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+    CollectResult, HttpRequest, HttpResult, Request, Result,
 )
 from vigil.plugins.base.plugin_helpers import resolve_secret
 
@@ -39,6 +47,21 @@ def _format_age(hours: float) -> str:
     return f"{hours / 24:.1f}d"
 
 
+def _staleness_verdict(last_modified_age: float, stale_warning: float,
+                       total_notes: float):
+    """The (status, message) pair for a known last-modified age judged against stale_warning."""
+    if last_modified_age >= stale_warning:
+        return 'warning', (
+            f"no note modified in {_format_age(last_modified_age)} "
+            f"(>= {_format_age(stale_warning)} threshold) | "
+            f"{int(total_notes):,} total notes"
+        )
+    return 'online', (
+        f"last modified {_format_age(last_modified_age)} ago | "
+        f"{int(total_notes):,} total notes"
+    )
+
+
 _DEFAULT_LAYOUT = [
     ['host_card', 'lastmod_card', 'notes_card'],
     ['chart'],
@@ -65,12 +88,6 @@ class Trilium(Plugin):
                 return None
             return 'warning' if v >= _stale_warning else 'online'
 
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
-
     def requests(self) -> List[Request]:
         if not self.api_url:
             return []
@@ -81,6 +98,10 @@ class Trilium(Plugin):
         )]
 
     def parse_results(self, results: List[Result]) -> CollectResult:
+        """Turns the single ETAPI metrics HTTP result into a CollectResult with
+        note counts and last-modified age, one summary log line, and a status
+        that is warning when no note changed within stale_warning hours (or the
+        timestamp is missing) and failed on transport or payload errors."""
         if not results:
             return CollectResult.failed("No 'api_url' configured")
 
@@ -115,20 +136,7 @@ class Trilium(Plugin):
                 status='warning',
             )
 
-        if last_modified_age >= self.stale_warning:
-            level = 'warning'
-            message = (
-                f"no note modified in {_format_age(last_modified_age)} "
-                f"(>= {_format_age(self.stale_warning)} threshold) | "
-                f"{int(total_notes):,} total notes"
-            )
-        else:
-            level = 'online'
-            message = (
-                f"last modified {_format_age(last_modified_age)} ago | "
-                f"{int(total_notes):,} total notes"
-            )
-
+        level, message = _staleness_verdict(last_modified_age, self.stale_warning, total_notes)
         log_level = "WARNING" if level == 'warning' else "INFO"
         return CollectResult(metrics=metrics, logs=[(message, log_level)], status=level)
 
@@ -146,10 +154,6 @@ class Trilium(Plugin):
             'chart': {'metric': 'last_modified_age_hours', 'title': 'HOURS SINCE LAST MODIFIED'},
             'events': True,
         }
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 from vigil.core.ui.spec import register_formatter

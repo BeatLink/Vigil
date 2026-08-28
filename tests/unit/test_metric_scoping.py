@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import AsyncMock
 from typing import List
 
 from vigil.plugins.base.plugin_base import Plugin

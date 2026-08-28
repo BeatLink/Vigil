@@ -1,8 +1,15 @@
-from typing import Any, Dict, List, Optional
+"""Radicale CalDAV/CardDAV health, probed with one authenticated PROPFIND
+request over HTTP from the Vigil host. Config: url (required,
+Vigil-reachable), username, password / password_command, request_timeout. A
+207 Multi-Status reply is online, with latency recorded; anything else — a
+connection failure, a 401 from a bad vigil htpasswd entry, or an unexpected
+status — is failed. There is no warning tier."""
+
+from typing import Any, Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (
-    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+    CollectResult, HttpRequest, HttpResult, Request, Result,
 )
 from vigil.plugins.base.plugin_helpers import resolve_secret
 
@@ -29,12 +36,6 @@ class Radicale(Plugin):
         self.password = resolve_secret(config.get('password'),
                                        config.get('password_command'))
         self.request_timeout = int(config.get('request_timeout', 10))
-
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
 
     def requests(self) -> List[Request]:
         if not self.url:
@@ -95,10 +96,6 @@ class Radicale(Plugin):
         'chart': {'metric': 'propfind_latency_ms', 'title': 'PROPFIND LATENCY (ms)'},
         'events': True,
     }
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 from vigil.core.ui.spec import register_formatter, register_color_rule

@@ -1,3 +1,12 @@
+"""One systemd unit's health over SSH, in two modes: continuous (is-active
+plus a journal tail) or, when max_age is set, oneshot (systemctl show state —
+did the last run succeed, and recently enough). On agent-backed hosts it also
+subscribes to the unit's journal stream, so log lines arrive live between
+polls while the poll stays the authority on status. Config: service_name,
+lines, max_age, allow_unit_file_edit, allowed_write_paths. Continuous mode:
+an inactive unit is warning and a journal failure is failed; oneshot mode: a
+never-ran unit, a failed last run, or one older than max_age is failed."""
+
 import os
 import shlex
 import time

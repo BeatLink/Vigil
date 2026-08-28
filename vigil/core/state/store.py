@@ -197,6 +197,15 @@ class StateStore:
         with self._lock:
             return [series[-1] for series in self.metrics.values() if series]
 
+    def latest_collector_metrics(self, collector: str) -> List[MetricRecord]:
+        """The newest point of each of one collector's series — the
+        metric-family scan behind `metrics_prefix` repeat cards."""
+        with self._lock:
+            series_list = self._by_collector.get(collector)
+            if not series_list:
+                return []
+            return [series[-1] for series in series_list if series]
+
     def recent_metrics(self, limit: int = 20) -> List[MetricRecord]:
         """Newest metrics across all series — the global dashboard table."""
         with self._lock:
@@ -481,9 +490,10 @@ class StateStore:
         A **running** job's buffer is complete, which is what the consumers
         need: a plugin tailing its own job to parse progress, and the live
         job view. A **finished** job keeps only a short tail in memory
-        (``finished_job_output``) — its complete output remains on disk, so a
-        future caller that needs the full log of an old job must read it from
-        there rather than assume this returns everything."""
+        (``finished_job_output``). The full log is persisted in the joboutput
+        table until the job is pruned, but Vigil itself never reads it back —
+        it exists for external inspection (sqlite3) only, since the runtime
+        read path is memory-only by design."""
         with self._lock:
             buffer = self.job_output_buffers.get(job_id)
             if not buffer:

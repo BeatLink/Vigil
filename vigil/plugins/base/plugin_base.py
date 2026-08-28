@@ -1,4 +1,13 @@
-from abc import ABC, abstractmethod
+"""The Plugin contract every monitor derives from. A plugin is pure: it
+declares its IO as data (requests()/commands()), parses connector results into
+a CollectResult (parse_results()/parse()), plans and interprets actions, and
+describes its UI via UI_SPEC, while the Coordination Engine owns every
+connector, write path, and side effect. Agent-backed targets extend the same
+contract with push: subscriptions() declares event streams, and SAMPLED lets
+the agent run a single-command plugin locally at the monitor's interval and
+push results, suppressing unchanged ones with a five-interval keepalive."""
+
+from abc import ABC
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -17,6 +26,11 @@ from vigil.core.ui.spec_types import UISpec
 
 
 class Plugin(PluginConfigMixin, ABC):
+    """A monitor. Exposes only pure functions and data: the engine owns all IO
+    and persistence. "Pure" constrains effects, not memory — keeping derived
+    state between cycles is fine; holding a connection or database handle, or
+    doing IO inside requests()/parse_results(), is not."""
+
     engine: Optional[EngineLike] = None
 
     # Read-only projection of the Database Engine, injected in __init__. The
@@ -88,17 +102,16 @@ class Plugin(PluginConfigMixin, ABC):
         case), so SSH-only plugins need no change."""
         return self.parse(results)
 
-    @abstractmethod
     def commands(self) -> List[Command]:
         """Declare what SSH commands to run this cycle. Pure — no IO, no side
-        effects. Plugins that talk over HTTP/DNS/ICMP instead override
-        requests()/parse_results() with the declarative request types and
-        return [] here."""
+        effects. Plugins that talk over HTTP/DNS/ICMP override
+        requests()/parse_results() instead and leave this default."""
+        return []
 
-    @abstractmethod
     def parse(self, results: List[CmdResult]) -> CollectResult:
         """Pure: SSH command results in, a CollectResult describing what to
         persist out. No IO, no async, no self.storage/self.network calls."""
+        return CollectResult()
 
     def io_call(self) -> Optional[Callable[[], Any]]:
         """Escape hatch for the rare plugin whose collection is genuinely
@@ -129,7 +142,13 @@ class Plugin(PluginConfigMixin, ABC):
 
     def sample_streams(self) -> List["StreamSpec"]:
         """The generic sample stream: the poll's own command, run by the agent
-        at this monitor's own interval and pushed as it completes."""
+        at this monitor's own interval and pushed as it completes.
+
+        `max_quiet` lets the agent skip pushing unchanged results while still
+        sending one at least every fifth interval, so the monitor's stored
+        status and metrics keep advancing and a quiet-but-healthy monitor can
+        never read as stale; an older agent ignores the param and pushes every
+        interval."""
         if not self.SAMPLED:
             return []
         commands = self.commands()
@@ -139,7 +158,8 @@ class Plugin(PluginConfigMixin, ABC):
         return [StreamSpec(
             id=f'{self.id}:{self.SAMPLE_STREAM}',
             kind='sample',
-            params={'command': commands[0].text, 'interval': self.interval},
+            params={'command': commands[0].text, 'interval': self.interval,
+                    'max_quiet': self.interval * 5},
         )]
 
     def event_driven(self) -> bool:
@@ -211,6 +231,8 @@ class Plugin(PluginConfigMixin, ABC):
             "actions": self.get_actions(),
         }
 
-    @abstractmethod
     def render_ui(self, context: str = 'page'):
-        pass
+        """Render the declarative UI_SPEC; only bespoke plugins override."""
+        if getattr(self, 'UI_SPEC', None):
+            from vigil.core.ui.spec import generic_render
+            generic_render(self, context)

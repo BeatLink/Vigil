@@ -62,14 +62,19 @@ class VigilEngine:
         self.plugins: List[Plugin] = []
         self.log_retention_days = self.config_loader.log_retention_days
         self.metric_retention_days = self.config_loader.metric_retention_days
+        self.metric_downsample_days = self.config_loader.metric_downsample_days
+        self._cycle_timings = self.config_loader.cycle_timings
         self._last_prune = 0.0
         self._collecting: Dict[str, bool] = {}
         self._last_collected: Dict[str, float] = {}
+        # The loop holds only weak references to tasks, so every background
+        # task is anchored here until it finishes.
+        self._tasks: set = set()
         # Engine-owned per-plugin IO/persistence, keyed by plugin id. Pure
         # plugins never hold these; the engine wires them in setup_modules and
-        # uses them on the collection/action paths. _net holds each plugin's
+        # uses them on the collection/action paths. _exec_contexts holds each plugin's
         # ExecContext handle (the connection itself lives in self.connectors).
-        self._net: Dict[str, "ExecContext"] = {}
+        self._exec_contexts: Dict[str, "ExecContext"] = {}
         # Monitors reachable by a pushed event, keyed by the stream id the
         # agent will send back (which is the plugin's own id).
         self._event_targets: Dict[str, Plugin] = {}
@@ -106,8 +111,8 @@ class VigilEngine:
         # The transport resolves the effective target host; keep the plugin's
         # target in sync so its labels/reads match what's collected.
         plugin.target = net.target
-        self._net[plugin.id] = net
-        plugin.bind(PluginDataView(self.db, plugin.id, plugin.target, plugin.name))
+        self._exec_contexts[plugin.id] = net
+        plugin.bind(PluginDataView(self.db, plugin.id))
         if net.is_agent:
             self._wire_subscriptions(plugin, net)
 
@@ -115,9 +120,10 @@ class VigilEngine:
         """Whether this monitor's agent collects for it, so the engine runs no
         polling loop. Only ever true on an agent target: over SSH the streams
         are never registered and the poll stays the only collection path."""
-        net = self._net_for(plugin)
+        net = self._exec_context_for(plugin)
         if net is None or not net.is_agent:
             return False
+        # A plugin's broken event_driven() must not stop scheduling; treat it as polled.
         try:
             return bool(plugin.event_driven())
         except Exception as e:
@@ -128,6 +134,7 @@ class VigilEngine:
         """Register a plugin's declared event streams with its agent, so the
         agent starts watching them the moment it connects. Streams are keyed by
         the plugin id, which is how an inbound event finds its way back here."""
+        # A plugin's broken subscriptions() must not stop the engine wiring the rest.
         try:
             specs = plugin.subscriptions()
         except Exception as e:
@@ -156,6 +163,7 @@ class VigilEngine:
         if plugin is None:
             logging.debug(f"agent {agent_id!r}: event for unknown stream {stream_id!r}")
             return
+        # A plugin's broken parse_event() must not kill the agent's socket task.
         try:
             result = plugin.parse_event(stream_id, payload, timestamp)
         except Exception as e:
@@ -177,17 +185,18 @@ class VigilEngine:
         Runs on the agent's socket task, so each cycle is a separate task
         rather than blocking the handshake."""
         monitors = [p for p in self._flatten(self.plugins)
-                    if getattr(self._net_for(p), 'conn', None) is not None
-                    and getattr(self._net_for(p).conn, 'agent_id', None) == agent_id]
+                    if getattr(self._exec_context_for(p), 'conn', None) is not None
+                    and getattr(self._exec_context_for(p).conn, 'agent_id', None) == agent_id]
         if not monitors:
             return
         logging.info(
             f"agent {agent_id!r} connected: collecting its {len(monitors)} monitor(s) now"
         )
         for plugin in monitors:
-            asyncio.create_task(self._collect_on_connect(plugin))
+            self._spawn(self._collect_on_connect(plugin))
 
     async def _collect_on_connect(self, plugin: Plugin) -> None:
+        # A failed warm-up cycle is only logged; the monitor's normal schedule retries.
         try:
             await self.run_cycle_now(plugin)
         except Exception as e:
@@ -198,8 +207,8 @@ class VigilEngine:
         supplies the plugin's identity; pure plugins hold no writer."""
         self.db.apply_result(plugin.target, plugin.id, plugin.name, result)
 
-    def _net_for(self, plugin: Plugin):
-        return self._net.get(plugin.id) or getattr(plugin, 'network', None)
+    def _exec_context_for(self, plugin: Plugin):
+        return self._exec_contexts.get(plugin.id)
 
     async def _run_io(self, fn):
         """Run a plugin's io_call()/IoActionPlan closure off the event loop
@@ -245,8 +254,9 @@ class VigilEngine:
 
                 current_level_plugins.append(plugin_instance)
                 logging.info(f"Loaded plugin '{name}' of type '{p_type}'")
+            # One bad plugin config or module must not stop the rest from loading.
             except Exception as e:
-                logging.error(f"Failed to load plugin '{name}' ({p_type}): {e}")
+                logging.error(f"Failed to load plugin '{name}' ({p_type}) — this monitor will not run: {e}")
 
         if plugins_cfg is None:
             self.plugins = current_level_plugins
@@ -317,14 +327,14 @@ class VigilEngine:
             did_io = True
         else:
             requests = plugin.requests()
-            net = self._net_for(plugin)
-            results = await self.connectors.run(net, requests) if requests else []
+            net = self._exec_context_for(plugin)
+            results = await self.connectors.dispatch(net, requests) if requests else []
             collected = time.perf_counter()
             result = plugin.parse_results(results)
             did_io = bool(requests)
         parsed = time.perf_counter()
         self._apply(plugin, result)
-        if did_io:
+        if did_io and self._cycle_timings:
             self._record_cycle_timing(plugin, started, collected, parsed)
         return True
 
@@ -350,6 +360,10 @@ class VigilEngine:
             self._last_collected[plugin.id] = time.monotonic()
             self._collecting[plugin.id] = False
 
+    def last_collected(self, plugin_id: str) -> float:
+        """Monotonic time of a monitor's last finished cycle, 0.0 if none yet."""
+        return self._last_collected.get(plugin_id, 0.0)
+
     async def dispatch_action(self, plugin: Plugin, action_id: str, **kwargs) -> DispatchResult:
         """Returns (success, metadata). metadata is the applied CollectResult's
         .metadata dict when one was applied (e.g. carrying 'content' for
@@ -359,7 +373,7 @@ class VigilEngine:
             CollectResult, HttpRequest, DnsQuery, PingRequest, IoActionPlan,
         )
 
-        net = self._net_for(plugin)
+        net = self._exec_context_for(plugin)
 
         def _finish(outcome):
             if isinstance(outcome, CollectResult):
@@ -377,7 +391,7 @@ class VigilEngine:
             io_result = await self._run_io(plan.call)
             return _finish(plugin.interpret_action(action_id, io_result, **kwargs))
         if isinstance(plan, (HttpRequest, DnsQuery, PingRequest)):
-            result = (await self.connectors.run(net, [plan]))[0]
+            result = (await self.connectors.dispatch(net, [plan]))[0]
             return _finish(plugin.interpret_action(action_id, result, **kwargs))
         # Default: an ActionPlan — a short SSH command.
         result = await self.connectors.execute(net, plan)
@@ -409,7 +423,7 @@ class VigilEngine:
         job = self.job_running(plugin)
         if not job or not job.get('pid'):
             return False
-        net = self._net_for(plugin)
+        net = self._exec_context_for(plugin)
         if net is not None:
             await self.connectors.execute_raw(net, cancel_command(job['pid']))
         self.db.finish_job(job['id'], 'cancelled', exit_code=130, error='Cancelled by user')
@@ -459,17 +473,42 @@ class VigilEngine:
 
     async def _monitor_loop(self, plugin: Plugin):
         await asyncio.sleep(random.uniform(0, STARTUP_JITTER_SECONDS))
+        next_due = time.monotonic()
         while True:
+            # A failing plugin cycle must not kill its polling loop; the next tick retries.
             try:
                 await self.run_cycle_now(plugin)
             except Exception as e:
                 logging.error(f"Plugin execution error ({plugin.name}): {e}")
-            await asyncio.sleep(plugin.interval)
+            # interval is the period, not the gap: sleep to the next due time
+            # so a slow cycle does not stretch the schedule, and re-anchor
+            # rather than burst when a cycle overruns the whole period.
+            next_due += plugin.interval
+            now = time.monotonic()
+            if next_due <= now:
+                next_due = now + plugin.interval
+            await asyncio.sleep(next_due - now)
 
     async def _prune_loop(self):
         while True:
             self._maybe_prune_logs()
             await asyncio.sleep(_PRUNE_CHECK_SECONDS)
+
+    def _spawn(self, coro) -> "asyncio.Task":
+        """Create a background task anchored in self._tasks for its lifetime."""
+        task = asyncio.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    def shutdown(self) -> None:
+        """Stop background tasks, close every transport, and flush pending
+        writes to SQLite; registered as the UI server's shutdown hook."""
+        for task in list(self._tasks):
+            task.cancel()
+        self.connectors.close()
+        self.db.flush()
+        logging.info("Vigil Engine shut down cleanly.")
 
     async def run(self):
         logging.info("Vigil Engine started...")
@@ -486,18 +525,20 @@ class VigilEngine:
             f"{pushed} collect on their agent."
         )
         for plugin in polled:
-            asyncio.create_task(self._monitor_loop(plugin))
+            self._spawn(self._monitor_loop(plugin))
 
-        asyncio.create_task(self._prune_loop())
+        self._spawn(self._prune_loop())
 
     def _maybe_prune_logs(self, interval: float = 3600.0):
         # Nothing to prune if both retention windows are disabled (0/negative).
-        if self.log_retention_days <= 0 and self.metric_retention_days <= 0:
+        if (self.log_retention_days <= 0 and self.metric_retention_days <= 0
+                and self.metric_downsample_days <= 0):
             return
         now = time.monotonic()
         if now - self._last_prune < interval:
             return
         self._last_prune = now
+        # A failed prune must not kill the prune loop; the next hourly pass retries.
         try:
             # Logs and jobs share the log-retention window; metrics and status
             # history use their own (metric_retention_days, which defaults to
@@ -507,5 +548,6 @@ class VigilEngine:
             self.db.prune_jobs(self.log_retention_days)
             self.db.prune_metrics(self.metric_retention_days)
             self.db.prune_status(self.metric_retention_days)
+            self.db.downsample_metrics(self.metric_downsample_days)
         except Exception as e:
             logging.error(f"Retention prune failed: {e}")

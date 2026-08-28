@@ -27,9 +27,9 @@ class BaseModel(Model):
 
 class Metric(BaseModel):
     timestamp = DateTimeField(default=datetime.now, index=True)
-    target = CharField(index=True)
+    target = CharField()
     collector = CharField()
-    metric_name = CharField(index=True)
+    metric_name = CharField()
     value = DoubleField()
     metadata = TextField(null=True)
 
@@ -63,10 +63,10 @@ class StatusHistory(BaseModel):
 
 
 class Job(BaseModel):
-    plugin_id = CharField(index=True)
-    target = CharField(index=True)
-    kind = CharField(index=True)
-    state = CharField(index=True, default="running")
+    plugin_id = CharField()
+    target = CharField()
+    kind = CharField()
+    state = CharField(default="running")
     command = TextField()
     started = DateTimeField(default=datetime.now, index=True)
     finished = DateTimeField(null=True)
@@ -101,7 +101,7 @@ class PluginSnapshot(BaseModel):
 class LogLine(BaseModel):
     timestamp = DateTimeField(default=datetime.now, index=True)
     target = CharField(index=True)
-    source = CharField(index=True)
+    source = CharField()
     level = CharField()
     message = TextField()
     dedup_hash = CharField(unique=True)

@@ -1,5 +1,4 @@
 import pytest
-from unittest.mock import AsyncMock
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.cloud import Cloud, _parse_kv

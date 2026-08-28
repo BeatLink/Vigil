@@ -1,11 +1,13 @@
 """Agent transport: the exec RPC, event routing, and transport selection."""
 
 import asyncio
+import contextlib
+import json
 import pytest
 from unittest.mock import MagicMock
 
 from vigil.core.connectors.agent_connector import AgentConnection, AgentRegistry
-from vigil.core.connectors.engine import ConnectorEngine, ExecContext
+from vigil.core.connectors.engine import ConnectorEngine
 from vigil_agent import protocol as proto
 from vigil.core.connectors.types import CmdResult
 
@@ -128,10 +130,6 @@ class TestTransportSelection:
         ctx = engine.exec_context({'ssh_config': {'host': 'web-01'}})
         assert not ctx.is_agent
         assert ctx.target == 'web-01'
-
-    def test_ssh_context_remains_an_alias(self):
-        engine = ConnectorEngine()
-        assert engine.ssh_context({'ssh_config': {'host': 'web-01'}}).target == 'web-01'
 
 
 class TestStreamSpec:
@@ -288,3 +286,207 @@ class TestSampleStreamContract:
         from vigil.plugins.cpu import Cpu
         plugin = make_plugin(Cpu, {})
         assert plugin.parse_event(f'{plugin.id}:sample', {}, 0.0).status == 'failed'
+
+    def test_the_sample_stream_bounds_quiet_suppression(self, make_plugin):
+        """The agent may skip unchanged frames but must push within five
+        intervals, so a quiet monitor's stored data keeps advancing."""
+        from vigil.plugins.cpu import Cpu
+        plugin = make_plugin(Cpu, {})
+        spec = plugin.sample_streams()[0]
+        assert spec.params['max_quiet'] == plugin.interval * 5
+
+
+class _Exhausted(Exception):
+    """Raised by the fake executor when its scripted outputs run out."""
+
+
+class TestSampleWatcher:
+    """The agent-side sample loop: unchanged-output suppression and the
+    max_quiet keepalive that stops suppression from reading as staleness."""
+
+    @staticmethod
+    async def _run(params, outputs, monkeypatch):
+        from vigil_agent import executor, watchers
+
+        feed = iter(outputs)
+
+        async def fake_run(command, timeout=None):
+            try:
+                return next(feed)
+            except StopIteration:
+                raise _Exhausted
+
+        monkeypatch.setattr(executor, 'run', fake_run)
+        emitted = []
+
+        async def emit(payload):
+            emitted.append(payload)
+
+        with pytest.raises(_Exhausted):
+            await watchers.sample({'command': 'c', 'interval': 0, **params}, emit)
+        return emitted
+
+    async def test_max_quiet_suppresses_unchanged_output(self, monkeypatch):
+        emitted = await self._run({'max_quiet': 999}, [(0, 'same', '')] * 5, monkeypatch)
+        assert len(emitted) == 1
+
+    async def test_the_keepalive_still_pushes_an_unchanged_result(self, monkeypatch):
+        emitted = await self._run({'max_quiet': 0}, [(0, 'same', '')] * 5, monkeypatch)
+        assert len(emitted) == 5
+
+    async def test_an_exit_code_change_alone_is_pushed(self, monkeypatch):
+        emitted = await self._run({'max_quiet': 999},
+                                  [(0, 'x', ''), (1, 'x', '')], monkeypatch)
+        assert [p['exit_code'] for p in emitted] == [0, 1]
+
+    async def test_without_max_quiet_every_result_is_pushed(self, monkeypatch):
+        """The compatibility default: an older server that never sends
+        max_quiet keeps getting one frame per interval."""
+        emitted = await self._run({}, [(0, 'same', '')] * 3, monkeypatch)
+        assert len(emitted) == 3
+
+    async def test_on_change_alone_still_fully_suppresses(self, monkeypatch):
+        emitted = await self._run({'on_change': True}, [(0, 'same', '')] * 3, monkeypatch)
+        assert len(emitted) == 1
+
+
+class TestJournalMux:
+    """Shared journalctl followers: streams with unit filters ride one
+    process, and each JSON line is routed to the streams it matches."""
+
+    class _FakeProc:
+        def __init__(self, lines, eof=False):
+            self._lines = list(lines)
+            self._eof = eof
+            self.returncode = None
+            self.stdout = self
+
+        async def readline(self):
+            if self._lines:
+                return self._lines.pop(0)
+            if self._eof:
+                return b''
+            await asyncio.Event().wait()
+
+        def terminate(self):
+            self.returncode = -15
+
+    @staticmethod
+    def _entry(message, **fields):
+        return (json.dumps({'MESSAGE': message, **fields}) + '\n').encode()
+
+    @staticmethod
+    def _collector(sink, name):
+        async def emit(payload):
+            sink[name].append(payload['message'])
+        return emit
+
+    @staticmethod
+    async def _settle(condition, timeout=5.0):
+        for _ in range(int(timeout / 0.01)):
+            if condition():
+                return
+            await asyncio.sleep(0.01)
+        pytest.fail("the mux never delivered the expected entries")
+
+    @staticmethod
+    async def _cancel(tasks):
+        for task in tasks:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+    def test_per_stream_filters_reproduce_journalctl(self):
+        from vigil_agent.watchers import _entry_matches as m
+        assert m({'unit': 'redis'}, {'_SYSTEMD_UNIT': 'redis.service'}, 'x')
+        assert not m({'unit': 'redis'}, {'_SYSTEMD_UNIT': 'nginx.service'}, 'x')
+        assert m({'unit': 'a.service'}, {'UNIT': 'a.service'}, 'x')
+        assert m({'priority': 3}, {'PRIORITY': '2'}, 'x')
+        assert not m({'priority': 3}, {'PRIORITY': '6'}, 'x')
+        assert not m({'priority': 3}, {}, 'x')
+        assert m({'grep': 'boom'}, {}, 'kaboom')
+        assert not m({'grep': 'boom'}, {}, 'quiet')
+        assert m({'identifier': 'sshd'}, {'SYSLOG_IDENTIFIER': 'sshd'}, 'x')
+        assert not m({'identifier': 'sshd'}, {'SYSLOG_IDENTIFIER': 'cron'}, 'x')
+
+    async def test_unit_streams_share_one_follower(self, monkeypatch):
+        from vigil_agent import watchers
+        monkeypatch.setattr(watchers, '_JOURNAL_SETTLE_SECONDS', 0.01)
+
+        spawned = []
+        lines = [self._entry('from nginx', _SYSTEMD_UNIT='nginx.service'),
+                 self._entry('from redis', _SYSTEMD_UNIT='redis.service'),
+                 self._entry('from other', _SYSTEMD_UNIT='other.service')]
+
+        async def fake_spawn(group, cmd):
+            spawned.append(cmd)
+            return TestJournalMux._FakeProc(lines)
+
+        monkeypatch.setattr(watchers._JournalGroup, '_spawn', fake_spawn)
+
+        mux = watchers.JournalMux()
+        got = {'nginx': [], 'redis': []}
+        tasks = [
+            asyncio.create_task(mux.follow({'unit': 'nginx.service'},
+                                           self._collector(got, 'nginx'))),
+            asyncio.create_task(mux.follow({'unit': 'redis'},
+                                           self._collector(got, 'redis'))),
+        ]
+        await self._settle(lambda: got['nginx'] and got['redis'])
+        await asyncio.sleep(0.05)
+        await self._cancel(tasks)
+
+        assert len(spawned) == 1
+        assert spawned[0].count('--unit') == 2
+        assert 'nginx.service' in spawned[0] and 'redis' in spawned[0]
+        assert got == {'nginx': ['from nginx'], 'redis': ['from redis']}
+
+    async def test_a_kernel_stream_keeps_its_own_follower(self, monkeypatch):
+        from vigil_agent import watchers
+        monkeypatch.setattr(watchers, '_JOURNAL_SETTLE_SECONDS', 0.01)
+
+        spawned = []
+        unit_lines = [self._entry('unit line', _SYSTEMD_UNIT='nginx.service')]
+        kernel_lines = [self._entry('benign kernel chatter'),
+                        self._entry('Out of memory: Killed process 42 (redis)')]
+
+        async def fake_spawn(group, cmd):
+            spawned.append(cmd)
+            lines = kernel_lines if '--dmesg' in cmd else unit_lines
+            return TestJournalMux._FakeProc(lines)
+
+        monkeypatch.setattr(watchers._JournalGroup, '_spawn', fake_spawn)
+
+        mux = watchers.JournalMux()
+        got = {'unit': [], 'kernel': []}
+        tasks = [
+            asyncio.create_task(mux.follow({'unit': 'nginx.service'},
+                                           self._collector(got, 'unit'))),
+            asyncio.create_task(mux.follow({'kernel': True, 'grep': 'Out of memory'},
+                                           self._collector(got, 'kernel'))),
+        ]
+        await self._settle(lambda: got['unit'] and got['kernel'])
+        await self._cancel(tasks)
+
+        assert len(spawned) == 2
+        assert got['unit'] == ['unit line']
+        assert got['kernel'] == ['Out of memory: Killed process 42 (redis)']
+
+    async def test_a_dead_follower_fails_its_streams(self, monkeypatch):
+        """EOF must surface as a raise so supervise() restarts the stream."""
+        from vigil_agent import watchers
+        monkeypatch.setattr(watchers, '_JOURNAL_SETTLE_SECONDS', 0.01)
+
+        async def fake_spawn(group, cmd):
+            return TestJournalMux._FakeProc([], eof=True)
+
+        monkeypatch.setattr(watchers._JournalGroup, '_spawn', fake_spawn)
+
+        mux = watchers.JournalMux()
+
+        async def emit(payload):
+            pass
+
+        task = asyncio.create_task(mux.follow({'unit': 'nginx.service'}, emit))
+        with pytest.raises(RuntimeError):
+            await asyncio.wait_for(task, timeout=5)

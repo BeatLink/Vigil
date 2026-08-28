@@ -1,3 +1,11 @@
+"""Inventory of every systemd service on the target, from two systemctl list
+commands over SSH, rendered as a filterable table with
+start/stop/restart/enable/disable actions and unit-file view/edit dialogs.
+Config: lines, allow_unit_file_edit, and allowed_write_paths restricting
+where an edited unit file may be written back. The monitor is online whenever
+collection succeeds — failed units are surfaced as counts, not escalated —
+and only a failed systemctl run makes it failed."""
+
 import os
 import shlex
 from typing import Any, Dict, List, Optional, Union
@@ -257,6 +265,3 @@ class ServiceList(Plugin):
             'events': {'title': 'PLUGIN EVENTS'},
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

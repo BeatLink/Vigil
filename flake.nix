@@ -38,6 +38,9 @@
                 pyproject = builtins.fromTOML (builtins.readFile ./pyproject.toml);
 
                 pythonDeps = with pkgs.python312Packages; [
+                    # httpx serves the async HTTP connector; requests remains
+                    # for the sync InfluxDB push exporter.
+                    httpx
                     requests
                     pyyaml
                     peewee

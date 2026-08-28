@@ -1,11 +1,22 @@
+"""qBittorrent transfer health via its WebUI API, fetched by one curl script
+over SSH — sampled locally by the agent on agent-backed hosts — that logs in,
+reads transfer info plus the torrent list, and logs the session out on exit.
+Config: api_url, username, password / password_command, stalled_warning,
+stalled_threshold, error_threshold, firewalled_warning, min_downloading,
+api_timeout. A DISCONNECTED connection status, errored torrents at
+error_threshold, or stalls at stalled_threshold are failed; a firewalled
+connection or stalls at stalled_warning are warning (stall counts only apply
+while at least min_downloading torrents are downloading)."""
+
 import json
 import shlex
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from vigil.plugins.base.plugin_base import Plugin
+from vigil.plugins.base.plugin_helpers import (
+    SCRIPT_SEP, StatusAccumulator, dq, password_line,
+)
 from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
-
-_SEP = "@@VIGIL_SPLIT@@"
 
 _AUTH_FAILED = "VIGIL_AUTH_FAILED"
 
@@ -22,14 +33,15 @@ def _auth_preamble(base: str, timeout: int, password_command: Optional[str],
     if not (username and (password_command or password)):
         return [], ''
 
-    lines = []
-    if password_command:
-        lines.append(f"__pw=$({password_command})")
-    else:
-        lines.append(f"__pw={shlex.quote(password)}")
-
+    lines = [password_line(password_command, password)]
     lines.append('__jar=$(mktemp)')
-    lines.append("""trap 'rm -f "$__jar"' EXIT INT TERM""")
+    # Log the WebUI session out on any exit, then drop the cookie jar, so a
+    # poll never leaves a live session behind.
+    lines.append(
+        "trap 'curl -s -m %d -b \"$__jar\" -H %s --data \"\" %s "
+        ">/dev/null 2>&1; rm -f \"$__jar\"' EXIT INT TERM"
+        % (timeout, dq("Referer: " + base), dq(base + "/api/v2/auth/logout"))
+    )
     lines.append(
         f'__login=$(curl -s -m {timeout} -c "$__jar" '
         f'-H {shlex.quote("Referer: " + base)} '
@@ -53,7 +65,7 @@ def _build_fetch_script(api_url: str, timeout: int, password_command: Optional[s
     lines.extend(auth_lines)
 
     lines.append(f'curl -s -m {timeout} {auth} {shlex.quote(base + "/api/v2/transfer/info")}')
-    lines.append(f'echo "{_SEP}"')
+    lines.append(f'echo "{SCRIPT_SEP}"')
     lines.append(f'curl -s -m {timeout} {auth} {shlex.quote(base + "/api/v2/torrents/info")}')
     return '\n'.join(lines)
 
@@ -133,9 +145,9 @@ def _build_recheck_script(api_url: str, timeout: int, password_command: Optional
 
 
 def _parse_response(stdout: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    if _SEP not in stdout:
+    if SCRIPT_SEP not in stdout:
         raise ValueError(f"unexpected API response: {stdout[:200]!r}")
-    transfer_raw, torrents_raw = stdout.split(_SEP, 1)
+    transfer_raw, torrents_raw = stdout.split(SCRIPT_SEP, 1)
 
     transfer_raw, torrents_raw = transfer_raw.strip(), torrents_raw.strip()
 
@@ -159,6 +171,42 @@ def _parse_response(stdout: str) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
         raise ValueError(f"torrent list was not a list: {torrents_raw[:200]!r}")
 
     return transfer, torrents
+
+
+def _classify_torrents(torrents: List[Dict[str, Any]]):
+    """Split the torrent list into stalled, errored, and actively-downloading subsets."""
+    stalled = [t for t in torrents if t.get('state') in _STALLED_STATES]
+    errored = [t for t in torrents if t.get('state') in _ERROR_STATES]
+    downloading = [t for t in torrents if t.get('state') in _ACTIVE_DL_STATES]
+    return stalled, errored, downloading
+
+
+def _accumulate_transfer_problems(connection: str, stalled: List[Dict[str, Any]],
+                                  errored: List[Dict[str, Any]],
+                                  downloading: List[Dict[str, Any]],
+                                  firewalled_warning: bool, error_threshold: int,
+                                  stalled_warning: int, stalled_threshold: int,
+                                  min_downloading: int) -> StatusAccumulator:
+    """Judge the connection state and stalled/errored torrent counts against the thresholds."""
+    acc = StatusAccumulator()
+
+    if connection == 'disconnected':
+        acc.escalate('failed', "connection status is DISCONNECTED")
+    elif connection == 'firewalled' and firewalled_warning:
+        acc.escalate('warning', "connection is firewalled (no inbound peers)")
+
+    if errored and len(errored) >= error_threshold:
+        names = ', '.join(t.get('name', '?') for t in errored[:3])
+        suffix = f" (+{len(errored) - 3} more)" if len(errored) > 3 else ""
+        acc.escalate('failed', f"{len(errored)} errored: {names}{suffix}")
+
+    if len(downloading) >= min_downloading:
+        if len(stalled) >= stalled_threshold:
+            acc.escalate('failed', f"{len(stalled)} stalled (>= {stalled_threshold})")
+        elif len(stalled) >= stalled_warning:
+            acc.escalate('warning', f"{len(stalled)} stalled (>= {stalled_warning})")
+
+    return acc
 
 
 def _format_rate(bytes_per_sec: float) -> str:
@@ -192,23 +240,11 @@ class Qbittorrent(Plugin):
         self.min_downloading = int(config.get('min_downloading', 1))
         self.api_timeout = int(config.get('api_timeout', 10))
 
-        from vigil.core.ui.spec import register_formatter, register_color_rule, register_item_formatter
-        self._connection_format_name = f'qbittorrent_connection_{self.id}'
-        register_formatter(self._connection_format_name)(
+        self._connection_format = (
             lambda v: '--' if v is None else ('CONNECTED' if v >= 1.0 else 'DISCONNECTED'))
-        self._connection_color_name = f'qbittorrent_connection_color_{self.id}'
-        register_color_rule(self._connection_color_name)(
+        self._connection_color = (
             lambda v: None if v is None else ('online' if v >= 1.0 else 'failed'))
-
-        self._speed_format_name = f'qbittorrent_speed_{self.id}'
-        register_item_formatter(self._speed_format_name)(self._speed_text)
-        self._torrents_format_name = f'qbittorrent_torrents_{self.id}'
-        register_item_formatter(self._torrents_format_name)(self._torrents_text)
-
-        self._stalled_color_name = f'qbittorrent_stalled_color_{self.id}'
-        register_color_rule(self._stalled_color_name)(self._stalled_color)
-        self._errored_color_name = f'qbittorrent_errored_color_{self.id}'
-        register_color_rule(self._errored_color_name)(
+        self._errored_color = (
             lambda v: None if v is None else ('failed' if int(v) else 'online'))
 
     SAMPLED = True
@@ -221,6 +257,10 @@ class Qbittorrent(Plugin):
         return [Command(script)]
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        """Turns the transfer-info+torrent-list curl output into a CollectResult
+        with speed/count metrics, one summary log line, and a status where a
+        DISCONNECTED link, errored torrents, or heavy stalling is failed and a
+        firewalled link or moderate stalling is warning."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
             if _AUTH_FAILED in stderr:
@@ -238,9 +278,7 @@ class Qbittorrent(Plugin):
         dl_speed = float(transfer.get('dl_info_speed', 0) or 0)
         up_speed = float(transfer.get('up_info_speed', 0) or 0)
 
-        stalled = [t for t in torrents if t.get('state') in _STALLED_STATES]
-        errored = [t for t in torrents if t.get('state') in _ERROR_STATES]
-        downloading = [t for t in torrents if t.get('state') in _ACTIVE_DL_STATES]
+        stalled, errored, downloading = _classify_torrents(torrents)
 
         metrics = {
             'dl_speed_bytes': dl_speed,
@@ -254,37 +292,10 @@ class Qbittorrent(Plugin):
             'connected': 1.0 if connection == 'connected' else 0.0,
         }
 
-        problems = []
-        level = 'online'
-
-        def _escalate(new_level: str):
-            nonlocal level
-            order = ('online', 'warning', 'failed')
-            if order.index(new_level) > order.index(level):
-                level = new_level
-
-        if connection == 'disconnected':
-            problems.append("connection status is DISCONNECTED")
-            _escalate('failed')
-        elif connection == 'firewalled' and self.firewalled_warning:
-            problems.append("connection is firewalled (no inbound peers)")
-            _escalate('warning')
-
-        if errored and len(errored) >= self.error_threshold:
-            names = ', '.join(t.get('name', '?') for t in errored[:3])
-            suffix = f" (+{len(errored) - 3} more)" if len(errored) > 3 else ""
-            problems.append(f"{len(errored)} errored: {names}{suffix}")
-            _escalate('failed')
-
-        if len(downloading) >= self.min_downloading:
-            if len(stalled) >= self.stalled_threshold:
-                problems.append(
-                    f"{len(stalled)} stalled (>= {self.stalled_threshold})")
-                _escalate('failed')
-            elif len(stalled) >= self.stalled_warning:
-                problems.append(
-                    f"{len(stalled)} stalled (>= {self.stalled_warning})")
-                _escalate('warning')
+        acc = _accumulate_transfer_problems(
+            connection, stalled, errored, downloading,
+            self.firewalled_warning, self.error_threshold,
+            self.stalled_warning, self.stalled_threshold, self.min_downloading)
 
         parts = [
             f"{connection}",
@@ -293,11 +304,10 @@ class Qbittorrent(Plugin):
             f"{len(torrents)} torrents",
             f"{len(downloading)} downloading",
         ]
-        if problems:
-            parts.append("| " + "; ".join(problems))
+        if acc.problems:
+            parts.append("| " + "; ".join(acc.problems))
 
-        log_level = "ERROR" if level == 'failed' else "WARNING" if level == 'warning' else "INFO"
-        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), log_level)], status=level)
+        return CollectResult(metrics=metrics, logs=[(' | '.join(parts), acc.log_level)], status=acc.status)
 
     def get_actions(self) -> List[Dict[str, str]]:
         return [
@@ -402,20 +412,17 @@ class Qbittorrent(Plugin):
             'layout': _DEFAULT_LAYOUT,
             'cards': {
                 'connection_card': {'metric': 'connected', 'title': 'CONNECTION',
-                                    'format': self._connection_format_name, 'color': self._connection_color_name},
+                                    'format': self._connection_format, 'color': self._connection_color},
                 'speed_card': {'title': 'TRANSFER', 'metrics': ['dl_speed_bytes', 'up_speed_bytes'],
-                              'format_fn': self._speed_format_name},
+                              'format_fn': self._speed_text},
                 'torrents_card': {'title': 'TORRENTS', 'metrics': ['torrents_total', 'torrents_downloading'],
-                                  'format_fn': self._torrents_format_name},
+                                  'format_fn': self._torrents_text},
                 'stalled_card': {'metric': 'torrents_stalled', 'title': 'STALLED', 'format': 'int',
-                                 'color': self._stalled_color_name},
+                                 'color': self._stalled_color},
                 'errored_card': {'metric': 'torrents_errored', 'title': 'ERRORED', 'format': 'int',
-                                 'color': self._errored_color_name},
+                                 'color': self._errored_color},
             },
             'chart': {'metric': 'dl_speed_bytes', 'title': 'DOWNLOAD SPEED (B/s)'},
             'events': True,
         }
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

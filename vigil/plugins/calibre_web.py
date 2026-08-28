@@ -1,8 +1,15 @@
-from typing import Any, Dict, List, Optional
+"""Calibre-Web availability, probed over HTTP from the Vigil host by fetching
+the /opds feed with basic auth and checking the body actually looks like an
+Atom/OPDS feed. Config: url (required, Vigil-reachable), username, password /
+password_command, request_timeout. A 200 carrying a real feed is online, with
+latency recorded; anything else — a connection error, a 401, or a 200 whose
+body is a login or error page instead of a feed — is failed."""
+
+from typing import Any, Dict, List
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (
-    CmdResult, Command, CollectResult, HttpRequest, HttpResult, Request, Result,
+    CollectResult, HttpRequest, HttpResult, Request, Result,
 )
 from vigil.plugins.base.plugin_helpers import resolve_secret
 
@@ -42,12 +49,6 @@ class CalibreWeb(Plugin):
         self.password = resolve_secret(config.get('password'),
                                        config.get('password_command'))
         self.request_timeout = int(config.get('request_timeout', 10))
-
-    def commands(self) -> List[Command]:
-        return []
-
-    def parse(self, results: List[CmdResult]) -> CollectResult:
-        return CollectResult()
 
     def requests(self) -> List[Request]:
         if not self.url:
@@ -92,10 +93,6 @@ class CalibreWeb(Plugin):
         else:
             message = f"OPDS request returned unexpected status {status}"
         return CollectResult(metrics=metrics, logs=[(message, "ERROR")], status='failed')
-
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)
 
 
 from vigil.core.ui.spec import register_formatter, register_color_rule

@@ -1,16 +1,15 @@
 import json
 import time
-from unittest.mock import AsyncMock
 
 import pytest
 
 from vigil.plugins.pihole import (
     Pihole,
-    _SEP,
+    SCRIPT_SEP,
     _build_blocking_script,
     _build_fetch_script,
     _build_gravity_script,
-    _format_age,
+    _format_age_compact,
     _parse_response,
 )
 from vigil.core.connectors.types import CmdResult
@@ -49,7 +48,7 @@ def _summary(total=237819, blocked=38288, percent=16.1, domains=347306,
 
 def _response(summary=None, blocking="enabled"):
     body = json.dumps(summary if summary is not None else _summary())
-    return f'{body}\n{_SEP}\n{json.dumps({"blocking": blocking, "timer": None})}'
+    return f'{body}\n{SCRIPT_SEP}\n{json.dumps({"blocking": blocking, "timer": None})}'
 
 
 @pytest.fixture
@@ -79,13 +78,13 @@ def _latest_metric(metric: str, name: str = "test-pihole") -> float | None:
 
 class TestFormatAge:
     def test_minutes(self):
-        assert _format_age(1800) == "30m"
+        assert _format_age_compact(1800) == "30m"
 
     def test_hours_and_minutes(self):
-        assert _format_age(5400) == "1h 30m"
+        assert _format_age_compact(5400) == "1h 30m"
 
     def test_days_and_hours(self):
-        assert _format_age(280800) == "3d 6h"
+        assert _format_age_compact(280800) == "3d 6h"
 
 
 class TestBuildFetchScript:
@@ -126,12 +125,12 @@ class TestParseResponse:
 
     def test_malformed_summary_raises(self):
         with pytest.raises(ValueError, match="summary was not JSON"):
-            _parse_response(f'not json\n{_SEP}\n{{"blocking": "enabled"}}')
+            _parse_response(f'not json\n{SCRIPT_SEP}\n{{"blocking": "enabled"}}')
 
     def test_auth_error_names_the_cause(self):
         body = json.dumps({"error": {"message": "Unauthorized"}})
         with pytest.raises(ValueError, match="api_password"):
-            _parse_response(f'{body}\n{_SEP}\n{{"blocking": "enabled"}}')
+            _parse_response(f'{body}\n{SCRIPT_SEP}\n{{"blocking": "enabled"}}')
 
 
 class TestPiholeCollection:

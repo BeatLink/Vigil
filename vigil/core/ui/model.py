@@ -3,15 +3,17 @@
 The dashboard refreshes on push, not on a poll. Every semantic write on the
 Database Engine publishes a change (``core/state/changes.py``); each connected
 browser client owns one ``_PageScheduler`` subscribed to that bus, and a change
-wakes it to re-render. An idle system produces no changes and so costs nothing,
-while a status flip reaches the screen as soon as it is written rather than at
-the next tick of a timer.
+wakes it to re-render, so a status flip reaches the screen as soon as it is
+written rather than at the next tick of a timer. An idle system publishes
+nothing, but is not free: the ``IDLE_REFRESH_SECONDS`` sweep still re-ticks
+every tickable, because ages ("2m ago", a running job's duration) change with
+no write to announce them — the diffing keeps those wakeups off the wire.
 
 Waking is leading-edge debounced: the first change refreshes immediately, and
 further changes arriving during the cooldown collapse into one trailing
 refresh. That keeps latency at zero for an isolated event while bounding the
 refresh rate on a busy system, where a single collection cycle publishes a
-change per metric, log line and status it writes.
+change for its metrics plus one per log line and status it writes.
 
 A change wakes every tickable on the client rather than only those interested
 in the changed monitor. Refresh callbacks are registered by plugin render code
@@ -30,10 +32,10 @@ view visited, each still refreshing widgets the browser no longer has.
 import asyncio
 from typing import Any, Dict, List
 
-from nicegui import binding, context, helpers, ui
-from nicegui import Client
+from nicegui import context, ui
 
 from vigil.core.contracts import RefreshCallback
+from vigil.core.ui import nicegui_compat as ng
 from vigil.core.state import CHANGES
 from .components import offload
 
@@ -67,9 +69,9 @@ def _anchor_element():
 
 def _is_detached(client, anchor) -> bool:
     """True once the client disconnected or the anchor's container was cleared."""
-    if client is None or client.id not in Client.instances:
+    if not ng.client_is_live(client):
         return True
-    return anchor is not None and anchor.id not in client.elements
+    return anchor is not None and not ng.element_is_attached(client, anchor)
 
 
 class _PageScheduler:
@@ -172,7 +174,7 @@ class _CallbackTick:
             return
         self._ran_once = True
         result = self._callback()
-        if helpers.should_await(result):
+        if ng.should_await(result):
             await result
 
 
@@ -193,7 +195,7 @@ def schedule_callback(callback: RefreshCallback, run_now: bool = True) -> None:
     _scheduler_for_current_client().add(_CallbackTick(callback, run_now))
 
 
-@binding.bindable_dataclass
+@ng.bindable_dataclass
 class PluginModel:
     status: str = 'offline'
     status_color: str = ''
@@ -232,16 +234,8 @@ class PluginPage:
         await self._refresh_model_async()
         for cb in self._refresh_callbacks:
             result = cb()
-            if helpers.should_await(result):
+            if ng.should_await(result):
                 await result
-
-    def _refresh_model(self) -> None:
-        if self._metric_names:
-            metrics = dict(self.model.metrics)
-            for name in self._metric_names:
-                m = self.plugin.data.latest_metric(name)
-                metrics[name] = m.value if m is not None else None
-            self.model.metrics = metrics
 
     async def _refresh_model_async(self) -> None:
         if not self._metric_names:
@@ -254,9 +248,3 @@ class PluginPage:
         for name, m in zip(names, values):
             metrics[name] = m.value if m is not None else None
         self.model.metrics = metrics
-
-    async def refresh_status(self) -> None:
-        from .theme import STATUS_COLORS
-        state = await offload(self.plugin.data.latest_status)(self.plugin.id)
-        self.model.status = state
-        self.model.status_color = STATUS_COLORS.get(state, STATUS_COLORS['offline'])

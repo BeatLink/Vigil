@@ -21,6 +21,60 @@ def _extract_counter(block: str, key: str) -> Optional[int]:
     return None
 
 
+def _baseline_result(metrics: Dict[str, float], total: int) -> CollectResult:
+    """The first-sample result, which only records the boot-time counter."""
+    return CollectResult(
+        metrics=metrics,
+        logs=[(f"Baseline established: {total} OOM kill(s) since boot", "INFO")],
+        status='online',
+    )
+
+
+def _reset_result(metrics: Dict[str, float], previous: int, total: int) -> CollectResult:
+    """The result for a counter that went backwards, which means the host rebooted."""
+    return CollectResult(
+        metrics=metrics,
+        logs=[(f"OOM counter reset ({previous} -> {total}); host likely rebooted", "INFO")],
+        status='online',
+    )
+
+
+def _kill_result(metrics: Dict[str, float], delta: int, total: int,
+                 is_warning: bool, kill_status: str) -> CollectResult:
+    """The result for new kills since the last sample."""
+    return CollectResult(
+        metrics=metrics,
+        logs=[(
+            f"{delta} OOM kill(s) since last check — the kernel terminated "
+            f"process(es) to reclaim memory ({total} total since boot)",
+            "WARNING" if is_warning else "ERROR",
+        )],
+        status=kill_status,
+    )
+
+
+def _cooldown_result(metrics: Dict[str, float], since_kill: int, alert_for: int) -> CollectResult:
+    """The lingering warning held for alert_for collections after the last kill."""
+    return CollectResult(
+        metrics=metrics,
+        logs=[(
+            f"No new OOM kills ({since_kill}/{alert_for} "
+            f"collections since the last one)",
+            "WARNING",
+        )],
+        status='warning',
+    )
+
+
+def _clear_result(metrics: Dict[str, float], total: int) -> CollectResult:
+    """The all-clear result once the cooldown has fully elapsed."""
+    return CollectResult(
+        metrics=metrics,
+        logs=[(f"No OOM kills ({total} total since boot)", "INFO")],
+        status='online',
+    )
+
+
 class Oom(SignalPlugin):
     """Kernel OOM kills from /proc/vmstat's oom_kill counter, plus — on an
     agent-backed host — the kernel journal line the OOM killer itself emits.
@@ -75,6 +129,9 @@ class Oom(SignalPlugin):
         return [Command('cat /proc/vmstat')]
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        """Turns the /proc/vmstat dump into a CollectResult carrying the total and
+        delta kill counts, where new kills report failed (warning when is_warning)
+        and the warning lingers for alert_for collections afterwards."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
             return CollectResult.failed(f"Failed to read /proc/vmstat: {stderr}")
@@ -89,53 +146,24 @@ class Oom(SignalPlugin):
         previous, self._last_total = self._last_total, total
 
         if previous is None:
-            return CollectResult(
-                metrics=metrics,
-                logs=[(f"Baseline established: {total} OOM kill(s) since boot", "INFO")],
-                status='online',
-            )
-
+            return _baseline_result(metrics, total)
         if total < previous:
-            return CollectResult(
-                metrics=metrics,
-                logs=[(f"OOM counter reset ({previous} -> {total}); host likely rebooted", "INFO")],
-                status='online',
-            )
+            return _reset_result(metrics, previous, total)
 
         delta = total - previous
         metrics['oom_kills_new'] = float(delta)
 
         if delta > 0:
             self._since_kill = 0
-            return CollectResult(
-                metrics=metrics,
-                logs=[(
-                    f"{delta} OOM kill(s) since last check — the kernel terminated "
-                    f"process(es) to reclaim memory ({total} total since boot)",
-                    "WARNING" if self.is_warning else "ERROR",
-                )],
-                status=self._kill_status,
-            )
+            return _kill_result(metrics, delta, total, self.is_warning, self._kill_status)
 
         if self._since_kill is not None:
             self._since_kill += 1
             if self._since_kill < self.alert_for:
-                return CollectResult(
-                    metrics=metrics,
-                    logs=[(
-                        f"No new OOM kills ({self._since_kill}/{self.alert_for} "
-                        f"collections since the last one)",
-                        "WARNING",
-                    )],
-                    status='warning',
-                )
+                return _cooldown_result(metrics, self._since_kill, self.alert_for)
             self._since_kill = None
 
-        return CollectResult(
-            metrics=metrics,
-            logs=[(f"No OOM kills ({total} total since boot)", "INFO")],
-            status='online',
-        )
+        return _clear_result(metrics, total)
 
     def cards(self) -> Dict[str, Dict[str, Any]]:
         return {

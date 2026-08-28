@@ -1,6 +1,6 @@
 import pytest
 
-from vigil.core.ui.layout import CompositeLayout, PluginLayout, resolve_rows
+from vigil.core.ui.layout import CompositeLayout, resolve_rows
 from vigil.plugins.group import Group, spec_with_titles
 from vigil.plugins.uptime import Uptime
 

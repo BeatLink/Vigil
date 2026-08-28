@@ -269,7 +269,10 @@ class TestPerMonitorScheduling:
                 await engine._monitor_loop(plugin)
 
         assert engine.run_cycle_now.await_count == 2
-        assert calls[1:] == [42, 42]
+        # interval is the period: with sleep mocked the clock never advances,
+        # so each requested sleep lands one interval after the previous due.
+        assert calls[1] == pytest.approx(42, abs=0.5)
+        assert calls[2] - calls[1] == pytest.approx(42, abs=0.5)
 
     async def test_a_crashing_monitor_keeps_polling(self):
         calls = []
@@ -339,7 +342,7 @@ class TestPerMonitorScheduling:
         polled.event_driven.return_value = False
         engine.plugins = [sampled, polled]
         engine._start_exporters = MagicMock()
-        engine._net = {p.id: MagicMock(is_agent=True) for p in (sampled, polled)}
+        engine._exec_contexts = {p.id: MagicMock(is_agent=True) for p in (sampled, polled)}
 
         created = []
 
@@ -368,7 +371,7 @@ class TestPerMonitorScheduling:
         plugin.event_driven.return_value = True
         engine.plugins = [plugin]
         engine._start_exporters = MagicMock()
-        engine._net = {plugin.id: MagicMock(is_agent=False)}
+        engine._exec_contexts = {plugin.id: MagicMock(is_agent=False)}
 
         created = []
 

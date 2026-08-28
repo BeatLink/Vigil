@@ -1,7 +1,16 @@
+"""Space, inodes, and read-only state of every real filesystem on the target,
+from one combined df/proc-mounts command over SSH — sampled locally by the
+agent on agent-backed hosts. Config: warning / threshold (space percent),
+inode_warning / inode_threshold, readonly_is_failure. The worst filesystem
+sets the status: space or inode use past the warning level is warning and
+past the threshold is failed, while a read-only mount is failed (warning when
+readonly_is_failure is off) because the kernel may have remounted it after an
+I/O error."""
+
 from typing import Dict, Any, List
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
-from vigil.plugins.base.plugin_helpers import format_bytes as _format_gb
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
+from vigil.plugins.base.plugin_helpers import StatusAccumulator, format_bytes
 
 _EXCLUDE_TYPES = ['tmpfs', 'devtmpfs', 'squashfs', 'overlay', 'proc', 'sysfs',
                   'cgroup', 'cgroup2', 'devpts', 'mqueue', 'debugfs',
@@ -9,8 +18,6 @@ _EXCLUDE_TYPES = ['tmpfs', 'devtmpfs', 'squashfs', 'overlay', 'proc', 'sysfs',
                   'securityfs', 'pstore', 'autofs', 'binfmt_misc', 'nsfs']
 
 _SNAP = '---SNAP---'
-
-_RANK_UI = {'online': 0, 'warning': 1, 'failed': 2}
 
 
 def _build_cmd() -> str:
@@ -51,6 +58,73 @@ def _parse_readonly(block: str) -> Dict[str, bool]:
                                .replace('\\012', '\n').replace('\\134', '\\'))
         result[mountpoint] = fields[3].split(',')[0] == 'ro'
     return result
+
+
+def _parse_space(block: str) -> List[tuple]:
+    """Parse the df space section into (mountpoint, used_pct, size_bytes, used_bytes) tuples."""
+    filesystems: List[tuple] = []
+    for line in block.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 4:
+            continue
+        try:
+            used_pct = float(fields[-1].rstrip('%'))
+            used_bytes = int(fields[-2])
+            size_bytes = int(fields[-3])
+        except (ValueError, IndexError):
+            continue
+        mountpoint = ' '.join(fields[:-3])
+        filesystems.append((mountpoint, used_pct, size_bytes, used_bytes))
+    return filesystems
+
+
+def _assess_filesystems(filesystems: List[tuple], inode_pct: Dict[str, float],
+                        readonly: Dict[str, bool], space_level_for, inode_level_for,
+                        readonly_level: str):
+    """Build per-filesystem metrics, problem logs, worst-usage figures, read-only mounts, and the worst-of status."""
+    metrics: Dict[str, float] = {}
+    logs: List[tuple] = []
+    worst = 0.0
+    worst_inode = 0.0
+    acc = StatusAccumulator()
+    ro_mounts: List[str] = []
+
+    for mountpoint, used_pct, size_bytes, _used in filesystems:
+        key = _sanitize(mountpoint)
+        metrics[f'fs_{key}_used_pct'] = used_pct
+        metrics[f'fs_{key}_size_gb'] = size_bytes / (1024 ** 3)
+        worst = max(worst, used_pct)
+        level = space_level_for(used_pct)
+        acc.escalate(level)
+        if level != 'online':
+            logs.append((
+                f"{mountpoint}: {used_pct:.0f}% used ({format_bytes(size_bytes / (1024**3))})",
+                Status(level).log_level,
+            ))
+
+        if mountpoint in inode_pct:
+            inode_used_pct = inode_pct[mountpoint]
+            metrics[f'fs_{key}_inodes_pct'] = inode_used_pct
+            worst_inode = max(worst_inode, inode_used_pct)
+            inode_level = inode_level_for(inode_used_pct)
+            acc.escalate(inode_level)
+            if inode_level != 'online':
+                logs.append((
+                    f"{mountpoint}: {inode_used_pct:.0f}% of inodes used — writes may fail "
+                    f"with ENOSPC despite free space",
+                    Status(inode_level).log_level,
+                ))
+
+        if readonly.get(mountpoint):
+            ro_mounts.append(mountpoint)
+            acc.escalate(readonly_level)
+            logs.append((
+                f"{mountpoint}: mounted READ-ONLY — usage figures are stale; "
+                f"the kernel may have remounted it after an I/O error",
+                Status(readonly_level).log_level,
+            ))
+
+    return metrics, logs, worst, worst_inode, ro_mounts, acc
 
 
 _DEFAULT_LAYOUT = [
@@ -95,6 +169,9 @@ class Filesystems(Plugin):
         return [Command(_build_cmd())]
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
+        """Turns the combined df/df-inodes/proc-mounts output into a CollectResult
+        with per-filesystem usage metrics, a log line per problem plus a summary,
+        and the worst filesystem's level as status."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0 and not stdout.strip():
             return CollectResult.failed(f"df failed: {stderr}")
@@ -102,72 +179,15 @@ class Filesystems(Plugin):
         sections = stdout.split(_SNAP)
         inode_pct = _parse_inodes(sections[1]) if len(sections) > 1 else {}
         readonly  = _parse_readonly(sections[2]) if len(sections) > 2 else {}
-
-        filesystems: List[tuple] = []
-        for line in sections[0].splitlines()[1:]:
-            fields = line.split()
-            if len(fields) < 4:
-                continue
-            pcent = fields[-1]
-            try:
-                used_pct = float(pcent.rstrip('%'))
-                used_bytes = int(fields[-2])
-                size_bytes = int(fields[-3])
-            except (ValueError, IndexError):
-                continue
-            mountpoint = ' '.join(fields[:-3])
-            filesystems.append((mountpoint, used_pct, size_bytes, used_bytes))
+        filesystems = _parse_space(sections[0])
 
         if not filesystems:
             return CollectResult.failed("No real filesystems found", level="WARNING", status='offline')
 
-        metrics: Dict[str, float] = {}
-        logs: List[tuple] = []
-        worst = 0.0
-        worst_inode = 0.0
-        overall = 'online'
-        ro_mounts: List[str] = []
-
-        def _escalate(level: str) -> None:
-            nonlocal overall
-            if _RANK_UI[level] > _RANK_UI[overall]:
-                overall = level
-
-        for mountpoint, used_pct, size_bytes, _used in filesystems:
-            key = _sanitize(mountpoint)
-            metrics[f'fs_{key}_used_pct'] = used_pct
-            metrics[f'fs_{key}_size_gb'] = size_bytes / (1024 ** 3)
-            worst = max(worst, used_pct)
-            level = self._level_for(used_pct)
-            _escalate(level)
-            if level != 'online':
-                logs.append((
-                    f"{mountpoint}: {used_pct:.0f}% used ({_format_gb(size_bytes / (1024**3))})",
-                    "ERROR" if level == 'failed' else "WARNING",
-                ))
-
-            if mountpoint in inode_pct:
-                ipct = inode_pct[mountpoint]
-                metrics[f'fs_{key}_inodes_pct'] = ipct
-                worst_inode = max(worst_inode, ipct)
-                ilevel = self._inode_level_for(ipct)
-                _escalate(ilevel)
-                if ilevel != 'online':
-                    logs.append((
-                        f"{mountpoint}: {ipct:.0f}% of inodes used — writes may fail "
-                        f"with ENOSPC despite free space",
-                        "ERROR" if ilevel == 'failed' else "WARNING",
-                    ))
-
-            if readonly.get(mountpoint):
-                ro_mounts.append(mountpoint)
-                ro_level = 'failed' if self.readonly_is_failure else 'warning'
-                _escalate(ro_level)
-                logs.append((
-                    f"{mountpoint}: mounted READ-ONLY — usage figures are stale; "
-                    f"the kernel may have remounted it after an I/O error",
-                    "ERROR" if ro_level == 'failed' else "WARNING",
-                ))
+        readonly_level = 'failed' if self.readonly_is_failure else 'warning'
+        metrics, logs, worst, worst_inode, ro_mounts, acc = _assess_filesystems(
+            filesystems, inode_pct, readonly,
+            self._level_for, self._inode_level_for, readonly_level)
 
         metrics['worst_used_pct'] = worst
         metrics['worst_inodes_pct'] = worst_inode
@@ -179,19 +199,16 @@ class Filesystems(Plugin):
             summary += f", worst inodes {worst_inode:.0f}%"
         if ro_mounts:
             summary += f", {len(ro_mounts)} read-only: {', '.join(ro_mounts)}"
-        logs.append((
-            summary,
-            "INFO" if overall == 'online' else "WARNING" if overall == 'warning' else "ERROR",
-        ))
+        logs.append((summary, acc.log_level))
 
-        return CollectResult(metrics=metrics, logs=logs, status=overall)
+        return CollectResult(metrics=metrics, logs=logs, status=acc.status)
 
     def _item_level(self, item: Dict[str, Any]) -> str:
         level = self._level_for(item.get('used_pct') or 0.0)
         ipct = item.get('inodes_pct')
         if ipct is not None:
             ilevel = self._inode_level_for(ipct)
-            if _RANK_UI[ilevel] > _RANK_UI[level]:
+            if Status(ilevel).severity > Status(level).severity:
                 level = ilevel
         return level
 
@@ -238,6 +255,3 @@ class Filesystems(Plugin):
         from vigil.core.ui.components import _scan_metric_family
         return str(len(_scan_metric_family(self, 'fs_', '_used_pct', set(), 200)))
 
-    def render_ui(self, context: str = 'page'):
-        from vigil.core.ui.spec import generic_render
-        generic_render(self, context)

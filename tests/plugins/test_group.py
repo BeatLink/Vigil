@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import MagicMock
-from vigil.plugins.group import Group, SEVERITY_ORDER
+from vigil.plugins.group import Group
+from vigil.core.connectors.types import Status
 from vigil.core.database.database import db, StatusHistory
 
 
@@ -32,12 +33,12 @@ def _aggregated(group, db_manager):
 
 class TestSeverityOrder:
     def test_online_is_least_severe(self):
-        assert SEVERITY_ORDER["online"] == 0
+        assert Status.ONLINE.severity == 0
 
     def test_failed_is_most_severe(self):
-        assert SEVERITY_ORDER["failed"] > SEVERITY_ORDER["warning"]
-        assert SEVERITY_ORDER["warning"] > SEVERITY_ORDER["offline"]
-        assert SEVERITY_ORDER["offline"] > SEVERITY_ORDER["online"]
+        assert Status.FAILED.severity > Status.WARNING.severity
+        assert Status.WARNING.severity > Status.OFFLINE.severity
+        assert Status.OFFLINE.severity > Status.ONLINE.severity
 
 
 class TestStatusAggregation:

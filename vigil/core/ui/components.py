@@ -60,62 +60,9 @@ def action_button(text: str, on_click=None, icon: str = 'play_arrow',
 def section_title(text: str, classes: str = ''):
     return ui.label(text).classes(f'{SECTION_CLASS} mb-6 {classes}')
 
-def metric_table(page, collector: str, title: str = 'Monitor Metrics', limit: int = 15):
-    with card():
-        ui.label(title).classes(f'{LABEL_CLASS} mb-2')
-        table = ui.table(columns=[
-            {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
-            {'name': 'name', 'label': 'Metric', 'field': 'metric_name', 'align': 'left'},
-            {'name': 'val', 'label': 'Value', 'field': 'value', 'align': 'left'},
-        ], rows=[]).classes('w-full border-none')
-
-        def _read():
-            return page.plugin.data.collector_metrics(collector, limit=limit)
-
-        async def update():
-            refresh_rows(table, await offload(_read)())
-
-        page.on_refresh(update)
-        return table
-
-def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent Logs',
-             limit: int = 15, full_height: bool = False):
-    card_classes = 'w-full overflow-hidden flex-grow' if full_height else ''
-
-    with card(card_classes, padding=not full_height):
-        if full_height:
-            ui.label(title).classes('halon-card-header w-full')
-        else:
-            ui.label(title).classes(f'{LABEL_CLASS} mb-2')
-
-        columns = [
-            {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left', 'sortable': True},
-            {'name': 'lvl', 'label': 'Level', 'field': 'level', 'align': 'left'},
-            {'name': 'msg', 'label': 'Message', 'field': 'message', 'align': 'left',
-             'classes': 'text-wrap font-mono' if full_height else ''},
-        ]
-
-        table_classes = 'w-full border-none'
-        if full_height:
-            table_classes += ' h-[600px]'
-
-        table = ui.table(columns=columns, rows=[]).classes(table_classes)
-        if full_height:
-            table.props('virtual-scroll')
-
-        def _read():
-            return page.plugin.data.log_lines(target, filter_prefix, limit=limit)
-
-        async def update_logs():
-            refresh_rows(table, await offload(_read)())
-
-        page.on_refresh(update_logs)
-        return table
-
-def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
-                title: str = 'Recent Events', limit: int = 100,
-                full_height: bool = False):
-    prefix = f"[{plugin_name}] "
+def _feed_table(page, read, title: str, full_height: bool):
+    """A time/level/message table over any store read; the log and event
+    tables differ only in what they read."""
     card_classes = 'w-full overflow-hidden flex-grow' if full_height else ''
 
     with card(card_classes, padding=not full_height):
@@ -135,14 +82,25 @@ def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
         if full_height:
             table.props('virtual-scroll')
 
-        def _read():
-            return page.plugin.data.plugin_events(plugin_id, prefix, target, limit=limit)
-
         async def update():
-            refresh_rows(table, await offload(_read)())
+            refresh_rows(table, await offload(read)())
 
         page.on_refresh(update)
         return table
+
+def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent Logs',
+             limit: int = 15, full_height: bool = False):
+    return _feed_table(
+        page, lambda: page.plugin.data.log_lines(target, filter_prefix, limit=limit),
+        title, full_height)
+
+def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
+                title: str = 'Recent Events', limit: int = 100,
+                full_height: bool = False):
+    prefix = f"[{plugin_name}] "
+    return _feed_table(
+        page, lambda: page.plugin.data.plugin_events(plugin_id, prefix, target, limit=limit),
+        title, full_height)
 
 
 def history_chart(page, title: str, collector: str, metric_name: str, limit: int = 30):
@@ -239,27 +197,23 @@ def _resolve_repeat_items(plugin, repeat_spec: dict) -> list:
     return plugin.data.latest_snapshot(default=[])
 
 
-def _scan_metric_family(plugin, prefix: str, suffix: str, exclude: set, limit: int) -> dict:
+def _scan_metric_family(plugin, prefix: str, suffix: str, exclude: set) -> dict:
     """Returns {stripped_key: latest_value} for metric names matching prefix/suffix."""
-    from vigil.core.database.database import Metric
-
-    query = Metric.select().where(Metric.collector == plugin.id)
-    if prefix:
-        query = query.where(Metric.metric_name.startswith(prefix))
-    if suffix:
-        query = query.where(Metric.metric_name.endswith(suffix))
-    query = query.order_by(Metric.timestamp.desc()).limit(limit)
-
     latest: dict = {}
-    for row in query:
-        if row.metric_name in exclude or row.metric_name in latest:
+    for record in plugin.data.latest_collector_metrics():
+        name = record.metric_name
+        if name in exclude:
             continue
-        key = row.metric_name
+        if prefix and not name.startswith(prefix):
+            continue
+        if suffix and not name.endswith(suffix):
+            continue
+        key = name
         if prefix:
             key = key.removeprefix(prefix)
         if suffix:
             key = key.removesuffix(suffix)
-        latest[key] = row.value
+        latest[key] = record.value
     return latest
 
 
@@ -273,21 +227,20 @@ def _resolve_metrics_prefix_items(plugin, repeat_spec: dict) -> list:
     'inodes_pct':..}. Without `fields`, falls back to the single
     metrics_prefix/metrics_suffix pair -> {'key':.., 'value':..}."""
     exclude = set(repeat_spec.get('metrics_exclude', []))
-    limit = repeat_spec.get('metrics_scan_limit', 200)
 
     fields = repeat_spec.get('fields')
     if fields:
         merged: dict = {}
         for field in fields:
             family = _scan_metric_family(
-                plugin, field.get('prefix', ''), field.get('suffix', ''), exclude, limit)
+                plugin, field.get('prefix', ''), field.get('suffix', ''), exclude)
             for key, value in family.items():
                 merged.setdefault(key, {'key': key})[field['name']] = value
         items = list(merged.values())
     else:
         family = _scan_metric_family(
             plugin, repeat_spec.get('metrics_prefix', ''),
-            repeat_spec.get('metrics_suffix', ''), exclude, limit)
+            repeat_spec.get('metrics_suffix', ''), exclude)
         items = [{'key': key, 'value': value} for key, value in family.items()]
 
     items.sort(key=lambda i: i['key'])
@@ -302,7 +255,7 @@ _LABEL_TRANSFORMS = {
 
 
 def render_repeat_card(plugin, page, repeat_spec: dict):
-    from vigil.core.ui.spec import FORMATTERS, ITEM_COLOR_RULES, ITEM_FORMATTERS
+    from vigil.core.ui.spec import FORMATTERS, ITEM_COLOR_RULES, ITEM_FORMATTERS, resolve
     from vigil.core.ui.theme import STATUS_COLORS
 
     source = repeat_spec.get('source', 'snapshot')
@@ -312,14 +265,14 @@ def render_repeat_card(plugin, page, repeat_spec: dict):
     item_label = repeat_spec.get('item_label', default_label)
     item_value = repeat_spec.get('item_value', default_value)
     item_format = repeat_spec.get('item_format')
-    formatter = FORMATTERS.get(item_format) if item_format else None
+    formatter = resolve(FORMATTERS, item_format)
     item_format_fn_name = repeat_spec.get('item_format_fn')
-    item_format_fn = ITEM_FORMATTERS.get(item_format_fn_name) if item_format_fn_name else None
+    item_format_fn = resolve(ITEM_FORMATTERS, item_format_fn_name)
     label_transform = _LABEL_TRANSFORMS.get(repeat_spec.get('label_transform', 'none'))
     label_prefix = repeat_spec.get('item_label_prefix', '')
     label_suffix = repeat_spec.get('item_label_suffix', '')
     color_rule_name = repeat_spec.get('item_color_by')
-    color_rule = ITEM_COLOR_RULES.get(color_rule_name) if color_rule_name else None
+    color_rule = resolve(ITEM_COLOR_RULES, color_rule_name)
     empty_text = repeat_spec.get('empty_text', 'No data')
 
     wrap_style = (
@@ -358,13 +311,13 @@ def render_repeat_card(plugin, page, repeat_spec: dict):
 
 
 def render_buttons(plugin, button_specs: list):
-    from vigil.core.ui.spec import ENABLED_PREDICATES
+    from vigil.core.ui.spec import ENABLED_PREDICATES, resolve
 
     with ui.row().classes('gap-2 items-center'):
         for spec in button_specs:
             predicate_name = spec.get('visible_if')
             if predicate_name:
-                predicate = ENABLED_PREDICATES.get(predicate_name)
+                predicate = resolve(ENABLED_PREDICATES, predicate_name)
                 if predicate is not None and not predicate(plugin):
                     continue
 
@@ -451,14 +404,14 @@ async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None)
 
 
 def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optional[dict] = None):
-    from vigil.core.ui.spec import ENABLED_PREDICATES, FORMATTERS, ITEM_COLOR_RULES
+    from vigil.core.ui.spec import ENABLED_PREDICATES, ITEM_COLOR_RULES, resolve
     from vigil.core.ui.theme import STATUS_COLORS
 
     row_key = table_spec.get('row_key', 'id')
     columns = list(table_spec.get('columns', []))
     row_actions = [
         a for a in table_spec.get('row_actions', [])
-        if not a.get('visible_if') or ENABLED_PREDICATES.get(a['visible_if'], lambda p: True)(plugin)
+        if not a.get('visible_if') or (resolve(ENABLED_PREDICATES, a['visible_if']) or (lambda p: True))(plugin)
     ]
 
     search_in = None
@@ -478,7 +431,7 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
         color_rule_name = col.get('cell_color_by')
         if not color_rule_name:
             continue
-        rule = ITEM_COLOR_RULES.get(color_rule_name)
+        rule = resolve(ITEM_COLOR_RULES, color_rule_name)
         if rule is None:
             continue
         table.add_slot(f'body-cell-{col["name"]}', f'''
@@ -535,7 +488,7 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
             color_rule_name = col.get('cell_color_by')
             if not color_rule_name:
                 continue
-            rule = ITEM_COLOR_RULES.get(color_rule_name)
+            rule = resolve(ITEM_COLOR_RULES, color_rule_name)
             if rule is None:
                 continue
             for row in rows:
@@ -564,13 +517,13 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
 
 
 def render_job_panel(plugin, spec: dict):
-    from vigil.core.ui.spec import ENABLED_PREDICATES
+    from vigil.core.ui.spec import ENABLED_PREDICATES, resolve
     from vigil.core.ui.theme import STATUS_COLORS
     from vigil.plugins.base.plugin_helpers import format_duration
 
     history_limit = spec.get('history_limit', 10)
     enabled_name = spec.get('enabled_if')
-    enabled_predicate = ENABLED_PREDICATES.get(enabled_name, lambda p: True) if enabled_name else (lambda p: True)
+    enabled_predicate = (resolve(ENABLED_PREDICATES, enabled_name) or (lambda p: True)) if enabled_name else (lambda p: True)
 
     with card('w-full'):
         with ui.row().classes('w-full items-center justify-between mb-2'):
@@ -599,6 +552,8 @@ def render_job_panel(plugin, spec: dict):
             rows=[], row_key='id',
         ).classes('w-full border-none')
 
+        last_progress_color = [None]
+
         def update():
             running = plugin.engine.job_is_running(plugin)
             enabled = enabled_predicate(plugin)
@@ -608,21 +563,24 @@ def render_job_panel(plugin, spec: dict):
             if running:
                 job = plugin.data.job(plugin.engine.job_current_id(plugin))
                 progress_label.text = (job or {}).get('progress') or 'Starting...'
-                progress_label.style(f"color: {STATUS_COLORS['online']}")
+                color = STATUS_COLORS['online']
             elif not enabled:
                 progress_label.text = 'Not available — check monitor configuration'
-                progress_label.style(f"color: {STATUS_COLORS['offline']}")
+                color = STATUS_COLORS['offline']
             else:
                 progress_label.text = ''
+                color = None
+            if color is not None and color != last_progress_color[0]:
+                last_progress_color[0] = color
+                progress_label.style(f"color: {color}")
 
-            jobs_table.rows = [
+            refresh_rows(jobs_table, [
                 {
                     'id': j['id'], 'started': j['started'], 'kind': j['kind'],
                     'state': j['state'], 'duration': format_duration(j['duration']),
                 }
                 for j in plugin.engine.job_recent(plugin, limit=history_limit)
-            ]
-            jobs_table.update()
+            ])
 
         on_data_event(update)
 

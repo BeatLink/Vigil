@@ -1,8 +1,17 @@
+"""Small pure helpers shared across plugins: resolve_secret (runs a
+password_command on the Vigil host at construction so requests() stays pure),
+the PluginConfigMixin that reads the shared config keys (id, interval,
+ssh_config/target_host), the StatusAccumulator worst-of pattern, shell
+utilities for probe scripts, and the level_for threshold check plus the
+byte/duration/age formatting functions."""
+
 import re
+import shlex
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, List, Optional
 
 from vigil.core.settings.config_schema import PluginConfig
+from vigil.core.connectors.types import Status
 
 
 def resolve_secret(password: Optional[str],
@@ -39,6 +48,43 @@ class PluginConfigMixin:
         self.children: List[Any] = []
         ssh_cfg = config.get('ssh_config', {})
         self.target = ssh_cfg.get('host', config.get('target_host', 'localhost'))
+
+
+class StatusAccumulator:
+    """Escalating worst-of status plus the problems that caused it — the
+    shared form of the per-plugin escalate-and-append pattern."""
+
+    def __init__(self):
+        self.status = Status.ONLINE
+        self.problems: List[str] = []
+
+    def escalate(self, status: str, problem: Optional[str] = None) -> None:
+        """Raise the accumulated status if `status` is worse; record why."""
+        if problem is not None:
+            self.problems.append(problem)
+        candidate = Status(status)
+        if candidate.severity > self.status.severity:
+            self.status = candidate
+
+    @property
+    def log_level(self) -> str:
+        return self.status.log_level
+
+
+SCRIPT_SEP = "@@VIGIL_SPLIT@@"
+
+
+def password_line(password_command, password) -> str:
+    """Shell line putting a plugin's secret in __pw, from a command or a literal."""
+    if password_command:
+        return f"__pw=$({password_command})"
+    return f"__pw={shlex.quote(password)}"
+
+
+def dq(value: str) -> str:
+    """Double-quote a string for embedding inside a single-quoted shell trap."""
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$")
+    return f'"{escaped}"'
 
 
 def level_for(value: float, warning: float, threshold: float) -> str:

@@ -23,7 +23,9 @@ BASE_CFG = {
 
 
 def _make_engine(plugins, last_collected=None):
-    return MagicMock(plugins=plugins, _last_collected=last_collected or {})
+    collected = last_collected or {}
+    return MagicMock(plugins=plugins,
+                     last_collected=lambda pid: collected.get(pid, 0.0))
 
 
 @pytest.fixture

@@ -1,5 +1,4 @@
 import asyncio
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from vigil.core.connectors import ssh_connector as ssh_module

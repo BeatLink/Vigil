@@ -2,12 +2,10 @@
 
 from typing import Any, Dict, List, Optional
 
-from vigil.plugins.base.signal_plugin import (
-    LOG_LEVEL as _LOG_LEVEL, SignalPlugin,
-)
-from vigil.core.connectors.types import CmdResult, Command, CollectResult
+from vigil.plugins.base.signal_plugin import SignalPlugin
+from vigil.core.connectors.types import CmdResult, CollectResult, Command, Status
 from vigil.core.settings.config_schema import PluginConfig
-from vigil.plugins.base.plugin_helpers import level_for as _level_for
+from vigil.plugins.base.plugin_helpers import level_for
 
 
 def _extract_counter(block: str, key: str) -> Optional[int]:
@@ -63,12 +61,12 @@ class Interrupts(SignalPlugin):
         if ctxt1 is not None and ctxt2 is not None:
             metrics['ctxt_per_sec'] = max(0.0, float(ctxt2 - ctxt1))
 
-        status = _level_for(irq_rate, self.warning, self.threshold)
+        status = level_for(irq_rate, self.warning, self.threshold)
         return CollectResult(
             metrics=metrics,
             logs=[(
                 f"{irq_rate:.0f} interrupts/sec (warn {self.warning:g} / fail {self.threshold:g})",
-                _LOG_LEVEL[status],
+                Status(status).log_level,
             )],
             status=status,
         )
