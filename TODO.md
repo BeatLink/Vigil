@@ -9,7 +9,7 @@ Gap analysis of Vigil's 45 plugins against two adjacent Linux projects, 2026-08-
   Connect protocol (phone↔desktop pairing). Almost entirely device-sync; included for completeness,
   with the handful of transferable ideas separated from the non-goals.
 
-Items already on the [README roadmap](README.md#roadmap) are cross-referenced rather than repeated.
+Items already on the [roadmap](docs/roadmap.md) are cross-referenced rather than repeated.
 Nothing here is committed work — this is the candidate list.
 
 ---
@@ -25,7 +25,7 @@ Nothing here is committed work — this is the candidate list.
 - [ ] **Pending package updates** — LNXlink `sys_updates` counts available packages and flags
       security updates. Vigil can approximate this with a `command` plugin, but a first-class type
       would normalize across `apt`/`dnf`/`pacman`/`nix` and give a real metric to threshold on.
-- [ ] **Reboot required** — LNXlink `required_restart`. [README.md:744-751](README.md#L744-L751)
+- [ ] **Reboot required** — LNXlink `required_restart`. [docs/plugins.md](docs/plugins.md#command)
       already shows this as a `command` example; promoting it to a dedicated plugin removes the
       per-distro shell snippet from every user's config.
 - [ ] **Network interface inventory** — LNXlink `interfaces` lists active NICs and their assigned
@@ -38,7 +38,7 @@ Nothing here is committed work — this is the candidate list.
       data collection takes. Vigil has [vigil_self.py](vigil/plugins/vigil_self.py) but does not
       expose per-monitor cycle duration. Would make SSH contention and slow targets visible, and
       pairs naturally with the `MaxSessions` queuing behaviour documented at
-      [README.md:1009-1017](README.md#L1009-L1017).
+      [docs/plugins.md](docs/plugins.md#ssh-config).
 
 ### 1b. Extensions to existing plugins
 
@@ -104,7 +104,7 @@ or hardware controls. All four map cleanly onto the existing
 - [ ] **Runtime log-level control** — LNXlink `logging_level` changes verbosity without a restart.
       Small, and genuinely useful while debugging a flaky target.
 - [ ] *(Already on roadmap)* MQTT export — LNXlink's entire integration story is MQTT autodiscovery.
-      The roadmap's "Additional export backends" item ([README.md:1215](README.md#L1215)) is the
+      The roadmap's "Additional export backends" item ([docs/roadmap.md](docs/roadmap.md)) is the
       right shape: an HA-discovery MQTT exporter next to the Prometheus and InfluxDB ones would make
       every Vigil monitor a Home Assistant entity without an agent.
 
@@ -145,7 +145,7 @@ Of the remaining 17, almost everything is phone↔desktop sync.
 - [ ] **Per-device pairing and certificate auth** — Valent pairs each device with its own
       certificate identity rather than a shared password. Vigil currently offers a single HTTP Basic
       Auth credential for the whole dashboard and API
-      ([README.md:1073-1081](README.md#L1073-L1081)), with HTTPS still open on the roadmap. A
+      ([README.md](README.md#authentication)), with HTTPS still open on the roadmap. A
       per-client token/identity model is the natural next step and would also give the REST API and
       the `push` endpoint a common auth story instead of `push`'s bespoke per-monitor token.
 - [ ] **Battery monitoring** — Valent `battery` reports level and charging state, independently

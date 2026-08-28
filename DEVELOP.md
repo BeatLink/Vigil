@@ -55,9 +55,13 @@ small contract rather than the concrete class.
 ## Pure plugins
 
 A `Plugin` exposes **only pure functions and data** — no IO, no persistence
-handles. It is constructed with just `(name, config)`. The engine's
+handles. "Pure" constrains *effects*, not *memory*: a plugin may keep derived
+mutable state between cycles (`oom`'s kill-count baseline, `syncthing`'s
+discovered folder ids) — what it may never hold is a connection, a database
+handle, or a side effect inside `requests()`/`parse_results()` themselves.
+It is constructed with just `(name, config)`. The engine's
 `_wire_plugin()` builds the plugin's engine-owned IO (an `ExecContext` for its
-target, kept in `engine._net[id]`) and injects a read-only `PluginDataView` as
+target, kept in `engine._exec_contexts[id]`) and injects a read-only `PluginDataView` as
 `plugin.data`. The plugin holds neither a database handle nor a connection, and
 never learns whether its `ExecContext` wraps an agent or an SSH connection.
 
@@ -124,6 +128,9 @@ unchecked at the boundary (bad data fails at first use, not at load).
   surface `plugins/push.py` adds; `api.py` narrows via `isinstance` instead of
   importing the concrete class.
 - `EngineLike` — the narrow engine surface the UI and plugins call.
+- `TransportConnection` — the two-member surface (`host`, `execute()`) both
+  transports share; `ExecContext.conn` is typed as this, so the invariant the
+  transport swap rests on is checkable rather than duck-typed.
 - `ActionButtonSpec` — one entry in `Plugin.get_actions()`, the header action
   buttons rendered regardless of `UI_SPEC`.
 
@@ -137,7 +144,10 @@ dict-returning reads), and `core/connectors/types.py` (the
 
 ## Polling loop
 
-Each monitor sleeps its own `interval` between cycles — a 30s monitor is never
+Each monitor runs on its own `interval`, treated as a *period*: the loop
+sleeps to the next due time rather than for the full interval after each
+cycle, so a slow cycle does not stretch the schedule, and a cycle overrunning
+the whole period re-anchors instead of bursting. A 30s monitor is never
 rounded up to a slower one's schedule — with a random startup stagger
 (`STARTUP_JITTER_SECONDS`) so they don't all fire in the same event-loop
 iteration at boot. Exceptions are caught per-iteration, so one crashing monitor
@@ -200,7 +210,14 @@ plugin id; the engine registers them on the agent's connection and the endpoint
 sends the full set in the welcome frame (full set, never a delta, so a
 reconnecting agent converges without the server tracking what it knows). The
 agent runs one supervised coroutine per stream from `vigil_agent/watchers.py`
-and pushes an `event` frame the moment something happens.
+and pushes an `event` frame the moment something happens. Two economies apply
+on the agent side: a generic sample stream carries `max_quiet` (five
+intervals), so unchanged results are suppressed but one frame always lands per
+window — a quiet monitor keeps advancing and can never read as stale — and
+`JournalMux` shares one `journalctl --follow --output=json` process across all
+unit-filtered journal streams (plus one `--dmesg` follower), routing each line
+to its stream in Python, so N service monitors cost two processes rather than
+N+1.
 `VigilEngine._on_agent_event` routes it back by stream id to the plugin's pure
 `parse_event()` and persists the result through the same batched
 `db.apply_result` the polling cycle uses — no IO on the event path.
@@ -235,7 +252,9 @@ system `ssh` client: one native connection per physical target, each command a
 channel on it rather than a forked process. `ConnectorEngine` pools one
 `SSHConnection` per `(host, port, username, key_path)`; a plugin's per-target
 handle is a small `ExecContext` value, so the engine itself stays a stateless
-singleton. (`SSHContext` remains as an alias for that type.)
+singleton. `ExecContext.conn` is typed as the two-member
+`TransportConnection` Protocol (`core/contracts.py`), the shared surface both
+transports must keep.
 
 Three behaviors of the old subprocess design are reproduced deliberately, each
 verified against a real sshd:
@@ -296,7 +315,9 @@ longer make a read wait, and nothing in the running system blocks on the
 writer. The durability trade-off is the flip side: a crash loses the unflushed
 batch, and since jobs are also memory-first, a job launched and lost within
 that window leaves an unreconciled remote process (see **Jobs** below).
-`flush()` waits for the queue and exists for tests and shutdown.
+`flush()` waits for the queue; `engine.shutdown()` — registered as the UI
+server's shutdown hook — calls it after closing every transport, so a clean
+exit persists the tail of the batch.
 
 **Hydration** (`DatabaseManager.hydrate()`) restores the store at startup:
 latest status per collector, the recent tail of each metric series, recent
@@ -317,10 +338,16 @@ awaiting, back on the loop.
 `(collector, metric_name, timestamp)`. No live read uses it; it serves
 hydration (which loads the recent tail of each series in timestamp order) and
 the retention prune. Fresh DBs get it from `create_tables`; existing DBs get it
-from `_migrate`.
+from `_migrate`, which also drops the single-column indexes no query ever used
+(`metric_target`, `metric_metric_name`, `logline_source`, most of `job`'s) —
+each was pure write amplification on the hottest tables.
 
 **Retention.** Metrics and a status row are written on every poll of every
-plugin, so both tables grow unbounded without pruning. `prune_metrics` /
+plugin, so both tables grow unbounded without pruning. Alongside the prunes,
+`logging.metric_downsample_days` (default off) thins metrics older than the
+window to one row per series per hour — hydration only ever loads a series'
+recent tail, so old full-resolution rows serve nothing, and thinning them
+stretches how far back a chart can reach for the same disk footprint. `prune_metrics` /
 `prune_status` (metric-retention window) run alongside `prune_logs` /
 `prune_jobs` (log-retention window) on the periodic prune loop; `prune_status`
 always keeps the newest row per collector so a plugin's current state is never
@@ -430,8 +457,8 @@ reliable interest set to filter on.
 **Debouncing is leading-edge.** The first change refreshes immediately and
 further changes arriving during `COOLDOWN_SECONDS` collapse into one trailing
 refresh. That keeps latency at zero for an isolated event while bounding the
-refresh rate on a busy system, where one collection cycle publishes a change per
-metric, log line and status it writes.
+refresh rate on a busy system, where one collection cycle publishes one change
+for its metrics plus one per log line and status it writes.
 
 An `IDLE_REFRESH_SECONDS` sweep runs alongside it as a backstop, for the two
 things a change notification cannot cover: values that age on their own (a
@@ -532,9 +559,10 @@ of their widgets (see below).
 
 Format/color/predicate functions are referenced by name from module registries
 (`FORMATTERS`, `COLOR_RULES`, `ITEM_FORMATTERS`, `ITEM_COLOR_RULES`,
-`ENABLED_PREDICATES`) rather than inlined, so a spec stays pure, serializable
-data. A plugin needing a one-off transform registers it under its own key
-(`register_formatter` / `register_color_rule` / …).
+`ENABLED_PREDICATES`) — the shared vocabulary every plugin can use — or passed
+as the callable itself for a one-off transform (`spec.resolve()` accepts
+either). Name-keyed entries keep the shared parts of a spec serializable; a
+plugin-local method needs no registration ceremony.
 
 `core/ui/layout.py` lets `config.yaml` override a plugin's default widget
 arrangement two ways: replacing the row structure entirely, or per-widget
