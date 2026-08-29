@@ -28,7 +28,7 @@ class BaseModel(Model):
 class Metric(BaseModel):
     timestamp = DateTimeField(default=datetime.now, index=True)
     target = CharField()
-    collector = CharField()
+    plugin_id = CharField()
     metric_name = CharField()
     value = DoubleField()
     metadata = TextField(null=True)
@@ -36,11 +36,11 @@ class Metric(BaseModel):
     class Meta:
         # No live read path queries this table — the UI reads metrics from the
         # in-memory store. The index serves startup hydration, which loads the
-        # recent tail of each (collector, metric_name) series ordered by
+        # recent tail of each (plugin_id, metric_name) series ordered by
         # timestamp, and the retention prune, which deletes by timestamp.
         # Without it hydration scans the whole Metric table once per series.
         # See database._migrate() for the same index on existing DBs.
-        indexes = ((("collector", "metric_name", "timestamp"), False),)
+        indexes = ((("plugin_id", "metric_name", "timestamp"), False),)
 
 
 class Event(BaseModel):
@@ -48,7 +48,7 @@ class Event(BaseModel):
     level = CharField()
     message = TextField()
     target = CharField(null=True)
-    source_id = CharField(null=True, index=True)
+    plugin_id = CharField(null=True, index=True)
 
 
 class Setting(BaseModel):
@@ -58,7 +58,7 @@ class Setting(BaseModel):
 
 class StatusHistory(BaseModel):
     timestamp = DateTimeField(default=datetime.now, index=True)
-    collector_id = CharField(index=True)
+    plugin_id = CharField(index=True)
     state = CharField()
 
 
@@ -101,7 +101,7 @@ class PluginSnapshot(BaseModel):
 class LogLine(BaseModel):
     timestamp = DateTimeField(default=datetime.now, index=True)
     target = CharField(index=True)
-    source = CharField()
+    plugin_id = CharField()
     level = CharField()
     message = TextField()
     dedup_hash = CharField(unique=True)

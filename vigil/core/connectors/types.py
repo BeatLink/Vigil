@@ -1,3 +1,4 @@
+"""Shared connector datatypes: commands, results, the Status ladder and ExecContext."""
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Union

@@ -22,7 +22,7 @@ BASE_CFG = {
 def _latest_status(plugin_id: str):
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == plugin_id
+            StatusHistory.plugin_id == plugin_id
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -30,7 +30,7 @@ def _latest_status(plugin_id: str):
 def _latest_metric(plugin_name: str, metric: str):
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == plugin_name) & (Metric.metric_name == metric)
+            (Metric.plugin_id == plugin_name) & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 
@@ -485,7 +485,7 @@ class TestBackupLaunch:
     async def test_launch_records_running_job(self, backup_plugin, db_manager):
         outcome = await _launch(backup_plugin, pid=1234)
         assert outcome.success is True
-        job = backup_plugin.engine.job_running(backup_plugin)
+        job = backup_plugin.jobs.running()
         assert job is not None
         assert job['kind'] == 'backup'
         assert job['pid'] == 1234
@@ -493,19 +493,19 @@ class TestBackupLaunch:
 
     async def test_dry_run_launch_records_its_kind(self, backup_plugin):
         await _launch(backup_plugin, "dry_run_backup")
-        assert backup_plugin.engine.job_running(backup_plugin)['kind'] == 'dry-run'
+        assert backup_plugin.jobs.running()['kind'] == 'dry-run'
 
     async def test_launch_failure_records_no_job(self, backup_plugin):
         plan = backup_plugin.plan_action("run_backup")
         outcome = backup_plugin.interpret_action("run_backup", CmdResult(1, "", "boom"))
         backup_plugin.storage.apply(outcome)
         assert outcome.success is False
-        assert backup_plugin.engine.job_running(backup_plugin) is None
+        assert backup_plugin.jobs.running() is None
 
     async def test_launched_command_is_redacted(self, backup_plugin, db_manager):
         backup_plugin.passphrase = "s3cret"
         await _launch(backup_plugin)
-        stored = backup_plugin.engine.job_running(backup_plugin)['command']
+        stored = backup_plugin.jobs.running()['command']
         assert "s3cret" not in stored
         assert "BORG_PASSPHRASE=*****" in stored
 
@@ -520,30 +520,30 @@ class TestBackupPolling:
     async def test_poll_while_running_keeps_job_running(self, backup_plugin, db_manager):
         await _launch(backup_plugin)
         _poll_once(backup_plugin, _poll(10, None, True, "working\n"))
-        assert backup_plugin.engine.job_running(backup_plugin) is not None
+        assert backup_plugin.jobs.running() is not None
 
     async def test_poll_completion_marks_succeeded(self, backup_plugin, db_manager):
         await _launch(backup_plugin)
         _poll_once(backup_plugin, _poll(20, 0, False, "done\n"))
-        assert backup_plugin.engine.job_running(backup_plugin) is None
-        assert backup_plugin.engine.job_recent(backup_plugin)[0]['state'] == 'succeeded'
+        assert backup_plugin.jobs.running() is None
+        assert backup_plugin.jobs.recent()[0]['state'] == 'succeeded'
 
     async def test_borg_warning_exit_is_still_success(self, backup_plugin):
         await _launch(backup_plugin)
         _poll_once(backup_plugin, _poll(5, 1, False, ""))
-        assert backup_plugin.engine.job_recent(backup_plugin)[0]['state'] == 'succeeded'
+        assert backup_plugin.jobs.recent()[0]['state'] == 'succeeded'
 
     async def test_borg_error_exit_is_failure(self, backup_plugin):
         await _launch(backup_plugin)
         _poll_once(backup_plugin, _poll(5, 2, False, ""))
-        job = backup_plugin.engine.job_recent(backup_plugin)[0]
+        job = backup_plugin.jobs.recent()[0]
         assert job['state'] == 'failed'
         assert job['exit_code'] == 2
 
     async def test_dead_process_without_exit_file_fails(self, backup_plugin):
         await _launch(backup_plugin)
         _poll_once(backup_plugin, _poll(5, None, False, "partial"))
-        assert backup_plugin.engine.job_recent(backup_plugin)[0]['state'] == 'failed'
+        assert backup_plugin.jobs.recent()[0]['state'] == 'failed'
 
     async def test_progress_parsed_from_log_json_on_poll(self, backup_plugin, db_manager):
         await _launch(backup_plugin)
@@ -552,7 +552,7 @@ class TestBackupPolling:
             "original_size": 1048576, "deduplicated_size": 524288, "nfiles": 42,
         })
         _poll_once(backup_plugin, _poll(len(progress) + 1, None, True, progress + "\n"))
-        job = backup_plugin.engine.job_running(backup_plugin)
+        job = backup_plugin.jobs.running()
         assert "42 files" in job['progress']
         assert "/home/user/file.txt" in job['progress']
 
@@ -567,23 +567,23 @@ class TestBackupPolling:
             "path": "src", "type": "archive_progress", "finished": False,
         })
         _poll_once(backup_plugin, _poll(len(real) + 1, None, True, real + "\n"))
-        assert "42 files" in backup_plugin.engine.job_running(backup_plugin)['progress']
+        assert "42 files" in backup_plugin.jobs.running()['progress']
         # a subsequent zero-counter line must not clobber the real summary
-        off = backup_plugin.engine.job_running(backup_plugin)['output_seq']
+        off = backup_plugin.jobs.running()['output_seq']
         _poll_once(backup_plugin, _poll(off + len(opening) + 1, None, True, opening + "\n"))
-        assert "42 files" in backup_plugin.engine.job_running(backup_plugin)['progress']
+        assert "42 files" in backup_plugin.jobs.running()['progress']
 
     async def test_output_lines_are_stored(self, backup_plugin, db_manager):
         await _launch(backup_plugin)
         _poll_once(backup_plugin, _poll(12, 0, False, "line1\nline2\n"))
-        job_id = backup_plugin.engine.job_recent(backup_plugin)[0]['id']
+        job_id = backup_plugin.jobs.recent()[0]['id']
         assert [o['message'] for o in db_manager.job_output(job_id)] == ["line1", "line2"]
 
     async def test_partial_line_completed_across_polls(self, backup_plugin, db_manager):
         await _launch(backup_plugin)
         # first poll delivers a line with no trailing newline yet
         _poll_once(backup_plugin, _poll(4, None, True, "par"))
-        job_id = backup_plugin.engine.job_running(backup_plugin)['id']
+        job_id = backup_plugin.jobs.running()['id']
         assert db_manager.job_output(job_id) == []       # nothing consumed yet
         # next poll re-reads from offset 0 and completes the line
         _poll_once(backup_plugin, _poll(8, 0, False, "partial\n"))
@@ -655,7 +655,7 @@ class TestEventLogging:
 
         with db.connection_context():
             events = Event.select().where(Event.message.startswith("[test-borg] ")).count()
-            loglines = LogLine.select().where(LogLine.source == "test-borg").count()
+            loglines = LogLine.select().where(LogLine.plugin_id == "test-borg").count()
 
         assert events > 0, "plugin wrote no events for the panel to show"
         assert loglines == 0, "plugin does not collect target logs; panel must read Events"

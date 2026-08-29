@@ -70,7 +70,7 @@ class MetricRowDict(TypedDict):
     peewee __data__ dump, so its keys are exact."""
 
     target: str
-    collector: str
+    plugin_id: str
     metric_name: str
     value: float
     timestamp: str
@@ -84,7 +84,7 @@ class MetricModelDict(TypedDict):
     id: int
     timestamp: Any  # datetime, not yet isoformat()'d
     target: str
-    collector: str
+    plugin_id: str
     metric_name: str
     value: float
     metadata: Optional[str]
@@ -96,7 +96,7 @@ class LogLineModelDict(TypedDict):
     id: int
     timestamp: Any
     target: str
-    source: str
+    plugin_id: str
     level: str
     message: str
     dedup_hash: str
@@ -110,5 +110,5 @@ class EventModelDict(TypedDict):
     level: str
     message: str
     target: Optional[str]
-    source_id: Optional[str]
+    plugin_id: Optional[str]
 

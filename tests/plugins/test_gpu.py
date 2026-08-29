@@ -16,7 +16,7 @@ def _nvidia_smi(util=10.0, mem_used=1000, mem_total=8000, temp=50.0, count=1):
 def _latest_status() -> str | None:
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == "test-gpu"
+            StatusHistory.plugin_id == "test-gpu"
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -24,7 +24,7 @@ def _latest_status() -> str | None:
 def _latest_metric(metric: str) -> float | None:
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == "test-gpu") & (Metric.metric_name == metric)
+            (Metric.plugin_id == "test-gpu") & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 

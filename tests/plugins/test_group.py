@@ -109,7 +109,7 @@ class TestOnCollect:
         run_requests(group)
         with db.connection_context():
             row = StatusHistory.select().where(
-                StatusHistory.collector_id == "test-group"
+                StatusHistory.plugin_id == "test-group"
             ).order_by(StatusHistory.timestamp.desc()).first()
         assert row is not None
         assert row.state == "online"
@@ -122,7 +122,7 @@ class TestOnCollect:
         run_requests(group)
         with db.connection_context():
             row = StatusHistory.select().where(
-                StatusHistory.collector_id == "test-group"
+                StatusHistory.plugin_id == "test-group"
             ).order_by(StatusHistory.timestamp.desc()).first()
         assert row.state == "failed"
 

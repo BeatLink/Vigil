@@ -15,7 +15,7 @@ def _loadavg(one, five=0.5, fifteen=0.5, cpus=4):
 def _latest_status() -> str | None:
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == "test-load"
+            StatusHistory.plugin_id == "test-load"
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -23,7 +23,7 @@ def _latest_status() -> str | None:
 def _latest_metric(metric: str) -> float | None:
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == "test-load") & (Metric.metric_name == metric)
+            (Metric.plugin_id == "test-load") & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 

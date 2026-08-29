@@ -1,3 +1,4 @@
+"""HTTP API endpoints: JSON status, Prometheus scrape and health checks."""
 import hmac
 from typing import Any, Optional
 
@@ -18,6 +19,7 @@ def _flatten(plugins):
 
 
 def register_api(app: Any, engine: EngineLike) -> None:
+    """Mount the JSON status and Prometheus/health endpoints on the FastAPI app."""
     db = engine.db
 
     def _monitor_summary(statuses):
@@ -47,7 +49,7 @@ def register_api(app: Any, engine: EngineLike) -> None:
         target = next((p for p in _flatten(engine.plugins) if p.id == monitor_id), None)
         if target is None:
             return JSONResponse({'error': 'not found'}, status_code=404)
-        metrics = [m for m in db.latest_metrics() if m['collector'] == target.id]
+        metrics = [m for m in db.latest_metrics() if m['plugin_id'] == target.id]
         return JSONResponse({
             'id': target.id,
             'name': target.name,

@@ -1,3 +1,4 @@
+"""Optional basic-auth middleware guarding the dashboard and API."""
 import hmac
 import logging
 from pathlib import Path
@@ -57,6 +58,7 @@ class BasicAuthMiddleware(BaseHTTPMiddleware):
 
 
 def register_auth(app: Any, auth_settings: Dict[str, Any]) -> None:
+    """Install basic-auth middleware on the app when credentials are configured."""
     username = auth_settings.get('username')
     password = _read_password(auth_settings)
 

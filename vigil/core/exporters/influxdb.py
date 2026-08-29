@@ -1,3 +1,4 @@
+"""InfluxDB exporter: periodically pushes the latest metrics as line protocol."""
 import asyncio
 import logging
 import time
@@ -20,14 +21,15 @@ def _line(measurement: str, tags: Dict[str, str], value: float, ts_ns: int) -> s
 
 
 def build_payload(db: MetricsSource) -> str:
+    """Build one InfluxDB line-protocol payload from the latest metrics and statuses."""
     ts_ns = int(time.time() * 1e9)
     lines = []
     for m in db.latest_metrics():
         lines.append(_line('vigil_metric', {
-            'monitor': m['collector'], 'target': m['target'], 'metric': m['metric_name'],
+            'monitor': m['plugin_id'], 'target': m['target'], 'metric': m['metric_name'],
         }, m['value'], ts_ns))
-    for collector_id, state in db.latest_statuses().items():
-        lines.append(_line('vigil_up', {'monitor': collector_id, 'state': state},
+    for plugin_id, state in db.latest_statuses().items():
+        lines.append(_line('vigil_up', {'monitor': plugin_id, 'state': state},
                            _STATUS_VALUE.get(state, -1.0), ts_ns))
     return '\n'.join(lines)
 

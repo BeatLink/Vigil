@@ -77,7 +77,6 @@ def _named_checks(checks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'up_card', 'down_card'],
-    ['charts'],
     ['events'],
 ]
 
@@ -171,18 +170,22 @@ class Ports(Plugin):
         return 'failed' if counts[1] else 'online'
 
     @property
-    def _chart_items(self) -> List[Tuple[str, str]]:
-        return [(f"{check['name']} LATENCY (ms)", f"{check['metric']}_latency_ms") for check in self._checks]
-
-    @property
     def UI_SPEC(self):
+        charts = {
+            f"chart_{check['metric']}": {
+                'metric': f"{check['metric']}_latency_ms",
+                'title': f"{check['name']} LATENCY (ms)",
+            }
+            for check in self._checks
+        }
+        layout = [_DEFAULT_LAYOUT[0], *([name] for name in charts), _DEFAULT_LAYOUT[1]]
         return {
-            'layout': _DEFAULT_LAYOUT,
+            'layout': layout,
             'cards': {
                 'up_card': {'title': 'REACHABLE', 'value_attr': '_up_text', 'refresh': True},
                 'down_card': {'title': 'DOWN', 'value_attr': '_down_text', 'color_attr': '_down_color'},
             },
-            'dynamic_charts': {'widget': 'charts', 'items_attr': '_chart_items'},
+            'charts': charts,
             'events': True,
         }
 

@@ -88,6 +88,7 @@ def dq(value: str) -> str:
 
 
 def level_for(value: float, warning: float, threshold: float) -> str:
+    """Map a numeric reading onto online/warning/failed by its two thresholds."""
     if value >= threshold:
         return 'failed'
     if value >= warning:
@@ -96,6 +97,7 @@ def level_for(value: float, warning: float, threshold: float) -> str:
 
 
 def format_bytes(gb: float) -> str:
+    """Format a size given in GB as a human-readable MB/GB/TB string."""
     if gb >= 1024:
         return f"{gb / 1024:.1f} TB"
     if gb >= 1:
@@ -121,6 +123,7 @@ _FORMAT_UNITS = [
 
 
 def parse_duration(value) -> int:
+    """Parse a '2h30m'-style duration (or bare seconds) into seconds."""
     if isinstance(value, (int, float)):
         return int(value)
     value = str(value).strip()
@@ -133,6 +136,7 @@ def parse_duration(value) -> int:
 
 
 def format_duration(seconds: int) -> str:
+    """Format seconds as the two largest whole units, e.g. '1 Day 2 Hours'."""
     if seconds <= 0:
         return '0 Seconds'
     parts = []
@@ -146,6 +150,7 @@ def format_duration(seconds: int) -> str:
 
 
 def format_age(seconds: int) -> str:
+    """Format an age in seconds as a coarse 'N Days ago'-style string."""
     if seconds < 0:
         return 'Never'
     return f'{format_duration(seconds)} ago'

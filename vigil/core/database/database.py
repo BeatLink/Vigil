@@ -166,6 +166,7 @@ _writer = _AsyncWriter()
 
 
 def flush_writes(timeout: Optional[float] = None):
+    """Block until the writer thread has drained its queue; a test seam."""
     _writer.flush(timeout)
 
 
@@ -200,6 +201,10 @@ class DatabaseManager:
                 },
             )
             db.connect()
+            # Renames must precede create_tables: on a legacy DB, the
+            # model-declared metric index references plugin_id, which does
+            # not exist until its column is renamed.
+            self._migrate_renames()
             db.create_tables(ALL_MODELS)
             self._migrate()
             db.close()
@@ -212,14 +217,27 @@ class DatabaseManager:
         _writer.start()
 
     @staticmethod
+    def _migrate_renames():
+        """One spelling of the collector id everywhere: rename the historical
+        per-table variants to plugin_id. SQLite rewrites index definitions
+        with the column; _migrate drops the stale index names after."""
+        for table, old in (
+            ("metric", "collector"),
+            ("event", "source_id"),
+            ("statushistory", "collector_id"),
+            ("logline", "source"),
+        ):
+            table_columns = {c.name for c in db.get_columns(table)}
+            if old in table_columns and "plugin_id" not in table_columns:
+                db.execute_sql(f"ALTER TABLE {table} RENAME COLUMN {old} TO plugin_id")
+                logging.info(f"Migrated: renamed {table}.{old} -> plugin_id")
+
+    @staticmethod
     def _migrate():
         columns = {c.name for c in db.get_columns("event")}
-        if "source_id" not in columns:
-            db.execute_sql("ALTER TABLE event ADD COLUMN source_id VARCHAR(255)")
-            db.execute_sql(
-                "CREATE INDEX IF NOT EXISTS event_source_id " "ON event (source_id)"
-            )
-            logging.info("Migrated: added event.source_id")
+        if "plugin_id" not in columns:
+            db.execute_sql("ALTER TABLE event ADD COLUMN plugin_id VARCHAR(255)")
+            logging.info("Migrated: added event.plugin_id")
 
         # Detached-on-target job execution (pid/workdir/output_seq).
         job_columns = {c.name for c in db.get_columns("job")}
@@ -232,26 +250,29 @@ class DatabaseManager:
                 db.execute_sql(ddl)
                 logging.info(f"Migrated: added job.{col}")
 
-        # Composite index on metric (collector, metric_name, timestamp). The
+        # Composite index on metric (plugin_id, metric_name, timestamp). The
         # live read path no longer queries SQLite, but startup hydration loads
         # recent history per series, and the retention prunes scan by
         # timestamp — both still benefit.
         # Secondary indexes no read or prune uses; dropping them halves the
         # per-insert index maintenance on the hottest table.
         for index in ("metric_target", "metric_metric_name", "logline_source",
-                      "job_plugin_id", "job_target", "job_kind", "job_state"):
+                      "job_plugin_id", "job_target", "job_kind", "job_state",
+                      "metric_collector_metric_name_timestamp",
+                      "event_source_id", "statushistory_collector_id"):
             db.execute_sql(f"DROP INDEX IF EXISTS {index}")
 
-        metric_indexes = {idx.name for idx in db.get_indexes("metric")}
-        if "metric_collector_metric_name_timestamp" not in metric_indexes:
-            db.execute_sql(
-                "CREATE INDEX IF NOT EXISTS metric_collector_metric_name_timestamp "
-                "ON metric (collector, metric_name, timestamp)"
-            )
-            logging.info(
-                "Migrated: added composite index on metric "
-                "(collector, metric_name, timestamp)"
-            )
+        for name, ddl in (
+            ("event_plugin_id",
+             "CREATE INDEX IF NOT EXISTS event_plugin_id ON event (plugin_id)"),
+            ("statushistory_plugin_id",
+             "CREATE INDEX IF NOT EXISTS statushistory_plugin_id "
+             "ON statushistory (plugin_id)"),
+            ("metric_plugin_id_metric_name_timestamp",
+             "CREATE INDEX IF NOT EXISTS metric_plugin_id_metric_name_timestamp "
+             "ON metric (plugin_id, metric_name, timestamp)"),
+        ):
+            db.execute_sql(ddl)
 
     # ------------------------------------------------------------------
     # Startup hydration — the only read path from SQLite
@@ -280,13 +301,13 @@ class DatabaseManager:
 
     def _hydrate_statuses(self) -> None:
         newest = StatusHistory.select(fn.MAX(StatusHistory.id).alias("max_id")).group_by(
-            StatusHistory.collector_id
+            StatusHistory.plugin_id
         )
         rows = StatusHistory.select().where(StatusHistory.id.in_(newest))
         self.store.statuses.update(
             {
-                row.collector_id: StatusRecord(
-                    collector_id=row.collector_id,
+                row.plugin_id: StatusRecord(
+                    plugin_id=row.plugin_id,
                     state=row.state,
                     timestamp=row.timestamp,
                 )
@@ -296,12 +317,12 @@ class DatabaseManager:
 
     def _hydrate_metrics(self) -> None:
         depth = self.store.buffers.metric_history
-        series_keys = Metric.select(Metric.collector, Metric.metric_name).distinct()
+        series_keys = Metric.select(Metric.plugin_id, Metric.metric_name).distinct()
         for key in series_keys:
             rows = (
                 Metric.select()
                 .where(
-                    (Metric.collector == key.collector)
+                    (Metric.plugin_id == key.plugin_id)
                     & (Metric.metric_name == key.metric_name)
                 )
                 .order_by(Metric.timestamp.desc())
@@ -310,7 +331,7 @@ class DatabaseManager:
             self.store.load_metrics(
                 MetricRecord(
                     target=row.target,
-                    collector=row.collector,
+                    plugin_id=row.plugin_id,
                     metric_name=row.metric_name,
                     value=row.value,
                     metadata=row.metadata,
@@ -330,7 +351,7 @@ class DatabaseManager:
                 level=row.level,
                 message=row.message,
                 target=row.target,
-                source_id=row.source_id,
+                plugin_id=row.plugin_id,
                 timestamp=row.timestamp,
             )
             for row in reversed(list(rows))
@@ -349,7 +370,7 @@ class DatabaseManager:
             self.store.load_log_lines(
                 LogLineRecord(
                     target=row.target,
-                    source=row.source,
+                    plugin_id=row.plugin_id,
                     level=row.level,
                     message=row.message,
                     dedup_hash=row.dedup_hash,
@@ -416,45 +437,45 @@ class DatabaseManager:
     def insert_metric(
         self,
         target: str,
-        collector: str,
+        plugin_id: str,
         metric_name: str,
         value: float,
         metadata: Optional[str] = None,
     ):
-        record = self.store.add_metric(target, collector, metric_name, value, metadata)
+        record = self.store.add_metric(target, plugin_id, metric_name, value, metadata)
         _writer.submit(
             lambda: Metric.create(
                 target=record.target,
-                collector=record.collector,
+                plugin_id=record.plugin_id,
                 metric_name=record.metric_name,
                 value=record.value,
                 metadata=record.metadata,
                 timestamp=record.timestamp,
             )
         )
-        CHANGES.publish(changes.METRIC, collector)
+        CHANGES.publish(changes.METRIC, plugin_id)
 
-    def latest_metric(self, collector: str, metric_name: str) -> Optional[MetricRecord]:
-        return self.store.latest_metric(collector, metric_name)
+    def latest_metric(self, plugin_id: str, metric_name: str) -> Optional[MetricRecord]:
+        return self.store.latest_metric(plugin_id, metric_name)
 
-    def latest_collector_metrics(self, collector: str) -> List[MetricRecord]:
-        return self.store.latest_collector_metrics(collector)
+    def latest_collector_metrics(self, plugin_id: str) -> List[MetricRecord]:
+        return self.store.latest_collector_metrics(plugin_id)
 
     def metric_history(
-        self, collector: str, metric_name: str, limit: int = 30
+        self, plugin_id: str, metric_name: str, limit: int = 30
     ) -> List[MetricRecord]:
-        return self.store.metric_history(collector, metric_name, limit=limit)
+        return self.store.metric_history(plugin_id, metric_name, limit=limit)
 
     def collector_metrics(
-        self, collector: str, limit: int = 15
+        self, plugin_id: str, limit: int = 15
     ) -> List[MetricModelDict]:
-        return [m.as_row() for m in self.store.collector_metrics(collector, limit=limit)]
+        return [m.as_row() for m in self.store.collector_metrics(plugin_id, limit=limit)]
 
     def latest_metrics(self) -> List[MetricRowDict]:
         return [
             {
                 "target": m.target,
-                "collector": m.collector,
+                "plugin_id": m.plugin_id,
                 "metric_name": m.metric_name,
                 "value": m.value,
                 "timestamp": m.timestamp.isoformat(sep=" ", timespec="seconds"),
@@ -468,29 +489,29 @@ class DatabaseManager:
     # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
-    def insert_status(self, collector_id: str, state: str):
+    def insert_status(self, plugin_id: str, state: str):
         record = StatusRecord(
-            collector_id=collector_id, state=state, timestamp=datetime.now()
+            plugin_id=plugin_id, state=state, timestamp=datetime.now()
         )
-        self.store.statuses[collector_id] = record
+        self.store.statuses[plugin_id] = record
         _writer.submit(
             lambda: StatusHistory.create(
-                collector_id=record.collector_id,
+                plugin_id=record.plugin_id,
                 state=record.state,
                 timestamp=record.timestamp,
             )
         )
-        CHANGES.publish(changes.STATUS, collector_id)
+        CHANGES.publish(changes.STATUS, plugin_id)
 
     def latest_statuses(self) -> Dict[str, str]:
         return {cid: rec.state for cid, rec in self.store.statuses.items()}
 
-    def latest_status(self, collector_id: str) -> str:
-        record = self.store.statuses.get(collector_id)
+    def latest_status(self, plugin_id: str) -> str:
+        record = self.store.statuses.get(plugin_id)
         return record.state if record else "offline"
 
-    def latest_status_time(self, collector_id: str):
-        record = self.store.statuses.get(collector_id)
+    def latest_status_time(self, plugin_id: str):
+        record = self.store.statuses.get(plugin_id)
         return record.timestamp if record else None
 
     # ------------------------------------------------------------------
@@ -501,19 +522,19 @@ class DatabaseManager:
         level: str,
         message: str,
         target: Optional[str] = None,
-        source_id: Optional[str] = None,
+        plugin_id: Optional[str] = None,
     ):
-        record = self.store.add_event(level, message, target, source_id)
+        record = self.store.add_event(level, message, target, plugin_id)
         _writer.submit(
             lambda: Event.create(
                 level=record.level,
                 message=record.message,
                 target=record.target,
-                source_id=record.source_id,
+                plugin_id=record.plugin_id,
                 timestamp=record.timestamp,
             )
         )
-        CHANGES.publish(changes.EVENT, source_id)
+        CHANGES.publish(changes.EVENT, plugin_id)
 
     def recent_events(
         self,
@@ -563,14 +584,14 @@ class DatabaseManager:
     def insert_log_line(
         self,
         target: str,
-        source: str,
+        plugin_id: str,
         level: str,
         message: str,
         log_time: Optional[str] = None,
     ):
-        key = f"{target}\x1f{source}\x1f{log_time or ''}\x1f{message}"
+        key = f"{target}\x1f{plugin_id}\x1f{log_time or ''}\x1f{message}"
         dedup_hash = hashlib.sha1(key.encode("utf-8", "replace")).hexdigest()
-        record = self.store.add_log_line(target, source, level, message, dedup_hash)
+        record = self.store.add_log_line(target, plugin_id, level, message, dedup_hash)
         if record is None:
             # Already in the buffer — the DB's unique index would reject it too.
             return
@@ -578,7 +599,7 @@ class DatabaseManager:
             lambda: (
                 LogLine.insert(
                     target=record.target,
-                    source=record.source,
+                    plugin_id=record.plugin_id,
                     level=record.level,
                     message=record.message,
                     dedup_hash=record.dedup_hash,
@@ -588,7 +609,7 @@ class DatabaseManager:
                 .execute()
             )
         )
-        CHANGES.publish(changes.LOG, source)
+        CHANGES.publish(changes.LOG, plugin_id)
 
     def log_lines(
         self, target: str, filter_prefix: str = "", limit: int = 15
@@ -646,7 +667,7 @@ class DatabaseManager:
             cursor = db.execute_sql(
                 "DELETE FROM metric WHERE timestamp < ? AND id NOT IN ("
                 "SELECT MIN(id) FROM metric WHERE timestamp < ? "
-                "GROUP BY collector, metric_name, strftime('%Y%m%d%H', timestamp))",
+                "GROUP BY plugin_id, metric_name, strftime('%Y%m%d%H', timestamp))",
                 (cutoff, cutoff),
             )
             if cursor.rowcount:
@@ -658,7 +679,7 @@ class DatabaseManager:
         _writer.submit(_do_downsample)
 
     def prune_status(self, retention_days: int) -> int:
-        """The newest row per collector is kept regardless of age so a restart
+        """The newest row per plugin is kept regardless of age so a restart
         can still hydrate every monitor's last known state."""
         if retention_days is None or retention_days <= 0:
             return 0
@@ -666,7 +687,7 @@ class DatabaseManager:
 
         def _do_prune():
             newest = StatusHistory.select(fn.MAX(StatusHistory.id)).group_by(
-                StatusHistory.collector_id
+                StatusHistory.plugin_id
             )
             deleted = (
                 StatusHistory.delete()
@@ -896,7 +917,7 @@ class DatabaseManager:
     ) -> None:
         """A plugin event, prefixed with the plugin name for the events feed."""
         self.insert_event(
-            level, f"[{plugin_name}] {message}", target, source_id=plugin_id
+            level, f"[{plugin_name}] {message}", target, plugin_id=plugin_id
         )
 
     def apply_result(
@@ -911,7 +932,7 @@ class DatabaseManager:
                 target, plugin_id, name, value, result.metadata.get(name)
             )
             metric_rows.append(dict(
-                timestamp=record.timestamp, target=target, collector=plugin_id,
+                timestamp=record.timestamp, target=target, plugin_id=plugin_id,
                 metric_name=name, value=value, metadata=record.metadata,
             ))
         if metric_rows:

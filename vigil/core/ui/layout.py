@@ -1,3 +1,4 @@
+"""Layout resolution: turns a plugin's declared rows of widgets into render order."""
 from contextlib import contextmanager
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -38,6 +39,7 @@ def make_inline_layout(
     default_layout: List[LayoutRow],
     hidden: Tuple[str, ...] = ('host_card', 'logs'),
 ) -> List[LayoutRow]:
+    """Derive a compact layout for embedding a plugin inside a group view."""
     result = []
     for row in default_layout:
         new_row = []

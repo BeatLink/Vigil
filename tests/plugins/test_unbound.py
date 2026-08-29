@@ -62,7 +62,7 @@ def _respond(plugin, run_cycle, stats=None, query_output=None):
 def _latest_status(plugin_id: str = "test-unbound") -> str | None:
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == plugin_id
+            StatusHistory.plugin_id == plugin_id
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -70,7 +70,7 @@ def _latest_status(plugin_id: str = "test-unbound") -> str | None:
 def _latest_metric(metric: str, name: str = "test-unbound") -> float | None:
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == name) & (Metric.metric_name == metric)
+            (Metric.plugin_id == name) & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 

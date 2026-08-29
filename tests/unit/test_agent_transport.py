@@ -272,7 +272,7 @@ class TestSampleStreamContract:
         from vigil.plugins.service_list import ServiceList
         plugin = make_plugin(ServiceList, {})
         plugin.SAMPLED = True
-        assert plugin.sample_streams() == []
+        assert plugin.subscriptions() == []
         assert plugin.event_driven() is False
 
     def test_a_failing_sample_parses_as_a_failure(self, make_plugin):
@@ -292,7 +292,7 @@ class TestSampleStreamContract:
         intervals, so a quiet monitor's stored data keeps advancing."""
         from vigil.plugins.cpu import Cpu
         plugin = make_plugin(Cpu, {})
-        spec = plugin.sample_streams()[0]
+        spec = plugin.subscriptions()[0]
         assert spec.params['max_quiet'] == plugin.interval * 5
 
 

@@ -55,6 +55,7 @@ PONG = "pong"
 
 
 def encode(frame: Dict[str, Any]) -> str:
+    """Serialize one frame to compact JSON."""
     return json.dumps(frame, separators=(',', ':'))
 
 
@@ -74,6 +75,7 @@ def decode(raw: str) -> Dict[str, Any]:
 
 def hello(agent_id: str, hostname: str, version: str,
           capabilities: List[str]) -> Dict[str, Any]:
+    """Build the agent's opening HELLO frame."""
     return {
         't': HELLO,
         'protocol': PROTOCOL_VERSION,
@@ -85,22 +87,27 @@ def hello(agent_id: str, hostname: str, version: str,
 
 
 def welcome(streams: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build the server's WELCOME reply carrying the initial stream subscriptions."""
     return {'t': WELCOME, 'protocol': PROTOCOL_VERSION, 'streams': streams}
 
 
 def exec_request(request_id: int, command: str, timeout: float) -> Dict[str, Any]:
+    """Build a server EXEC frame asking the agent to run one command."""
     return {'t': EXEC, 'id': request_id, 'cmd': command, 'timeout': timeout}
 
 
 def exec_result(request_id: int, exit_code: int, stdout: str, stderr: str) -> Dict[str, Any]:
+    """Build the agent's RESULT frame answering one EXEC request."""
     return {'t': RESULT, 'id': request_id, 'rc': exit_code, 'out': stdout, 'err': stderr}
 
 
 def subscribe(streams: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build a server SUBSCRIBE frame replacing the agent's watched streams."""
     return {'t': SUBSCRIBE, 'streams': streams}
 
 
 def event(stream_id: str, payload: Dict[str, Any], timestamp: float) -> Dict[str, Any]:
+    """Build the agent's EVENT frame reporting activity on one stream."""
     return {'t': EVENT, 'stream': stream_id, 'ts': timestamp, 'payload': payload}
 
 

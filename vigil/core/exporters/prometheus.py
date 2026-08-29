@@ -1,3 +1,4 @@
+"""Prometheus exporter: renders the latest metrics in text exposition format."""
 import re
 
 from vigil.core.contracts import MetricsSource
@@ -19,19 +20,20 @@ def _escape_label(value: str) -> str:
 
 
 def render(db: MetricsSource) -> str:
+    """Render the latest metrics and statuses in Prometheus text exposition format."""
     lines = []
 
     lines.append('# HELP vigil_up Monitor status (1=online, 0.5=warning, 0=failed, -1=offline)')
     lines.append('# TYPE vigil_up gauge')
-    for collector_id, state in sorted(db.latest_statuses().items()):
+    for plugin_id, state in sorted(db.latest_statuses().items()):
         val = _STATUS_VALUE.get(state, -1.0)
-        lines.append(f'vigil_up{{monitor="{_escape_label(collector_id)}",state="{_escape_label(state)}"}} {val}')
+        lines.append(f'vigil_up{{monitor="{_escape_label(plugin_id)}",state="{_escape_label(state)}"}} {val}')
 
     lines.append('# HELP vigil_metric Latest value of a collected metric')
     lines.append('# TYPE vigil_metric gauge')
     for m in db.latest_metrics():
         labels = (
-            f'monitor="{_escape_label(m["collector"])}",'
+            f'monitor="{_escape_label(m["plugin_id"])}",'
             f'target="{_escape_label(m["target"])}",'
             f'metric="{_escape_label(m["metric_name"])}"'
         )

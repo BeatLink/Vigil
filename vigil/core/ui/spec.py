@@ -45,10 +45,9 @@ cards           ``{widget_name: card spec}`` — see "Card specs". ``host_card``
                 ``status_card`` are reserved names with fixed renderings.
 chart           Single-chart shorthand for ``charts={'chart': ...}``.
 charts          ``{widget_name: {'metric': ..., 'title': ...}}`` history charts; the title
-                defaults to the metric name upper-cased.
-dynamic_charts  ``{'items_attr': plugin attribute yielding (title, metric_name) pairs,
-                'widget': cell name (default 'charts')}`` — one history chart per pair,
-                discovered at render time.
+                defaults to the metric name upper-cased. A plugin whose charts depend on
+                its config builds this dict (and the matching layout rows) in its
+                ``UI_SPEC`` property — see ports.py.
 events          True, or a kwargs dict forwarded to the plugin events table (e.g.
                 ``{'title': 'PLUGIN EVENTS'}``); renders into the ``events`` cell.
 tables          ``{widget_name: table spec}`` — see "Table specs".
@@ -58,7 +57,7 @@ buttons         ``{widget_name: [button spec, ...]}`` — one row of action butt
                 A button spec: ``{'id', 'label', 'icon', 'color', 'flat' (default True),
                 'visible_if' (ENABLED_PREDICATES), 'kind', 'dialog', 'notify' (default
                 True)}``; kind ``'dialog'`` opens the named dialog, anything else awaits
-                ``plugin.on_action(id)`` and notifies the outcome.
+                ``plugin.run_action(id)`` and notifies the outcome.
 dialogs         ``{dialog_name: dialog spec}`` — opened by kind ``'dialog'`` buttons and
                 row actions; see "Dialog specs".
 job_panel       ``{'widget' (default 'jobs'), 'title', 'run_label', 'run_icon',
@@ -101,10 +100,9 @@ status_card     ``{'metric', 'title' (default 'STATUS'), 'on_text' (default 'ACT
 Repeat specs (cards[name]['repeat'])
 ====================================
 source            ``'snapshot'`` (default): the plugin's latest snapshot list;
-                  ``'setting'``: JSON from the settings store under ``setting_key``
-                  (``'{plugin_id}'`` is substituted), with ``dict_fields`` projecting
-                  chosen keys of a single dict into label/value items;
-                  ``'metrics_prefix'``: items discovered from metric names.
+                  ``'setting'``: a JSON list from the settings store under ``setting_key``
+                  (``'{plugin_id}'`` is substituted), plain strings becoming label/value
+                  items; ``'metrics_prefix'``: items discovered from metric names.
 container         ``'chips'`` (default) for label: value chips, anything else for a grid
                   of small info cards.
 item_label        Item key holding the label (``'key'`` for metrics_prefix, else
@@ -133,9 +131,9 @@ columns         ``[{'name', 'label', 'field', 'align', 'sortable', 'cell_color_b
                 (ITEM_COLOR_RULES name/callable over the row)}, ...]``.
 row_actions     ``[{'id', 'icon', 'color', 'tooltip', 'visible_if' (ENABLED_PREDICATES),
                 'kind', 'dialog', 'action_id' (default id), 'params' (kwarg name -> row
-                field), 'static_params' (kwarg name -> literal), 'notify' (default True)},
-                ...]``; kind ``'dialog'`` opens the named dialog with the row, anything
-                else awaits ``plugin.on_action(action_id, **params)``.
+                field), 'notify' (default True)}, ...]``; kind ``'dialog'`` opens the
+                named dialog with the row, anything else awaits
+                ``plugin.run_action(action_id, **params)``.
 rows_attr       ``getattr(plugin, rows_attr)`` supplies the rows.
 source          Repeat-spec source used when rows_attr is absent (default ``'snapshot'``).
 
@@ -218,6 +216,7 @@ FORMATTERS: Dict[str, Formatter] = {}
 
 
 def register_formatter(name: str):
+    """Register a value formatter under a spec-referencable name."""
     def wrap(fn):
         FORMATTERS[name] = fn
         return fn
@@ -310,6 +309,7 @@ COLOR_RULES: Dict[str, ColorRule] = {}
 
 
 def register_color_rule(name: str):
+    """Register a color rule under a spec-referencable name."""
     def wrap(fn):
         COLOR_RULES[name] = fn
         return fn
@@ -375,6 +375,7 @@ def _nonzero_failed(v):
 
 
 def threshold_color(warning: float, threshold: float):
+    """Build a color rule that maps a value onto status colors by two thresholds."""
     def rule(v):
         if v is None:
             return None
@@ -557,19 +558,6 @@ def _render_charts(plugin: Any, page, layout, charts: Dict[str, Any]):
                           plugin.id, cs['metric'])
 
 
-def _render_dynamic_charts(plugin: Any, page, layout, dynamic_charts_spec):
-    """Render history charts discovered at render time from a plugin attribute."""
-    from vigil.core.ui.components import history_chart
-    if not dynamic_charts_spec:
-        return
-    widget = dynamic_charts_spec.get('widget', 'charts')
-    if not layout.renders(widget):
-        return
-    with layout.cell(widget):
-        for chart_title, chart_metric in getattr(plugin, dynamic_charts_spec['items_attr']):
-            history_chart(page, chart_title, plugin.id, chart_metric)
-
-
 def _render_events(plugin: Any, page, layout, show_events):
     """Render the plugin events table when the spec enables it."""
     if not show_events or not layout.renders('events'):
@@ -641,7 +629,6 @@ def generic_render(plugin: Any, context: str = 'page', spec: Optional[UISpec] = 
     _render_host_card(plugin, layout)
     _render_status_card(plugin, page, layout, cards)
     _render_charts(plugin, page, layout, charts)
-    _render_dynamic_charts(plugin, page, layout, spec.get('dynamic_charts'))
     _render_events(plugin, page, layout, spec.get('events', False))
     _render_tables(plugin, page, layout, spec.get('tables', {}), spec.get('filters', {}))
     _render_buttons(plugin, layout, spec.get('buttons', {}))

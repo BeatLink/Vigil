@@ -27,7 +27,7 @@ def _latest_metric(metric: str) -> float | None:
     flush_writes()
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == "service-browser") & (Metric.metric_name == metric)
+            (Metric.plugin_id == "service-browser") & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 

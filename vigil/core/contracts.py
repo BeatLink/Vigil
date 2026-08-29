@@ -71,7 +71,7 @@ class ActionButtonSpec(TypedDict, total=False):
 @runtime_checkable
 class EngineLike(Protocol):
     """The surface of VigilEngine that the UI layer (main_dashboard.py,
-    api.py) and Plugin.on_action/action_with_output/run_cycle actually call.
+    api.py) and Plugin.run_action/run_cycle actually call.
     Exists so those modules can be typed against a narrow contract instead
     of the concrete VigilEngine, and so a test double only needs to satisfy
     this shape rather than VigilEngine's full constructor/internals."""
@@ -97,18 +97,6 @@ class EngineLike(Protocol):
 
     def last_collected(self, plugin_id: str) -> float: ...
 
-    # Job-control surface the UI Engine's job panel drives through the engine
-    # (these touch the live JobController, which a pure plugin no longer holds).
-    def job_is_running(self, plugin: Any) -> bool: ...
-
-    def job_current_id(self, plugin: Any) -> Optional[int]: ...
-
-    def job_recent(self, plugin: Any, limit: int = 20) -> list: ...
-
-    async def job_cancel(self, plugin: Any) -> bool: ...
-
     def set_setting(self, key: str, value: str) -> None: ...
 
     def apply(self, plugin: Any, result: Any) -> None: ...
-
-    def set_job_progress(self, job_id: int, summary: str) -> None: ...

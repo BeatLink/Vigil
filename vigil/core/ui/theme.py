@@ -149,10 +149,12 @@ def _state() -> _SchemeState:
 
 
 def scheme() -> str:
+    """Return the current client's color scheme name."""
     return _state().scheme
 
 
 def current_palette() -> Dict[str, str]:
+    """Return the token palette for the current client's scheme."""
     return palette(scheme())
 
 

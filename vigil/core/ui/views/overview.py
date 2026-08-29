@@ -6,7 +6,7 @@ from nicegui import ui
 from vigil.core.contracts import EngineLike
 from .. import theme
 from ..theme import STATUS_COLORS, ACCENT
-from ..components import card, section_title, on_data_event, offload, refresh_rows
+from ..components import card, feed_columns, section_title, on_data_event, offload, refresh_rows
 
 _STATUS_ORDER = ('online', 'failed', 'warning', 'offline')
 
@@ -20,17 +20,12 @@ _MONITOR_COLUMNS = [
 _METRIC_COLUMNS = [
     {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
     {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
-    {'name': 'collector', 'label': 'Plugin', 'field': 'collector', 'align': 'left'},
+    {'name': 'plugin_id', 'label': 'Plugin', 'field': 'plugin_id', 'align': 'left'},
     {'name': 'metric_name', 'label': 'Metric', 'field': 'metric_name', 'align': 'left'},
     {'name': 'value', 'label': 'Value', 'field': 'value', 'align': 'left'},
 ]
 
-_RECENT_EVENT_COLUMNS = [
-    {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left'},
-    {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left'},
-    {'name': 'target', 'label': 'Host', 'field': 'target', 'align': 'left'},
-    {'name': 'message', 'label': 'Message', 'field': 'message', 'align': 'left'},
-]
+_RECENT_EVENT_COLUMNS = feed_columns(target_label='Host')
 
 _NAME_CELL_SLOT = '''
     <q-td :props="props">

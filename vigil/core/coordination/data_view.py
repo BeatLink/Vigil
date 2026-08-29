@@ -38,17 +38,17 @@ class PluginDataView:
     def latest_statuses(self) -> Dict[str, str]:
         return self._db.latest_statuses()
 
-    def latest_status(self, collector_id: str) -> str:
-        return self._db.latest_status(collector_id)
+    def latest_status(self, plugin_id: str) -> str:
+        return self._db.latest_status(plugin_id)
 
-    def latest_status_time(self, collector_id: Optional[str] = None):
-        return self._db.latest_status_time(collector_id or self._id)
+    def latest_status_time(self, plugin_id: Optional[str] = None):
+        return self._db.latest_status_time(plugin_id or self._id)
 
-    def collector_metrics(self, collector: str, limit: int = 15):
-        return self._db.collector_metrics(collector, limit=limit)
+    def collector_metrics(self, plugin_id: str, limit: int = 15):
+        return self._db.collector_metrics(plugin_id, limit=limit)
 
-    def metric_history(self, collector: str, metric_name: str, limit: int = 30):
-        return self._db.metric_history(collector, metric_name, limit=limit)
+    def metric_history(self, plugin_id: str, metric_name: str, limit: int = 30):
+        return self._db.metric_history(plugin_id, metric_name, limit=limit)
 
     def log_lines(self, target: str, filter_prefix: str = '', limit: int = 15):
         return self._db.log_lines(target, filter_prefix, limit=limit)

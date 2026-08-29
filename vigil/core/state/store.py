@@ -105,15 +105,15 @@ class StateStore:
         self.settings: Dict[str, str] = {}
 
         # --- history: bounded buffers, appended via the methods below ---
-        # Metrics are keyed by (collector, metric_name) because that is how
+        # Metrics are keyed by (plugin_id, metric_name) because that is how
         # every read filters them; a per-series deque means a chart read is a
         # dict lookup plus a slice, with no scan over other series.
         self.metrics: Dict[Tuple[str, str], deque] = {}
-        # Secondary index: collector -> its series' deques. The metric table
-        # reads every series of one collector, which would otherwise scan all
+        # Secondary index: plugin_id -> its series' deques. The metric table
+        # reads every series of one plugin, which would otherwise scan all
         # series of all monitors. Holds the same deque objects as `metrics`,
         # so appends are visible through both and there is nothing to sync.
-        self._by_collector: Dict[str, List[deque]] = {}
+        self._by_plugin: Dict[str, List[deque]] = {}
         self.events: deque = deque(maxlen=self.buffers.event_history)
         self.log_lines: Dict[str, deque] = {}
         self._log_dedup: Dict[str, set] = {}
@@ -131,7 +131,7 @@ class StateStore:
     def add_metric(
         self,
         target: str,
-        collector: str,
+        plugin_id: str,
         metric_name: str,
         value: float,
         metadata: Optional[str] = None,
@@ -139,50 +139,50 @@ class StateStore:
     ) -> MetricRecord:
         record = MetricRecord(
             target=target,
-            collector=collector,
+            plugin_id=plugin_id,
             metric_name=metric_name,
             value=value,
             metadata=metadata,
             timestamp=timestamp or datetime.now(),
         )
         with self._lock:
-            series = self._series(collector, metric_name)
+            series = self._series(plugin_id, metric_name)
             series.append(record)
         return record
 
-    def _series(self, collector: str, metric_name: str) -> deque:
-        """The deque for one (collector, metric_name), created on first use and
-        registered in the by-collector index. Callers hold the lock."""
-        key = (collector, metric_name)
+    def _series(self, plugin_id: str, metric_name: str) -> deque:
+        """The deque for one (plugin_id, metric_name), created on first use and
+        registered in the by-plugin index. Callers hold the lock."""
+        key = (plugin_id, metric_name)
         series = self.metrics.get(key)
         if series is None:
             series = self.metrics[key] = deque(maxlen=self.buffers.metric_history)
-            self._by_collector.setdefault(collector, []).append(series)
+            self._by_plugin.setdefault(plugin_id, []).append(series)
         return series
 
-    def latest_metric(self, collector: str, metric_name: str) -> Optional[MetricRecord]:
-        series = self.metrics.get((collector, metric_name))
+    def latest_metric(self, plugin_id: str, metric_name: str) -> Optional[MetricRecord]:
+        series = self.metrics.get((plugin_id, metric_name))
         return series[-1] if series else None
 
     def metric_history(
-        self, collector: str, metric_name: str, limit: int = 30
+        self, plugin_id: str, metric_name: str, limit: int = 30
     ) -> List[MetricRecord]:
         """Oldest-to-newest, matching what the charts plot."""
         with self._lock:
-            series = self.metrics.get((collector, metric_name))
+            series = self.metrics.get((plugin_id, metric_name))
             if not series:
                 return []
             return list(series)[-limit:] if limit else list(series)
 
-    def collector_metrics(self, collector: str, limit: int = 15) -> List[MetricRecord]:
-        """Every series for one collector, newest first — the metric table.
+    def collector_metrics(self, plugin_id: str, limit: int = 15) -> List[MetricRecord]:
+        """Every series for one plugin, newest first — the metric table.
 
         Only the newest ``limit`` entries of each series can reach the result,
         so each deque is sliced before merging rather than copied whole. That
-        keeps the cost proportional to (series for this collector x limit)
-        instead of to the collector's entire retained history."""
+        keeps the cost proportional to (series for this plugin_id x limit)
+        instead of to the plugin's entire retained history."""
         with self._lock:
-            series_list = self._by_collector.get(collector)
+            series_list = self._by_plugin.get(plugin_id)
             if not series_list:
                 return []
             records: List[MetricRecord] = []
@@ -197,11 +197,11 @@ class StateStore:
         with self._lock:
             return [series[-1] for series in self.metrics.values() if series]
 
-    def latest_collector_metrics(self, collector: str) -> List[MetricRecord]:
-        """The newest point of each of one collector's series — the
+    def latest_collector_metrics(self, plugin_id: str) -> List[MetricRecord]:
+        """The newest point of each of one plugin's series — the
         metric-family scan behind `metrics_prefix` repeat cards."""
         with self._lock:
-            series_list = self._by_collector.get(collector)
+            series_list = self._by_plugin.get(plugin_id)
             if not series_list:
                 return []
             return [series[-1] for series in series_list if series]
@@ -221,14 +221,14 @@ class StateStore:
         level: str,
         message: str,
         target: Optional[str] = None,
-        source_id: Optional[str] = None,
+        plugin_id: Optional[str] = None,
         timestamp: Optional[datetime] = None,
     ) -> EventRecord:
         record = EventRecord(
             level=level,
             message=message,
             target=target,
-            source_id=source_id,
+            plugin_id=plugin_id,
             timestamp=timestamp or datetime.now(),
         )
         with self._lock:
@@ -268,7 +268,7 @@ class StateStore:
         target: str = "",
         limit: int = 100,
     ) -> List[EventRecord]:
-        """Events for one plugin — by source_id when known, else by the
+        """Events for one plugin — by plugin_id when known, else by the
         ``[Plugin Name] `` message prefix the events feed writes."""
         with self._lock:
             snapshot = list(self.events)
@@ -276,7 +276,7 @@ class StateStore:
         results: List[EventRecord] = []
         for record in reversed(snapshot):
             if plugin_id:
-                if record.source_id != plugin_id:
+                if record.plugin_id != plugin_id:
                     continue
             else:
                 if not record.message.startswith(prefix):
@@ -294,7 +294,7 @@ class StateStore:
     def add_log_line(
         self,
         target: str,
-        source: str,
+        plugin_id: str,
         level: str,
         message: str,
         dedup_hash: str,
@@ -306,7 +306,7 @@ class StateStore:
         forever — it replaces the DB's ``unique(dedup_hash)`` + on_conflict."""
         record = LogLineRecord(
             target=target,
-            source=source,
+            plugin_id=plugin_id,
             level=level,
             message=message,
             dedup_hash=dedup_hash,
@@ -335,8 +335,8 @@ class StateStore:
     def recent_log_lines(
         self, target: str, filter_prefix: str = "", limit: int = 15
     ) -> List[LogLineRecord]:
-        """Newest first. ``filter_prefix`` matches the source exactly, as the
-        DB read it replaced did."""
+        """Newest first. ``filter_prefix`` matches the plugin id exactly, as
+        the DB read it replaced did."""
         with self._lock:
             buffer = self.log_lines.get(target)
             snapshot = list(buffer) if buffer else []
@@ -344,7 +344,7 @@ class StateStore:
         results = [
             record
             for record in reversed(snapshot)
-            if not filter_prefix or record.source == filter_prefix
+            if not filter_prefix or record.plugin_id == filter_prefix
         ]
         return results[:limit] if limit else results
 
@@ -529,7 +529,7 @@ class StateStore:
         """Bulk-load oldest-first metric history."""
         with self._lock:
             for record in records:
-                self._series(record.collector, record.metric_name).append(record)
+                self._series(record.plugin_id, record.metric_name).append(record)
 
     def load_events(self, records: Iterable[EventRecord]) -> None:
         with self._lock:

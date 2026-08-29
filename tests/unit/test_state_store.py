@@ -2,7 +2,7 @@
 
 The store is now the system of record, so these cover the behaviour that used
 to be SQLite's job: bounding growth, log dedup, ordering, and staying correct
-under concurrent collector/UI access.
+under concurrent plugin_id/UI access.
 """
 
 import threading
@@ -77,7 +77,7 @@ class TestMetrics:
         store.add_metric("h", "cpu", "temp", 2.0)
         store.add_metric("h", "disk", "usage", 3.0)
         records = store.collector_metrics("cpu", limit=10)
-        assert {m.collector for m in records} == {"cpu"}
+        assert {m.plugin_id for m in records} == {"cpu"}
         assert {m.metric_name for m in records} == {"usage", "temp"}
 
     def test_collector_metrics_is_newest_first(self, store):
@@ -135,8 +135,8 @@ class TestEvents:
         assert len(store.recent_events(limit=5, level="ERROR")) == 5
 
     def test_plugin_events_prefers_source_id(self, store):
-        store.add_event("INFO", "[A] mine", source_id="a")
-        store.add_event("INFO", "[A] theirs", source_id="b")
+        store.add_event("INFO", "[A] mine", plugin_id="a")
+        store.add_event("INFO", "[A] theirs", plugin_id="b")
         results = store.plugin_events(plugin_id="a")
         assert [e.message for e in results] == ["[A] mine"]
 
@@ -374,7 +374,7 @@ class TestConcurrency:
             assert len(store.metric_history(f"c{worker}", "m", limit=0)) == 200
 
     def test_reads_are_safe_while_writes_are_in_flight(self, store):
-        """A reader iterating a buffer while a collector appends must not raise
+        """A reader iterating a buffer while a plugin_id appends must not raise
         (which a bare deque iteration would)."""
         stop = threading.Event()
         errors = []
@@ -428,9 +428,9 @@ class TestConcurrency:
         assert len(ids) == len(set(ids)) == 400
 
 
-def _status(collector_id, state):
+def _status(plugin_id, state):
     from vigil.core.state.records import StatusRecord
 
     return StatusRecord(
-        collector_id=collector_id, state=state, timestamp=datetime.now()
+        plugin_id=plugin_id, state=state, timestamp=datetime.now()
     )

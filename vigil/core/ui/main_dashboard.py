@@ -1,3 +1,4 @@
+"""Dashboard shell: page routing, header and the view container."""
 import logging
 from dataclasses import dataclass
 from pathlib import Path

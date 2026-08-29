@@ -31,7 +31,7 @@ class TestDatabaseManagerInit:
     def test_fresh_db_has_single_composite_metric_index(self, mgr):
         with db.connection_context():
             names = [i.name for i in db.get_indexes('metric')]
-        assert names.count('metric_collector_metric_name_timestamp') == 1
+        assert names.count('metric_plugin_id_metric_name_timestamp') == 1
 
     def test_migration_adds_composite_index_to_existing_db(self, tmp_path):
         import sqlite3
@@ -39,7 +39,7 @@ class TestDatabaseManagerInit:
         # A pre-index metric table, as created before the composite index existed.
         con = sqlite3.connect(path)
         con.execute("CREATE TABLE metric (id INTEGER PRIMARY KEY, timestamp DATETIME, "
-                    "target VARCHAR, collector VARCHAR, metric_name VARCHAR, "
+                    "target VARCHAR, plugin_id VARCHAR, metric_name VARCHAR, "
                     "value REAL, metadata TEXT)")
         con.commit()
         con.close()
@@ -51,7 +51,41 @@ class TestDatabaseManagerInit:
             names = [i.name for i in db.get_indexes('metric')]
         if not db.is_closed():
             db.close()
-        assert 'metric_collector_metric_name_timestamp' in names
+        assert 'metric_plugin_id_metric_name_timestamp' in names
+
+    def test_migration_renames_legacy_collector_columns(self, tmp_path):
+        import sqlite3
+        path = str(tmp_path / "legacy-names.db")
+        # The pre-rename schema: one spelling of the collector id per table.
+        con = sqlite3.connect(path)
+        con.execute("CREATE TABLE metric (id INTEGER PRIMARY KEY, timestamp DATETIME, "
+                    "target VARCHAR, collector VARCHAR, metric_name VARCHAR, "
+                    "value REAL, metadata TEXT)")
+        con.execute("CREATE TABLE event (id INTEGER PRIMARY KEY, timestamp DATETIME, "
+                    "level VARCHAR, message TEXT, target VARCHAR, source_id VARCHAR)")
+        con.execute("CREATE TABLE statushistory (id INTEGER PRIMARY KEY, "
+                    "timestamp DATETIME, collector_id VARCHAR, state VARCHAR)")
+        con.execute("CREATE TABLE logline (id INTEGER PRIMARY KEY, timestamp DATETIME, "
+                    "target VARCHAR, source VARCHAR, level VARCHAR, message TEXT, "
+                    "dedup_hash VARCHAR UNIQUE)")
+        con.execute("INSERT INTO metric (target, collector, metric_name, value) "
+                    "VALUES ('h', 'cpu-odin', 'cpu_pct', 12.5)")
+        con.commit()
+        con.close()
+
+        if not db.is_closed():
+            db.close()
+        DatabaseManager(path)  # runs _migrate()
+        with db.connection_context():
+            columns = {t: {c.name for c in db.get_columns(t)}
+                       for t in ('metric', 'event', 'statushistory', 'logline')}
+            value = db.execute_sql(
+                "SELECT value FROM metric WHERE plugin_id = 'cpu-odin'").fetchone()[0]
+        if not db.is_closed():
+            db.close()
+        for table, cols in columns.items():
+            assert 'plugin_id' in cols, table
+        assert value == 12.5
 
 
 class TestMetrics:
@@ -64,7 +98,7 @@ class TestMetrics:
             ).first()
         assert m is not None
         assert m.value == pytest.approx(12.3)
-        assert m.collector == "ping"
+        assert m.plugin_id == "ping"
 
     def test_multiple_metrics_ordered_by_timestamp(self, mgr):
         mgr.insert_metric("h", "c", "cpu", 10.0)
@@ -109,7 +143,7 @@ class TestStatusHistory:
         mgr.flush()
         with db.connection_context():
             s = StatusHistory.select().where(
-                StatusHistory.collector_id == "plugin-a"
+                StatusHistory.plugin_id == "plugin-a"
             ).first()
         assert s.state == "online"
 
@@ -119,7 +153,7 @@ class TestStatusHistory:
         mgr.flush()
         with db.connection_context():
             latest = StatusHistory.select().where(
-                StatusHistory.collector_id == "plugin-b"
+                StatusHistory.plugin_id == "plugin-b"
             ).order_by(StatusHistory.timestamp.desc()).first()
         assert latest.state == "failed"
 
@@ -164,7 +198,7 @@ class TestLogLineStorage:
             row = LogLine.select().where(LogLine.target == "host1").first()
         assert row is not None
         assert row.message == "started ok"
-        assert row.source == "nginx"
+        assert row.plugin_id == "nginx"
         assert row.level == "INFO"
 
     def test_duplicate_line_not_stored_twice(self, mgr):
@@ -205,7 +239,7 @@ class TestLogRetention:
         with db.connection_context():
             LogLine.create(
                 timestamp=datetime.now() - timedelta(days=days_old),
-                target="h", source="svc", level="INFO", message=message,
+                target="h", plugin_id="svc", level="INFO", message=message,
                 dedup_hash=f"hash-{message}",
             )
 
@@ -245,7 +279,7 @@ class TestMetricRetention:
         with db.connection_context():
             Metric.create(
                 timestamp=datetime.now() - timedelta(days=days_old),
-                target="h", collector="c", metric_name=name, value=value,
+                target="h", plugin_id="c", metric_name=name, value=value,
             )
 
     def test_prune_removes_old_metrics(self, mgr):
@@ -280,11 +314,11 @@ class TestMetricRetention:
 
 
 class TestStatusRetention:
-    def _insert_aged(self, days_old: int, collector_id: str, state: str = 'online'):
+    def _insert_aged(self, days_old: int, plugin_id: str, state: str = 'online'):
         with db.connection_context():
             StatusHistory.create(
                 timestamp=datetime.now() - timedelta(days=days_old),
-                collector_id=collector_id, state=state,
+                plugin_id=plugin_id, state=state,
             )
 
     def test_prune_removes_old_status_rows(self, mgr):
@@ -303,7 +337,7 @@ class TestStatusRetention:
         mgr.prune_status(retention_days=30)
         mgr.flush()
         with db.connection_context():
-            rows = [(s.collector_id, s.state) for s in StatusHistory.select()]
+            rows = [(s.plugin_id, s.state) for s in StatusHistory.select()]
         assert rows == [("stale", "offline")]
 
     def test_prune_zero_disables_and_keeps_all(self, mgr):
@@ -321,7 +355,7 @@ class TestLogLineWrites:
             log_lines=[("a log message", "ERROR", "2024-01-01T00:00:00")]))
         mgr.flush()
         with db.connection_context():
-            row = LogLine.select().where(LogLine.source == "my-plugin").first()
+            row = LogLine.select().where(LogLine.plugin_id == "my-plugin").first()
         assert row is not None
         assert row.message == "a log message"
         assert row.level == "ERROR"
@@ -371,7 +405,7 @@ class TestApplyResult:
         mgr.flush()
         with db.connection_context():
             m = Metric.select().where(
-                (Metric.collector == "test-plugin") & (Metric.metric_name == "cpu_pct")
+                (Metric.plugin_id == "test-plugin") & (Metric.metric_name == "cpu_pct")
             ).first()
         assert m is not None
         assert m.value == pytest.approx(42.5)
@@ -382,11 +416,11 @@ class TestApplyResult:
             metrics={"v": 1.0}, logs=[("hi", "INFO")], status="online"))
         mgr.flush()
         with db.connection_context():
-            assert Metric.select().where(Metric.collector == "p").count() == 1
+            assert Metric.select().where(Metric.plugin_id == "p").count() == 1
             assert StatusHistory.select().where(
-                (StatusHistory.collector_id == "p") & (StatusHistory.state == "online")
+                (StatusHistory.plugin_id == "p") & (StatusHistory.state == "online")
             ).count() == 1
-            e = Event.select().where(Event.source_id == "p").first()
+            e = Event.select().where(Event.plugin_id == "p").first()
         assert "[My Plugin] hi" in e.message
 
     def test_apply_result_writes_snapshot(self, mgr):

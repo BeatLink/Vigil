@@ -11,7 +11,7 @@ _GB = 1024 ** 3
 def _latest_status(pid="test-folders"):
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == pid
+            StatusHistory.plugin_id == pid
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -19,7 +19,7 @@ def _latest_status(pid="test-folders"):
 def _latest_metric(metric, name="test-folders"):
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == name) & (Metric.metric_name == metric)
+            (Metric.plugin_id == name) & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 

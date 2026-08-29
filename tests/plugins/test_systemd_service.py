@@ -29,7 +29,7 @@ def _latest_status(plugin_id: str) -> str | None:
     flush_writes()
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == plugin_id
+            StatusHistory.plugin_id == plugin_id
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -38,7 +38,7 @@ def _latest_metric(plugin_name: str, metric: str) -> float | None:
     flush_writes()
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == plugin_name) & (Metric.metric_name == metric)
+            (Metric.plugin_id == plugin_name) & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 
@@ -87,7 +87,7 @@ class TestContinuousMode:
         _run(plugin, [(0, "active", ""), (0, "2024-05-01T12:00:00+0000 host nginx[1]: started", "")])
         flush_writes()
         with db.connection_context():
-            rows = list(LogLine.select().where(LogLine.source == "test-nginx"))
+            rows = list(LogLine.select().where(LogLine.plugin_id == "test-nginx"))
         assert len(rows) == 1
         assert "started" in rows[0].message
 
@@ -97,14 +97,14 @@ class TestContinuousMode:
             _run(plugin, [(0, "active", ""), (0, line, "")])
         flush_writes()
         with db.connection_context():
-            count = LogLine.select().where(LogLine.source == "test-nginx").count()
+            count = LogLine.select().where(LogLine.plugin_id == "test-nginx").count()
         assert count == 1
 
     async def test_error_line_classified_as_error(self, plugin):
         _run(plugin, [(0, "active", ""), (0, "2024-05-01T12:00:00+0000 host nginx[1]: FAILED to bind", "")])
         flush_writes()
         with db.connection_context():
-            row = LogLine.select().where(LogLine.source == "test-nginx").first()
+            row = LogLine.select().where(LogLine.plugin_id == "test-nginx").first()
         assert row.level == "ERROR"
 
 

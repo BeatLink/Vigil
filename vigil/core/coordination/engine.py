@@ -31,6 +31,7 @@ from peewee import OperationalError
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import DispatchResult
 from vigil.core.coordination.data_view import PluginDataView
+from vigil.core.coordination.jobs import JobsGateway
 from vigil.core.settings.config_file import ConfigFileManager as VigilConfig
 from vigil.core.database.database import DatabaseManager as VigilDatabase
 from vigil.core.exporters import ExporterEngine
@@ -113,6 +114,11 @@ class VigilEngine:
         plugin.target = net.target
         self._exec_contexts[plugin.id] = net
         plugin.bind(PluginDataView(self.db, plugin.id))
+
+        async def _cancel_exec(command: str, _net=net):
+            await self.connectors.execute_raw(_net, command)
+
+        plugin.jobs = JobsGateway(self.db, plugin, cancel_exec=_cancel_exec)
         if net.is_agent:
             self._wire_subscriptions(plugin, net)
 
@@ -397,38 +403,6 @@ class VigilEngine:
         result = await self.connectors.execute(net, plan)
         return _finish(plugin.interpret_action(action_id, result, **kwargs))
 
-    # --- Job-control surface, now entirely DB-backed. A job is a detached
-    # command on the target (a Job row) advanced by the owning plugin's poll;
-    # "running" is a DB state, not a live coroutine, so these are DB reads plus
-    # (for cancel) one ordinary SSH command. ---
-    def job_running(self, plugin: Plugin) -> Optional[dict]:
-        jobs = self.db.running_jobs(plugin_id=plugin.id)
-        return jobs[0] if jobs else None
-
-    def job_is_running(self, plugin: Plugin) -> bool:
-        return self.job_running(plugin) is not None
-
-    def job_current_id(self, plugin: Plugin) -> Optional[int]:
-        job = self.job_running(plugin)
-        return job['id'] if job else None
-
-    def job_recent(self, plugin: Plugin, limit: int = 20) -> list:
-        return self.db.recent_jobs(plugin_id=plugin.id, limit=limit)
-
-    async def job_cancel(self, plugin: Plugin) -> bool:
-        """Kill the plugin's running detached job on the target (one ordinary
-        SSH command) and mark it cancelled. The plugin's next poll would also
-        observe the death, but cancelling eagerly gives immediate feedback."""
-        from vigil.core.connectors.ssh_connector import cancel_command
-        job = self.job_running(plugin)
-        if not job or not job.get('pid'):
-            return False
-        net = self._exec_context_for(plugin)
-        if net is not None:
-            await self.connectors.execute_raw(net, cancel_command(job['pid']))
-        self.db.finish_job(job['id'], 'cancelled', exit_code=130, error='Cancelled by user')
-        return True
-
     def set_setting(self, key: str, value: str) -> None:
         """UI-triggered setting write (e.g. a group's expand/collapse state)
         the Database Engine persists. Pure plugins read settings via their
@@ -449,27 +423,6 @@ class VigilEngine:
         express request-to-request dependencies; this keeps that IO on the
         engine-owned connector instead of a plugin opening its own session."""
         return await self.connectors.http.fetch(request)
-
-    # --- Job persistence, called by a plugin from its poll (parse_results) to
-    # advance its detached job's Job/JobOutput rows through the engine. ---
-    def create_job(self, plugin: Plugin, kind: str, command: str, workdir: str) -> int:
-        return self.db.create_job(plugin_id=plugin.id, target=plugin.target,
-                                  kind=kind, command=command, workdir=workdir)
-
-    def set_job_pid(self, job_id: int, pid: int) -> None:
-        self.db.set_job_pid(job_id, pid)
-
-    def set_job_progress(self, job_id: int, summary: str) -> None:
-        self.db.set_job_progress(job_id, summary)
-
-    def append_job_output(self, job_id: int, lines: list) -> None:
-        self.db.append_job_output(job_id, lines)
-
-    def bump_job_output_seq(self, job_id: int, new_seq: int) -> None:
-        self.db.bump_job_output_seq(job_id, new_seq)
-
-    def finish_job(self, job_id: int, state: str, exit_code=None, error=None) -> None:
-        self.db.finish_job(job_id, state, exit_code=exit_code, error=error)
 
     async def _monitor_loop(self, plugin: Plugin):
         await asyncio.sleep(random.uniform(0, STARTUP_JITTER_SECONDS))

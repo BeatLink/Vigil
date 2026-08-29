@@ -1,3 +1,4 @@
+"""SSH transport: pooled asyncssh connections and the detached-job shell scripts."""
 import asyncio
 import logging
 import os
@@ -254,6 +255,7 @@ class PollResult:
 
 
 def parse_poll(stdout: str) -> PollResult:
+    """Split a detached-job poll's sectioned stdout into a PollResult."""
     sections = {'size': [], 'exit': [], 'alive': [], 'out': []}
     current = None
     for line in stdout.split("\n"):
@@ -291,6 +293,7 @@ def cancel_command(pid: int) -> str:
 
 
 def cleanup_command(workdir: str) -> str:
+    """Build the shell command that removes a finished job's working directory."""
     d = shlex.quote(workdir) if not workdir.startswith("$") else f'"{workdir}"'
     return f'rm -rf {d}'
 

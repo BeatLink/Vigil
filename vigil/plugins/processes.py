@@ -1,6 +1,6 @@
 """Top processes by CPU from `ps` over SSH — sampled locally by the agent on
 agent-backed hosts — shown as a table with per-row kill actions (SIGTERM or
-SIGKILL). Config: max_processes, require_sudo, kill_signal, cpu_warning,
+SIGKILL). Config: max_processes, require_sudo, cpu_warning,
 cpu_threshold. When both CPU bounds are set, the busiest process's CPU share
 ranks against cpu_warning/cpu_threshold for warning/failed; otherwise the
 monitor only reports, and only a failed or unparseable collection is
@@ -13,6 +13,8 @@ from vigil.core.connectors.types import ActionPlan, CmdResult, CollectResult, Co
 from vigil.plugins.base.plugin_helpers import level_for
 
 _SEVERITY = {'online': 0, 'warning': 1, 'failed': 2}
+
+_KILL_SIGNALS = {'kill_term': 'TERM', 'kill_kill': 'KILL'}
 
 
 def _parse_ps_output(stdout: str) -> List[Dict]:
@@ -49,7 +51,6 @@ class Processes(Plugin):
         super().__init__(name, config)
         self.max_processes = int(config.get('max_processes', 20))
         self.require_sudo  = bool(config.get('require_sudo', False))
-        self.kill_signal   = str(config.get('kill_signal', 'TERM')).upper()
         self.cpu_warning   = float(config['cpu_warning'])   if 'cpu_warning'   in config else None
         self.cpu_threshold = float(config['cpu_threshold'])  if 'cpu_threshold'  in config else None
 
@@ -103,12 +104,11 @@ class Processes(Plugin):
         )
 
     def plan_action(self, action_id: str, **kwargs) -> Optional[Union[ActionPlan, CollectResult]]:
-        if action_id != 'kill':
+        signal = _KILL_SIGNALS.get(action_id)
+        if signal is None:
             return None
 
-        pid    = kwargs.get('pid')
-        signal = str(kwargs.get('signal', self.kill_signal)).upper()
-
+        pid = kwargs.get('pid')
         if pid is None:
             return CollectResult.failed("Kill action missing pid")
 
@@ -116,10 +116,10 @@ class Processes(Plugin):
         return ActionPlan(f"{prefix}kill -{signal} {int(pid)}")
 
     def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
-        if action_id != 'kill':
+        signal = _KILL_SIGNALS.get(action_id)
+        if signal is None:
             return result.exit_code == 0
         pid = kwargs.get('pid')
-        signal = str(kwargs.get('signal', self.kill_signal)).upper()
         if result.exit_code != 0:
             return CollectResult.failed(f"Failed to send SIG{signal} to PID {pid}: {result.stderr}")
         return CollectResult(logs=[(f"Sent SIG{signal} to PID {pid}", "INFO")], success=True)
@@ -148,11 +148,11 @@ class Processes(Plugin):
                     ],
                     'row_actions': [
                         {'id': 'kill_term', 'icon': 'cancel', 'color': 'warning',
-                         'tooltip': 'SIGTERM (graceful)', 'kind': 'dispatch', 'action_id': 'kill',
-                         'params': {'pid': 'pid'}, 'static_params': {'signal': 'TERM'}},
+                         'tooltip': 'SIGTERM (graceful)', 'kind': 'dispatch',
+                         'params': {'pid': 'pid'}},
                         {'id': 'kill_kill', 'icon': 'dangerous', 'color': 'negative',
-                         'tooltip': 'SIGKILL (force)', 'kind': 'dispatch', 'action_id': 'kill',
-                         'params': {'pid': 'pid'}, 'static_params': {'signal': 'KILL'}},
+                         'tooltip': 'SIGKILL (force)', 'kind': 'dispatch',
+                         'params': {'pid': 'pid'}},
                     ],
                 },
             },

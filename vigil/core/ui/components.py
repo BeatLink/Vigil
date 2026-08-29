@@ -1,3 +1,4 @@
+"""Reusable NiceGUI building blocks shared by the UI_SPEC renderer and plugin views."""
 import asyncio
 from typing import Optional
 from nicegui import ui
@@ -6,6 +7,7 @@ from .theme import STATUS_COLORS
 
 
 def offload(read_fn):
+    """Wrap a blocking store read as a coroutine that runs it on the default executor."""
     async def _run(*args, **kwargs):
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: read_fn(*args, **kwargs))
@@ -13,6 +15,7 @@ def offload(read_fn):
 
 
 def refresh_rows(table, new_rows) -> None:
+    """Replace a table's rows only when they changed, so unchanged tables send nothing."""
     if new_rows != table.rows:
         table.rows = new_rows
         table.update()
@@ -39,6 +42,7 @@ def card(classes: str = '', padding: bool = True):
     return ui.card().classes(f'{p} {classes}')
 
 def info_card(title: str, value: str = '--', value_classes: str = VALUE_CLASS, card_classes: str = 'flex-1 min-w-[9rem]'):
+    """Render a small labeled-value card and return the value label for later binding."""
     with card(f'h-24 overflow-hidden items-center justify-center gap-1 {card_classes}'):
         ui.label(title).classes(LABEL_CLASS)
         # A value is a heading, and headings are never accent-colored (§6.8);
@@ -58,7 +62,25 @@ def action_button(text: str, on_click=None, icon: str = 'play_arrow',
     return ui.button(text, icon=icon, on_click=on_click, color=None).props('no-caps').classes(classes)
 
 def section_title(text: str, classes: str = ''):
+    """Render a section heading in the shared title style."""
     return ui.label(text).classes(f'{SECTION_CLASS} mb-6 {classes}')
+
+def feed_columns(target_label: Optional[str] = None, sortable: tuple = (),
+                 message_classes: str = '') -> list:
+    """Build the shared time/level/message column set, optionally with a target column."""
+    columns = [
+        {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left',
+         'sortable': 'timestamp' in sortable},
+        {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left',
+         'sortable': 'level' in sortable},
+    ]
+    if target_label:
+        columns.append({'name': 'target', 'label': target_label, 'field': 'target',
+                        'align': 'left', 'sortable': 'target' in sortable})
+    columns.append({'name': 'message', 'label': 'Message', 'field': 'message',
+                    'align': 'left', 'classes': message_classes})
+    return columns
+
 
 def _feed_table(page, read, title: str, full_height: bool):
     """A time/level/message table over any store read; the log and event
@@ -71,12 +93,9 @@ def _feed_table(page, read, title: str, full_height: bool):
         else:
             ui.label(title).classes(f'{LABEL_CLASS} mb-2')
 
-        columns = [
-            {'name': 'ts', 'label': 'Time', 'field': 'timestamp', 'align': 'left', 'sortable': True},
-            {'name': 'lvl', 'label': 'Level', 'field': 'level', 'align': 'left'},
-            {'name': 'msg', 'label': 'Message', 'field': 'message', 'align': 'left',
-             'classes': 'text-wrap font-mono' if full_height else ''},
-        ]
+        columns = feed_columns(
+            sortable=('timestamp',),
+            message_classes='text-wrap font-mono' if full_height else '')
         table_classes = 'w-full border-none' + (' h-[600px]' if full_height else '')
         table = ui.table(columns=columns, rows=[]).classes(table_classes)
         if full_height:
@@ -90,6 +109,7 @@ def _feed_table(page, read, title: str, full_height: bool):
 
 def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent Logs',
              limit: int = 15, full_height: bool = False):
+    """Render a feed table over the target's recent log lines."""
     return _feed_table(
         page, lambda: page.plugin.data.log_lines(target, filter_prefix, limit=limit),
         title, full_height)
@@ -97,13 +117,15 @@ def log_table(page, target: str, filter_prefix: str = '', title: str = 'Recent L
 def event_table(page, plugin_name: str, plugin_id: str = '', target: str = '',
                 title: str = 'Recent Events', limit: int = 100,
                 full_height: bool = False):
+    """Render a feed table over the plugin's recent events."""
     prefix = f"[{plugin_name}] "
     return _feed_table(
         page, lambda: page.plugin.data.plugin_events(plugin_id, prefix, target, limit=limit),
         title, full_height)
 
 
-def history_chart(page, title: str, collector: str, metric_name: str, limit: int = 30):
+def history_chart(page, title: str, plugin_id: str, metric_name: str, limit: int = 30):
+    """Render a line chart of one metric's recent history, repainted on push and scheme flips."""
     from vigil.core.ui import theme
 
     with card('w-full h-80 mb-4'):
@@ -133,7 +155,7 @@ def history_chart(page, title: str, collector: str, metric_name: str, limit: int
         theme.on_scheme_change(_repaint)
 
         def _read():
-            history = page.plugin.data.metric_history(collector, metric_name, limit=limit)
+            history = page.plugin.data.metric_history(plugin_id, metric_name, limit=limit)
             return (
                 [m.timestamp.strftime('%H:%M:%S') for m in history],
                 [m.value for m in history],
@@ -174,16 +196,7 @@ def _resolve_repeat_items(plugin, repeat_spec: dict) -> list:
         except (ValueError, TypeError):
             return []
         if not isinstance(data, list):
-            dict_fields = repeat_spec.get('dict_fields')
-            if dict_fields:
-                # Project selected present keys of a single settings dict into
-                # one {'label': ..., 'value': ...} item per key (e.g. cloud.py's
-                # instance_id/region/az/zone, only the ones the provider set).
-                return [
-                    {'label': key.replace('_', ' ').upper(), 'value': str(data[key])}
-                    for key in dict_fields if data.get(key)
-                ]
-            return [data]
+            return []
         # A list of plain strings (e.g. DNS answers) becomes {'label': ..., 'value': ...}
         # items so the same item_label/item_value machinery applies uniformly.
         return [
@@ -255,6 +268,7 @@ _LABEL_TRANSFORMS = {
 
 
 def render_repeat_card(plugin, page, repeat_spec: dict):
+    """Render one chip or card per item resolved from a repeat spec's data source."""
     from vigil.core.ui.spec import FORMATTERS, ITEM_COLOR_RULES, ITEM_FORMATTERS, resolve
     from vigil.core.ui.theme import STATUS_COLORS
 
@@ -311,6 +325,7 @@ def render_repeat_card(plugin, page, repeat_spec: dict):
 
 
 def render_buttons(plugin, button_specs: list):
+    """Render a row of action buttons from button specs, honoring their visibility predicates."""
     from vigil.core.ui.spec import ENABLED_PREDICATES, resolve
 
     with ui.row().classes('gap-2 items-center'):
@@ -325,7 +340,7 @@ def render_buttons(plugin, button_specs: list):
                 if s.get('kind') == 'dialog':
                     await open_dialog_impl(plugin, s['dialog'])
                     return
-                success = await plugin.on_action(s['id'])
+                success, _ = await plugin.run_action(s['id'])
                 if s.get('notify', True):
                     label = s.get('label', s['id'])
                     ui.notify(
@@ -349,6 +364,7 @@ def _substitute(template: str, row: Optional[dict], plugin) -> str:
 
 
 async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None):
+    """Open a named read or edit dialog from the plugin's dialog specs."""
     from vigil.core.ui.spec import _dialog_spec_for
     spec = _dialog_spec_for(plugin, dialog_name)
     if spec is None:
@@ -361,7 +377,7 @@ async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None)
         return {kwarg: (row or {}).get(field) for kwarg, field in (params_spec or {}).items()}
 
     if spec['kind'] == 'read':
-        ok, content = await plugin.action_with_output(spec['action_id'], **_resolve_params(spec.get('params')))
+        ok, content = await plugin.run_action(spec['action_id'], **_resolve_params(spec.get('params')))
         if not ok:
             ui.notify(content or 'Action failed', type='negative')
             return
@@ -376,7 +392,7 @@ async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None)
         return
 
     if spec['kind'] == 'edit':
-        ok, content = await plugin.action_with_output(
+        ok, content = await plugin.run_action(
             spec['load_action_id'], **_resolve_params(spec.get('load_params')))
         if not ok:
             ui.notify(content or 'Unable to load content', type='negative')
@@ -390,7 +406,7 @@ async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None)
                 async def save():
                     save_kwargs = _resolve_params(spec.get('save_params'))
                     save_kwargs[spec.get('save_content_kwarg', 'content')] = editor.value
-                    save_ok = await plugin.on_action(spec['save_action_id'], **save_kwargs)
+                    save_ok, _ = await plugin.run_action(spec['save_action_id'], **save_kwargs)
                     ui.notify(
                         spec.get('success_message', 'Saved') if save_ok else 'Save failed',
                         type='positive' if save_ok else 'negative',
@@ -404,6 +420,7 @@ async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None)
 
 
 def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optional[dict] = None):
+    """Render a data table with optional per-row action buttons, cell coloring and filtering."""
     from vigil.core.ui.spec import ENABLED_PREDICATES, ITEM_COLOR_RULES, resolve
     from vigil.core.ui.theme import STATUS_COLORS
 
@@ -465,9 +482,8 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
             await open_dialog_impl(plugin, action['dialog'], row=row)
             return
         params = {kwarg: row.get(field) for kwarg, field in action.get('params', {}).items()}
-        params.update(action.get('static_params', {}))
         action_id = action.get('action_id', action['id'])
-        success = await plugin.on_action(action_id, **params)
+        success, _ = await plugin.run_action(action_id, **params)
         if action.get('notify', True):
             label = action.get('tooltip', action_id).replace('_', ' ').title()
             ui.notify(
@@ -517,6 +533,7 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
 
 
 def render_job_panel(plugin, spec: dict):
+    """Render the run/cancel controls, progress line and history table for a plugin's jobs."""
     from vigil.core.ui.spec import ENABLED_PREDICATES, resolve
     from vigil.core.ui.theme import STATUS_COLORS
     from vigil.plugins.base.plugin_helpers import format_duration
@@ -555,13 +572,13 @@ def render_job_panel(plugin, spec: dict):
         last_progress_color = [None]
 
         def update():
-            running = plugin.engine.job_is_running(plugin)
+            running = plugin.jobs.is_running()
             enabled = enabled_predicate(plugin)
             run_btn.set_enabled(enabled and not running)
             cancel_btn.set_visibility(running)
 
             if running:
-                job = plugin.data.job(plugin.engine.job_current_id(plugin))
+                job = plugin.data.job(plugin.jobs.current_id())
                 progress_label.text = (job or {}).get('progress') or 'Starting...'
                 color = STATUS_COLORS['online']
             elif not enabled:
@@ -579,33 +596,35 @@ def render_job_panel(plugin, spec: dict):
                     'id': j['id'], 'started': j['started'], 'kind': j['kind'],
                     'state': j['state'], 'duration': format_duration(j['duration']),
                 }
-                for j in plugin.engine.job_recent(plugin, limit=history_limit)
+                for j in plugin.jobs.recent(limit=history_limit)
             ])
 
         on_data_event(update)
 
 
 async def _start(plugin, spec: dict):
-    if plugin.engine.job_is_running(plugin):
+    if plugin.jobs.is_running():
         ui.notify('A job is already running', type='warning')
         return
     ui.notify(f"{spec.get('run_label', 'Job')} started", type='positive')
-    asyncio.create_task(plugin.on_action(spec['run_action_id']))
+    asyncio.create_task(plugin.run_action(spec['run_action_id']))
 
 
 async def _cancel(plugin):
-    if await plugin.engine.job_cancel(plugin):
+    if await plugin.jobs.cancel():
         ui.notify('Cancellation requested', type='warning')
     else:
         ui.notify('No job is running', type='info')
 
 
 def render_host_card(target: str):
+    """Render the standard card naming the monitored host."""
     return info_card('TARGET HOST', target)
 
-def render_status_card(page, collector: str, metric_name: str, title: str = 'STATUS',
+def render_status_card(page, plugin_id: str, metric_name: str, title: str = 'STATUS',
                        on_text: str = 'ACTIVE', off_text: str = 'INACTIVE',
                        value_classes: str = VALUE_CLASS):
+    """Render an on/off status card bound to a 0-or-1 metric."""
     lbl = info_card(title, 'Checking...', value_classes=value_classes)
     page.track_metric(metric_name)
 

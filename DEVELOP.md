@@ -84,9 +84,11 @@ Collection is:
 A plugin never persists anything itself. Its `parse_results()` returns one
 `CollectResult` describing everything to write (metrics, logs, log lines,
 status, a snapshot, settings); the engine persists it. Out-of-cycle writes (a
-push heartbeat from the REST endpoint, a group's expand/collapse state) and
-job-row updates route back through the engine surface — `engine.apply`,
-`engine.set_setting`, `engine.create_job`/`finish_job`/etc.
+push heartbeat from the REST endpoint, a group's expand/collapse state) route
+back through the engine surface — `engine.apply`, `engine.set_setting` — and
+job-row updates go through `plugin.jobs`, the `JobsGateway` the engine wires
+onto each plugin (`jobs.create`/`jobs.finish`/etc.; the job panel reads
+`jobs.is_running`/`jobs.recent` and cancels via `jobs.cancel`).
 
 ## The write path: `db.apply_result`
 
@@ -290,7 +292,7 @@ any job with a pid is re-adopted by the owning plugin's next poll (pid alive →
 resume; pid/exit gone → finalize).
 
 Jobs live in the store like everything else, so **job ids are assigned by the
-store**, not by SQLite's autoincrement — `create_job` returns an id
+store**, not by SQLite's autoincrement — `jobs.create` returns an id
 immediately, with the row persisted asynchronously under that same id. A
 `JobRecord` is the one mutable record type (successive polls advance `pid`,
 `progress`, `state`, `output_seq` in place); readers take a rendered dict via
@@ -335,12 +337,18 @@ that `read_fn` is pure with no NiceGUI element access. Element updates
 awaiting, back on the loop.
 
 **Indexing.** `Metric` carries a composite index
-`(collector, metric_name, timestamp)`. No live read uses it; it serves
+`(plugin_id, metric_name, timestamp)`. No live read uses it; it serves
 hydration (which loads the recent tail of each series in timestamp order) and
 the retention prune. Fresh DBs get it from `create_tables`; existing DBs get it
 from `_migrate`, which also drops the single-column indexes no query ever used
 (`metric_target`, `metric_metric_name`, `logline_source`, most of `job`'s) —
 each was pure write amplification on the hottest tables.
+
+**Naming.** Every table spells the collector id `plugin_id`. Legacy DBs
+arrive with per-table variants (`metric.collector`, `event.source_id`,
+`statushistory.collector_id`, `logline.source`); `_migrate_renames` converges
+them before `create_tables`, since the model-declared metric index already
+references `plugin_id`.
 
 **Retention.** Metrics and a status row are written on every poll of every
 plugin, so both tables grow unbounded without pruning. Alongside the prunes,

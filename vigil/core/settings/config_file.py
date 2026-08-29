@@ -1,3 +1,4 @@
+"""Loads and validates config.yaml into the typed VigilConfig tree."""
 import yaml
 import logging
 from pathlib import Path

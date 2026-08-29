@@ -18,7 +18,7 @@ from typing import Dict, Any, List, Optional
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
-from vigil.core.connectors import ssh_connector as jobs
+from vigil.core.connectors import ssh_connector as detached
 from vigil.plugins.base.plugin_helpers import parse_duration, format_duration, format_age
 
 
@@ -295,7 +295,7 @@ class Borg(Plugin):
         # handler, no streaming channel.
         job = self._running_job()
         if job is not None:
-            return [Command(jobs.poll_command(job['workdir'], job['pid'], job['output_seq']))]
+            return [Command(detached.poll_command(job['workdir'], job['pid'], job['output_seq']))]
         if not self.repo:
             return []
         commands = [Command(self._list_command())]
@@ -304,7 +304,7 @@ class Borg(Plugin):
         return commands
 
     def _running_job(self) -> Optional[dict]:
-        job = self.engine.job_running(self) if self.engine else None
+        job = self.jobs.running() if self.jobs else None
         if job and job.get('pid') and job.get('workdir'):
             return job
         return None
@@ -518,9 +518,9 @@ class Borg(Plugin):
         # Name the on-target workdir before the Job row exists; interpret_action
         # records the pid the launch prints and creates the row.
         token = f"{self.id}-{int(time.time())}"
-        workdir = jobs.workdir_for(token)
+        workdir = detached.workdir_for(token)
         self._pending_launch = (kind, _redact(command), workdir)
-        return ActionPlan(jobs.launch_command(command, workdir))
+        return ActionPlan(detached.launch_command(command, workdir))
 
     def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
         if action_id not in ('run_backup', 'dry_run_backup'):
@@ -529,13 +529,13 @@ class Borg(Plugin):
         kind, redacted, workdir = getattr(self, '_pending_launch', ('backup', '', ''))
         self._pending_launch = None
 
-        pid = jobs.parse_launch(result.stdout) if result.exit_code == 0 else None
+        pid = detached.parse_launch(result.stdout) if result.exit_code == 0 else None
         if pid is None:
             return CollectResult.failed(
                 f"Failed to launch {kind}: {(result.stderr or result.stdout).strip()[:200]}")
 
-        job_id = self.engine.create_job(self, kind, redacted, workdir)
-        self.engine.set_job_pid(job_id, pid)
+        job_id = self.jobs.create(kind, redacted, workdir)
+        self.jobs.set_pid(job_id, pid)
         return CollectResult(
             logs=[(f"{kind.capitalize()} started (pid {pid})", "INFO")],
             success=True,
@@ -546,15 +546,15 @@ class Borg(Plugin):
         new output lines, updates the progress summary, and on completion
         finalizes the Job row and returns the interpreted outcome."""
         job_id = job['id']
-        poll = jobs.parse_poll(result.stdout)
+        poll = detached.parse_poll(result.stdout)
 
-        lines, consumed = jobs.split_lines(poll.new_output)
+        lines, consumed = detached.split_lines(poll.new_output)
         if lines:
-            self.engine.append_job_output(job_id, lines)
-            self.engine.bump_job_output_seq(job_id, job['output_seq'] + consumed)
+            self.jobs.append_output(job_id, lines)
+            self.jobs.bump_output_seq(job_id, job['output_seq'] + consumed)
             summary = self._progress_from_lines(lines)
             if summary:
-                self.engine.set_job_progress(job_id, summary)
+                self.jobs.set_progress(job_id, summary)
 
         still_running = poll.exit_code is None and poll.alive
         if still_running:
@@ -564,14 +564,14 @@ class Borg(Plugin):
         # file (target rebooted mid-job → treat as failed).
         kind = job['kind']
         if poll.exit_code is None:
-            self.engine.finish_job(job_id, 'failed', exit_code=-1,
-                                   error='Process ended without writing an exit code')
+            self.jobs.finish(job_id, 'failed', exit_code=-1,
+                             error='Process ended without writing an exit code')
             return CollectResult.failed(f"{kind.capitalize()} ended unexpectedly")
 
         exit_code = poll.exit_code
         state = 'succeeded' if exit_code in (0, 1) else 'failed'
-        self.engine.finish_job(job_id, state, exit_code=exit_code,
-                               error=None if state == 'succeeded' else f"Exited with status {exit_code}")
+        self.jobs.finish(job_id, state, exit_code=exit_code,
+                         error=None if state == 'succeeded' else f"Exited with status {exit_code}")
 
         if exit_code == 0:
             return CollectResult(logs=[(f"{kind.capitalize()} completed successfully", "INFO")], success=True)

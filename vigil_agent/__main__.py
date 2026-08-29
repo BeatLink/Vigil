@@ -9,6 +9,7 @@ from vigil_agent.config import AgentConfig
 
 
 def main() -> None:
+    """Parse the command line and run the agent's connection loop."""
     parser = argparse.ArgumentParser(
         prog="vigil-agent",
         description="Vigil agent — connects outward to a Vigil server and "

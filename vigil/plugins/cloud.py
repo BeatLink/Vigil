@@ -2,7 +2,8 @@
 established by curling the 169.254.169.254 metadata endpoint via SSH commands
 on the target. Config: provider ('auto' tries all three, or name one to probe
 just it). A recognized provider is online, with its instance fields stored as
-a setting for the detail cards; no responding metadata endpoint is offline
+a setting for the summary cards and as the snapshot behind the detail cards;
+no responding metadata endpoint is offline
 rather than failed, since not being a cloud host is a finding, not an
 error."""
 
@@ -80,10 +81,15 @@ class Cloud(Plugin):
                 f"{fields.get('instance_id', '?')} ({fields.get('instance_type', '?')})",
                 "INFO",
             ))
+            details = [
+                {'label': key.replace('_', ' ').upper(), 'value': str(fields[key])}
+                for key in ('instance_id', 'region', 'az', 'zone') if fields.get(key)
+            ]
             return CollectResult(
                 metrics={'on_cloud': 1.0},
                 logs=logs,
                 status='online',
+                snapshot=details,
                 settings={f"cloud:{self.id}": json.dumps(fields)},
             )
 
@@ -123,9 +129,6 @@ class Cloud(Plugin):
                 'type_card': {'title': 'INSTANCE TYPE', 'value_attr': '_instance_type_text'},
                 'detail': {
                     'repeat': {
-                        'source': 'setting',
-                        'setting_key': 'cloud:{plugin_id}',
-                        'dict_fields': ['instance_id', 'region', 'az', 'zone'],
                         'container': 'cards',
                         'empty_text': 'No cloud metadata',
                     },

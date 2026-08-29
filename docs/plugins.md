@@ -10,6 +10,7 @@ config examples. For what Vigil is and how to run it, see the
 - Plugin types:
   [`uptime`](#uptime) ·
   [`push`](#push) ·
+  [`http`](#http) ·
   [`dns_record`](#dns_record) ·
   [`ddns_updater`](#ddns_updater) ·
   [`systemd_service`](#systemd_service) ·
@@ -50,6 +51,7 @@ config examples. For what Vigil is and how to run it, see the
 |------|----------|------------|-------------|---------|
 | [`uptime`](#uptime)                     | Host reachability                     | ICMP ping                                        | `up`, `latency_ms`                              | — |
 | [`push`](#push)                         | External heartbeat (dead man's switch) | REST API (caller pushes in)                     | `last_push_epoch`, `reported_up`, `value`       | — |
+| [`http`](#http)                         | HTTP(S)/WebSocket endpoint health     | HTTP from the Vigil host, or `websocat` over SSH | `probe_ok`, `probe_status`, `probe_latency_ms`  | — |
 | [`dns_record`](#dns_record)             | DNS record resolution                 | DNS query (via dnspython, in-process)            | `resolved`, `ttl`, `matches_expected`            | — |
 | [`ddns_updater`](#ddns_updater)         | Dynamic DNS record kept current       | Public IP lookup + DNS query (in-process)        | `in_sync`, `last_update_epoch`                   | Force Update |
 | [`systemd_service`](#systemd_service)   | systemd unit state / last run         | SSH (`systemctl`)                                | `active` *or* `last_run_epoch`, `last_run_success` | Restart, Stop, Enable, Disable |
@@ -86,7 +88,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -141,6 +143,69 @@ curl "https://vigil.example.com/api/push/nightly-backup/a1b2c3d4e5f6...?status=u
 
 # Or report a failure the job detected itself, while still checking in on time:
 curl "https://vigil.example.com/api/push/nightly-backup/a1b2c3d4e5f6...?status=down&msg=disk+full"
+```
+
+---
+
+### `http`
+Generic endpoint probe: is this URL reachable and answering sanely, and how fast. Covers the thin "GET this URL with this auth, check the body looks right" service checks that don't warrant a dedicated plugin. Two probe kinds, selected by the URL scheme:
+
+- **`http://` / `https://`** — the request runs from the Vigil host (the URL must be reachable from it), with configurable method, headers, body and basic auth. Latency is recorded and charted.
+- **`ws://` / `wss://`** — the probe pipes `body` into `websocat` on the *target* over SSH (websocat must be installed there); on agent-backed hosts the agent samples it locally. Success is a reply matching `expect`.
+
+A reply matching every expectation is online; anything else — a connection failure, an unexpected status, or a body that fails the `expect` checks (e.g. a login page served with a 200) — is failed. There is no warning tier.
+
+| Option              | Description                                                              |
+|---------------------|--------------------------------------------------------------------------|
+| `url`               | Endpoint to probe *(required)*                                          |
+| `method`            | HTTP method (default: `GET`)                                            |
+| `headers`           | *(Optional)* Extra request headers                                      |
+| `body`              | *(Optional)* Request body, or the text sent into the websocket          |
+| `username`          | *(Optional)* Basic-auth username (http only)                            |
+| `password` / `password_command` | Basic-auth secret, literal or resolved once at startup      |
+| `request_timeout`   | Probe timeout in seconds (default: `10`)                                |
+| `check_title`       | Card and chart title in the UI (default: `PROBE`)                       |
+| `expect.status`     | Accepted HTTP status, int or list (default: `200`)                      |
+| `expect.body_contains` | String or list — all must appear in the body, case-insensitive       |
+| `expect.body_contains_any` | String or list — at least one must appear, case-insensitive      |
+
+**Metrics**: `probe_ok` (always); `probe_status`, `probe_latency_ms` (http only)
+
+```yaml
+# An OPDS feed behind basic auth: a 200 that is actually a login page fails
+- name: "Calibre-Web"
+  type: "http"
+  url: "http://books.example.com:8083/opds"
+  username: "vigil"
+  password_command: "cat /run/secrets/calibre-vigil"
+  check_title: "OPDS FEED"
+  expect:
+    body_contains: "<feed"
+    body_contains_any: ["atom", "opds"]
+
+# A CalDAV server: PROPFIND with the 207 Multi-Status reply as success
+- name: "Radicale"
+  type: "http"
+  url: "https://dav.example.com/"
+  method: "PROPFIND"
+  headers: { "Depth": "0", "Content-Type": "application/xml" }
+  body: '<?xml version="1.0"?><propfind xmlns="DAV:"><prop><current-user-principal/></prop></propfind>'
+  username: "vigil"
+  password_command: "cat /run/secrets/radicale-vigil"
+  check_title: "PROPFIND"
+  expect:
+    status: 207
+
+# A websocket service, probed on the target itself (needs websocat there)
+- name: "OpenBooks"
+  type: "http"
+  url: "ws://127.0.0.1:9777/ws"
+  body: '{"type":1,"payload":{}}'
+  check_title: "IRC BRIDGE"
+  expect:
+    body_contains: '"appearance":1'
+  ssh_config:
+    host: "server.example.com"
 ```
 
 ---
@@ -638,7 +703,6 @@ Monitors running processes over SSH via `ps`, sorted by CPU usage. Process data 
 |-----------------|------------------------------------------------------------------------------|
 | `max_processes` | Maximum number of processes to display (default: `20`)                       |
 | `require_sudo`  | Prefix kill commands with `sudo` (default: `false`)                          |
-| `kill_signal`   | Default signal for the kill action: `TERM` or `KILL` (default: `TERM`). Per-row buttons always offer both regardless of this setting. |
 | `cpu_warning`   | Top-process CPU % that triggers `warning` (optional — omit to disable)       |
 | `cpu_threshold` | Top-process CPU % that triggers `failed`  (optional — omit to disable)       |
 | `interval`      | Polling frequency (default: `60`)                                             |

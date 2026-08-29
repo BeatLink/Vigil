@@ -31,7 +31,7 @@ class TestMetricScoping:
         db_manager.flush()
         with db.connection_context():
             row = Metric.select().where(Metric.metric_name == "last_backup_epoch").first()
-        assert row.collector == "odin-borgmatic-on-disk"
+        assert row.plugin_id == "odin-borgmatic-on-disk"
 
     def test_each_monitor_reads_its_own_metric(self, colliding, db_manager):
         a, b = colliding
@@ -57,7 +57,7 @@ class TestLogLineScoping:
         db_manager.flush()
         with db.connection_context():
             row = LogLine.select().first()
-        assert row.source == "odin-borgmatic-on-disk"
+        assert row.plugin_id == "odin-borgmatic-on-disk"
 
     def test_identical_lines_from_siblings_both_survive(self, colliding, db_manager):
         from vigil.core.database.database import LogLine
@@ -68,7 +68,7 @@ class TestLogLineScoping:
             ]))
         db_manager.flush()
         with db.connection_context():
-            sources = {r.source for r in LogLine.select()}
+            sources = {r.plugin_id for r in LogLine.select()}
         assert sources == {"odin-borgmatic-on-disk", "heimdall-borgmatic-on-disk"}
 
 
@@ -127,7 +127,7 @@ class TestMigration:
 
         with peewee_db.connection_context():
             cols = {c.name for c in peewee_db.get_columns('event')}
-        assert 'source_id' in cols
+        assert 'plugin_id' in cols
         if not peewee_db.is_closed():
             peewee_db.close()
 
@@ -151,7 +151,7 @@ class TestEventScoping:
         db_manager.flush()
         with db.connection_context():
             row = Event.select().where(Event.message.contains("hello")).first()
-        assert row.source_id == "odin-borgmatic-on-disk"
+        assert row.plugin_id == "odin-borgmatic-on-disk"
 
     def test_event_prefix_keeps_the_display_name(self, colliding, db_manager):
         a, _ = colliding
@@ -168,5 +168,5 @@ class TestEventScoping:
         db_manager.flush()
         with db.connection_context():
             got = [e.message for e in
-                   Event.select().where(Event.source_id == "heimdall-borgmatic-on-disk")]
+                   Event.select().where(Event.plugin_id == "heimdall-borgmatic-on-disk")]
         assert len(got) == 1 and "from b" in got[0]

@@ -57,7 +57,7 @@ def thresh_plugin(make_plugin):
 def _latest_status(plugin_id: str = "test-procs") -> str | None:
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == plugin_id
+            StatusHistory.plugin_id == plugin_id
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -65,7 +65,7 @@ def _latest_status(plugin_id: str = "test-procs") -> str | None:
 def _latest_metric(metric: str, name: str = "test-procs") -> float | None:
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == name) & (Metric.metric_name == metric)
+            (Metric.plugin_id == name) & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 
@@ -175,34 +175,28 @@ class TestProcessesCollection:
 
 class TestProcessesKillAction:
     async def test_kill_term_sends_correct_command(self, plugin):
-        plan = plugin.plan_action('kill', pid=123, signal='TERM')
+        plan = plugin.plan_action('kill_term', pid=123)
         assert plan.command == "kill -TERM 123"
-        outcome = plugin.interpret_action('kill', CmdResult(0, "", ""), pid=123, signal='TERM')
+        outcome = plugin.interpret_action('kill_term', CmdResult(0, "", ""), pid=123)
         assert outcome.success is True
 
     async def test_kill_kill_sends_correct_command(self, plugin):
-        plan = plugin.plan_action('kill', pid=456, signal='KILL')
+        plan = plugin.plan_action('kill_kill', pid=456)
         assert plan.command == "kill -KILL 456"
 
     async def test_kill_with_sudo(self, make_plugin):
         cfg = {**BASE_CFG, "name": "test-sudo", "id": "test-sudo", "require_sudo": True}
         p = make_plugin(Processes, cfg)
-        plan = p.plan_action('kill', pid=99, signal='TERM')
+        plan = p.plan_action('kill_term', pid=99)
         assert plan.command == "sudo kill -TERM 99"
-
-    async def test_kill_uses_default_signal_from_config(self, make_plugin):
-        cfg = {**BASE_CFG, "name": "test-sig", "id": "test-sig", "kill_signal": "KILL"}
-        p = make_plugin(Processes, cfg)
-        plan = p.plan_action('kill', pid=77)
-        assert plan.command == "kill -KILL 77"
 
     async def test_kill_failure_returns_false(self, plugin):
         outcome = plugin.interpret_action(
-            'kill', CmdResult(1, "", "Operation not permitted"), pid=1, signal='TERM')
+            'kill_term', CmdResult(1, "", "Operation not permitted"), pid=1)
         assert outcome.success is False
 
     async def test_kill_missing_pid_returns_false(self, plugin):
-        plan = plugin.plan_action('kill')
+        plan = plugin.plan_action('kill_term')
         assert plan.success is False
 
     async def test_unknown_action_returns_false(self, plugin):

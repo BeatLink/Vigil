@@ -21,7 +21,7 @@ def _make_tcp(states: list) -> str:
 def _latest_status() -> str | None:
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == "test-connections"
+            StatusHistory.plugin_id == "test-connections"
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -29,7 +29,7 @@ def _latest_status() -> str | None:
 def _latest_metric(metric: str) -> float | None:
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == "test-connections") & (Metric.metric_name == metric)
+            (Metric.plugin_id == "test-connections") & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 

@@ -25,7 +25,7 @@ def plugin(make_plugin):
 def _latest_status(plugin_id: str = "test-ports"):
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == plugin_id
+            StatusHistory.plugin_id == plugin_id
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -33,7 +33,7 @@ def _latest_status(plugin_id: str = "test-ports"):
 def _latest_metric(name: str, metric: str):
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == name) & (Metric.metric_name == metric)
+            (Metric.plugin_id == name) & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 

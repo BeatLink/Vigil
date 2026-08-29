@@ -38,6 +38,10 @@ class Plugin(PluginConfigMixin, ABC):
     # no writes). See vigil/core/coordination/data_view.py.
     data: "PluginDataView"
 
+    # Detached-job control scoped to this plugin, injected by the engine's
+    # wiring. See vigil/core/coordination/jobs.py.
+    jobs = None
+
     # Plugins that use the declarative render path (spec.generic_render)
     # override this as a @property returning a UISpec dict. Plugins with a
     # hand-written render_ui() may leave it unset — every UI_SPEC consumer
@@ -136,19 +140,13 @@ class Plugin(PluginConfigMixin, ABC):
         agent, which is what lets a plugin declare both a poll path and a push
         path and run correctly over either transport.
 
-        Default: the generic sample stream when SAMPLED is set, else none.
-        A subclass with its own streams composes with super()."""
-        return self.sample_streams()
-
-    def sample_streams(self) -> List["StreamSpec"]:
-        """The generic sample stream: the poll's own command, run by the agent
-        at this monitor's own interval and pushed as it completes.
-
-        `max_quiet` lets the agent skip pushing unchanged results while still
-        sending one at least every fifth interval, so the monitor's stored
-        status and metrics keep advancing and a quiet-but-healthy monitor can
-        never read as stale; an older agent ignores the param and pushes every
-        interval."""
+        Default: when SAMPLED is set and commands() is a single command, the
+        generic sample stream — the poll's own command, run by the agent at
+        this monitor's own interval and pushed as it completes. `max_quiet`
+        lets the agent skip pushing unchanged results while still sending one
+        at least every fifth interval, so a quiet-but-healthy monitor can
+        never read as stale; an older agent ignores the param. A subclass
+        with its own streams composes with super()."""
         if not self.SAMPLED:
             return []
         commands = self.commands()
@@ -169,7 +167,7 @@ class Plugin(PluginConfigMixin, ABC):
         Derived from the stream actually produced, not from SAMPLED alone: a
         plugin whose commands() is empty or multi-command yields no sample
         stream, and suppressing its poll would leave it collecting nothing."""
-        return bool(self.sample_streams())
+        return any(s.kind == 'sample' for s in self.subscriptions())
 
     def parse_event(self, stream_id: str, payload: Dict[str, Any],
                     timestamp: float) -> Optional[CollectResult]:
@@ -177,14 +175,12 @@ class Plugin(PluginConfigMixin, ABC):
         None to ignore it. Called out of band from the polling cycle, once per
         inbound frame, so it must stay cheap as well as pure.
 
-        `stream_id` identifies which of this plugin's subscriptions fired."""
-        return self.parse_sample(stream_id, payload)
-
-    def parse_sample(self, stream_id: str,
-                     payload: Dict[str, Any]) -> Optional[CollectResult]:
-        """Interpret a generic sample frame through the plugin's own parse().
-        The agent sends back the same (exit_code, stdout, stderr) triple the
-        command connector returns, so the poll's parser needs no push variant."""
+        `stream_id` identifies which of this plugin's subscriptions fired.
+        Default: interpret the generic sample frame through the plugin's own
+        parse() — the agent sends back the same (exit_code, stdout, stderr)
+        triple the command connector returns, so the poll's parser needs no
+        push variant. A subclass with its own streams delegates unrecognized
+        stream ids to super()."""
         if not stream_id.endswith(f':{self.SAMPLE_STREAM}'):
             return None
         return self.parse([CmdResult(
@@ -213,11 +209,8 @@ class Plugin(PluginConfigMixin, ABC):
         a failure message alongside the outcome. Default assumes a CmdResult."""
         return result.exit_code == 0
 
-    async def on_action(self, action_id: str, **kwargs) -> bool:
-        success, _ = await self.engine.dispatch_action(self, action_id, **kwargs)
-        return success
-
-    async def action_with_output(self, action_id: str, **kwargs) -> tuple:
+    async def run_action(self, action_id: str, **kwargs) -> tuple:
+        """Dispatch one UI-triggered action through the engine; returns (success, content)."""
         success, metadata = await self.engine.dispatch_action(self, action_id, **kwargs)
         return success, str((metadata or {}).get('content') or '')
 

@@ -52,7 +52,6 @@ class RepeatSpec(TypedDict, total=False):
     empty_text: str
     # source == 'setting':
     setting_key: str               # '{plugin_id}'-formatted
-    dict_fields: List[str]
     # source == 'metrics_prefix':
     metrics_prefix: str
     metrics_suffix: str
@@ -69,11 +68,6 @@ class MetricFieldSpec(TypedDict):
 class ChartSpec(TypedDict, total=False):
     title: str
     metric: str
-
-
-class DynamicChartsSpec(TypedDict, total=False):
-    widget: str                    # cell name, defaults to 'charts'
-    items_attr: str                # getattr(plugin, items_attr) -> Iterable[(title, metric_name)]
 
 
 class ColumnSpec(TypedDict, total=False):
@@ -95,7 +89,6 @@ class RowActionSpec(TypedDict, total=False):
     dialog: str                    # dialog name (see DialogSpec), when kind == 'dialog'
     action_id: str                 # defaults to `id` when omitted
     params: Dict[str, str]         # kwarg name -> row field name
-    static_params: Dict[str, Any]
     notify: bool                   # default True
 
 
@@ -119,7 +112,7 @@ class ButtonSpec(TypedDict, total=False):
     color: str
     flat: bool                     # default True
     visible_if: str                # ENABLED_PREDICATES key
-    kind: str                      # 'dialog' routes to `dialog`; anything else dispatches on_action(id)
+    kind: str                      # 'dialog' routes to `dialog`; anything else dispatches run_action(id)
     dialog: str
     notify: bool                   # default True
 
@@ -166,7 +159,6 @@ class UISpec(TypedDict, total=False):
     cards: Dict[str, CardSpec]
     chart: ChartSpec                       # shorthand for charts={'chart': ...}
     charts: Dict[str, ChartSpec]
-    dynamic_charts: DynamicChartsSpec
     events: Union[bool, Dict[str, Any]]    # True, or kwargs forwarded to UIOrchestrator.events_table
     tables: Dict[str, TableSpec]
     filters: Dict[str, FilterSpec]         # keyed by the same widget_name as `tables`

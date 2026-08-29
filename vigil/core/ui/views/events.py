@@ -4,14 +4,10 @@ from typing import Callable
 from nicegui import ui
 from vigil.core.contracts import EngineLike
 from ..theme import STATUS_COLORS, TEXT_SECONDARY
-from ..components import card, section_title, on_data_event, offload, refresh_rows
+from ..components import card, feed_columns, section_title, on_data_event, offload, refresh_rows
 
-_EVENT_COLUMNS = [
-    {'name': 'timestamp', 'label': 'Time', 'field': 'timestamp', 'align': 'left', 'sortable': True},
-    {'name': 'level', 'label': 'Level', 'field': 'level', 'align': 'left', 'sortable': True},
-    {'name': 'target', 'label': 'Target', 'field': 'target', 'align': 'left', 'sortable': True},
-    {'name': 'message', 'label': 'Message', 'field': 'message', 'align': 'left'},
-]
+_EVENT_COLUMNS = feed_columns(target_label='Target',
+                              sortable=('timestamp', 'level', 'target'))
 
 _LEVEL_CELL_SLOT = '''
     <q-td :props="props">

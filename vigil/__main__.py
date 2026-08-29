@@ -19,6 +19,7 @@ __all__ = ["VigilEngine", "main"]
 
 
 def main():
+    """Parse the command line and start the Vigil server."""
     parser = argparse.ArgumentParser(description="Vigil")
     parser.add_argument("--config", default="config.yaml", help="Path to config file")
     parser.add_argument(

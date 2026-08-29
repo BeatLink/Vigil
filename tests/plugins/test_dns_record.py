@@ -19,7 +19,7 @@ def _fails(kind, error=None):
 def _latest_status(pid):
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == pid
+            StatusHistory.plugin_id == pid
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -27,7 +27,7 @@ def _latest_status(pid):
 def _latest_metric(pid, name):
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == pid) & (Metric.metric_name == name)
+            (Metric.plugin_id == pid) & (Metric.metric_name == name)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 

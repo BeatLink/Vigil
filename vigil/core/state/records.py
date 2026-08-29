@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 @dataclass(frozen=True, slots=True)
 class MetricRecord:
     target: str
-    collector: str
+    plugin_id: str
     metric_name: str
     value: float
     metadata: Optional[str] = None
@@ -34,7 +34,7 @@ class MetricRecord:
         return {
             "timestamp": self.timestamp,
             "target": self.target,
-            "collector": self.collector,
+            "plugin_id": self.plugin_id,
             "metric_name": self.metric_name,
             "value": self.value,
             "metadata": self.metadata,
@@ -46,7 +46,7 @@ class EventRecord:
     level: str
     message: str
     target: Optional[str] = None
-    source_id: Optional[str] = None
+    plugin_id: Optional[str] = None
     timestamp: datetime = None  # type: ignore[assignment]
 
     def as_row(self) -> Dict[str, Any]:
@@ -55,14 +55,14 @@ class EventRecord:
             "level": self.level,
             "message": self.message,
             "target": self.target,
-            "source_id": self.source_id,
+            "plugin_id": self.plugin_id,
         }
 
 
 @dataclass(frozen=True, slots=True)
 class LogLineRecord:
     target: str
-    source: str
+    plugin_id: str
     level: str
     message: str
     dedup_hash: str
@@ -72,7 +72,7 @@ class LogLineRecord:
         return {
             "timestamp": self.timestamp,
             "target": self.target,
-            "source": self.source,
+            "plugin_id": self.plugin_id,
             "level": self.level,
             "message": self.message,
             "dedup_hash": self.dedup_hash,
@@ -81,7 +81,7 @@ class LogLineRecord:
 
 @dataclass(frozen=True, slots=True)
 class StatusRecord:
-    collector_id: str
+    plugin_id: str
     state: str
     timestamp: datetime
 

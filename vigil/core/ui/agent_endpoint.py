@@ -24,6 +24,7 @@ def _tokens_match(given: str, expected: str) -> bool:
 
 
 def register_agent_endpoint(app: Any, registry: AgentRegistry) -> None:
+    """Mount the /api/agent/ws websocket that agents connect to."""
     from fastapi import WebSocket, WebSocketDisconnect
 
     @app.websocket('/api/agent/ws')

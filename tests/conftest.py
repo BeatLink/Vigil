@@ -56,9 +56,10 @@ def db_manager(tmp_path):
 
 class _FakeEngine:
     """Stands in for the Coordination Engine in plugin tests. Exposes the
-    narrow engine surface pure plugins call back into (apply/set_setting and
-    the DB-backed job methods). Mirrors VigilEngine's implementations so a
-    plugin behaves identically here and in the real app."""
+    narrow engine surface pure plugins call back into (apply/set_setting).
+    Mirrors VigilEngine's implementations so a plugin behaves identically
+    here and in the real app; job control rides plugin.jobs, wired in
+    make_plugin the way VigilEngine._wire_plugin does."""
 
     def __init__(self, db, plugin, connectors=None):
         self.db = db
@@ -82,49 +83,6 @@ class _FakeEngine:
 
     def set_setting(self, key, value):
         self.db.set_setting(key, value)
-
-    # --- job surface (DB-backed, same as VigilEngine) ---
-    def job_running(self, plugin):
-        jobs = self.db.running_jobs(plugin_id=plugin.id)
-        return jobs[0] if jobs else None
-
-    def job_is_running(self, plugin):
-        return self.job_running(plugin) is not None
-
-    def job_current_id(self, plugin):
-        job = self.job_running(plugin)
-        return job['id'] if job else None
-
-    def job_recent(self, plugin, limit=20):
-        return self.db.recent_jobs(plugin_id=plugin.id, limit=limit)
-
-    async def job_cancel(self, plugin):
-        from vigil.core.connectors.ssh_connector import cancel_command
-        job = self.job_running(plugin)
-        if not job or not job.get('pid'):
-            return False
-        await self.connectors.execute_raw(plugin.network, cancel_command(job['pid']))
-        self.db.finish_job(job['id'], 'cancelled', exit_code=130, error='Cancelled by user')
-        return True
-
-    def create_job(self, plugin, kind, command, workdir):
-        return self.db.create_job(plugin_id=plugin.id, target=plugin.target,
-                                  kind=kind, command=command, workdir=workdir)
-
-    def set_job_pid(self, job_id, pid):
-        self.db.set_job_pid(job_id, pid)
-
-    def set_job_progress(self, job_id, summary):
-        self.db.set_job_progress(job_id, summary)
-
-    def append_job_output(self, job_id, lines):
-        self.db.append_job_output(job_id, lines)
-
-    def bump_job_output_seq(self, job_id, new_seq):
-        self.db.bump_job_output_seq(job_id, new_seq)
-
-    def finish_job(self, job_id, state, exit_code=None, error=None):
-        self.db.finish_job(job_id, state, exit_code=exit_code, error=error)
 
 
 @pytest.fixture
@@ -160,6 +118,13 @@ def make_plugin(db_manager):
         plugin.storage = _PluginStore(db_manager, plugin.target, plugin.name, plugin.id)
         plugin.bind(PluginDataView(db_manager, plugin.id))
         plugin.engine = _FakeEngine(db_manager, plugin, connectors=connectors)
+
+        from vigil.core.coordination.jobs import JobsGateway
+
+        async def _cancel_exec(command):
+            await connectors.execute_raw(net, command)
+
+        plugin.jobs = JobsGateway(db_manager, plugin, cancel_exec=_cancel_exec)
         return plugin
 
     return factory

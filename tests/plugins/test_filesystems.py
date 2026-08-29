@@ -15,7 +15,7 @@ BASE_CFG = {"name": "test-fs", "id": "test-fs", "warning": 80, "threshold": 90,
 def _latest_status(pid="test-fs"):
     with db.connection_context():
         row = StatusHistory.select().where(
-            StatusHistory.collector_id == pid
+            StatusHistory.plugin_id == pid
         ).order_by(StatusHistory.timestamp.desc()).first()
     return row.state if row else None
 
@@ -23,7 +23,7 @@ def _latest_status(pid="test-fs"):
 def _latest_metric(metric, name="test-fs"):
     with db.connection_context():
         row = Metric.select().where(
-            (Metric.collector == name) & (Metric.metric_name == metric)
+            (Metric.plugin_id == name) & (Metric.metric_name == metric)
         ).order_by(Metric.timestamp.desc()).first()
     return row.value if row else None
 

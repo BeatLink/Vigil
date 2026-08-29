@@ -32,7 +32,7 @@ async def _render_actions(plugin: Any, actions_row: Any):
         info = await plugin.present()
         for action in info.get('actions', []):
             async def do_action(aid=action['action_id']):
-                success = await plugin.on_action(aid)
+                success, _ = await plugin.run_action(aid)
                 ui.notify('Action completed successfully' if success else 'Action failed',
                           type='positive' if success else 'negative')
 
