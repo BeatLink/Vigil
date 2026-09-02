@@ -591,6 +591,37 @@ Two hazards are worth knowing before editing either sheet:
   literals are parsed out of the token sheet at import, so they are not a
   second copy of the palette.
 
+## Overview charts: a donut for status, a treemap for type
+
+The overview's two cards look alike but carry different data, and only one of
+them suits a donut. Status has four fixed slices, so part-to-whole reads at a
+glance. Type does not: a modest config already declares ~25 monitor types, most
+of them once, which is the case a pie handles worst — two dozen near-identical
+slivers, a legend taller than the plot, and ECharts' nine-hue default palette
+cycling, so the tenth type is painted the same blue as the first.
+
+The type card is a treemap instead. Tile area is the monitor count and the label
+inside each tile carries identity, which frees color to mean something: each
+tile takes the *worst* status among its monitors (`_worst_status`, severity
+`failed > warning > offline > online`), drawn from the four reserved status
+tokens. So the chart costs no categorical palette at any type count, and one
+failed unit inside an otherwise healthy type is visible without opening it.
+Clicking a tile still filters the monitor table exactly as the donut slice did.
+
+Two ECharts hazards are pinned by tests in `tests/unit/test_overview_charts.py`:
+
+- **A treemap silently ignores a `levels[0]` block.** A `label` or `itemStyle`
+  parked there never reaches a tile, and nothing warns — the tiles just render
+  with ECharts' defaults. Both belong on the series.
+- **`nodeClick` must be `False`.** Left at its default, a click zooms into the
+  tile instead of filtering the table. The `click` event still fires, so the
+  existing `on_point_click` wiring is unaffected.
+
+Canvas-painted charts cannot read CSS custom properties, so the tiles take
+literal colors from `theme.current_palette()` and repaint through
+`theme.on_scheme_change` (§ above). The card's status key is plain DOM, so it
+uses the `var(--token)` colors directly and needs no repaint at all.
+
 ## Declarative UI spec
 
 Most plugins reduce to the same shape: a few metric cards with a formatter, a

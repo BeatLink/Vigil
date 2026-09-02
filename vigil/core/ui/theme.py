@@ -131,6 +131,7 @@ def palette(scheme: str = 'light') -> Dict[str, str]:
         border=table['border-default'],
         text=table['text-body'],
         text_secondary=table['text-secondary'],
+        text_on_fill=table['text-on-fill'],
     )
     return colors
 

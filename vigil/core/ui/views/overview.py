@@ -1,4 +1,4 @@
-"""The overview view: status and type donuts, the filterable monitor table and recent activity."""
+"""The overview view: the status donut and type treemap, the filterable monitor table and recent activity."""
 
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -9,6 +9,19 @@ from ..theme import STATUS_COLORS, ACCENT
 from ..components import card, feed_columns, section_title, on_data_event, offload, refresh_rows
 
 _STATUS_ORDER = ('online', 'failed', 'warning', 'offline')
+
+# Worst first. A type's tile takes the most severe status among its monitors, so
+# one failed service is visible even inside a type that is otherwise healthy.
+_STATUS_SEVERITY = ('failed', 'warning', 'offline', 'online')
+
+# The treemap's key, in DOM rather than on the canvas so it follows the scheme
+# with no repaint.
+_STATUS_LEGEND = ''.join(
+    '<span style="display:inline-flex;align-items:center;gap:4px;margin-right:12px">'
+    f'<span style="width:8px;height:8px;border-radius:2px;background:{STATUS_COLORS[name]}"></span>'
+    f'{name.capitalize()}</span>'
+    for name in _STATUS_ORDER
+)
 
 _MONITOR_COLUMNS = [
     {'name': 'name',   'label': 'Monitor', 'field': 'name',   'align': 'left', 'sortable': True},
@@ -54,7 +67,7 @@ class _ChartFilter:
 
 
 def _pie_options() -> dict:
-    """Base echart options shared by the status and type donuts."""
+    """Options for the status donut: four fixed slices, one per state."""
     return {
         'tooltip': {'trigger': 'item', 'formatter': '{b}: {c} ({d}%)'},
         'legend': {'bottom': '0', 'left': 'center', 'textStyle': {'fontSize': 12}},
@@ -67,6 +80,34 @@ def _pie_options() -> dict:
             'label': {'show': False},
             'data': []
         }]
+    }
+
+
+def _treemap_options() -> dict:
+    """Options for the type treemap: tile area is the monitor count, fill the
+    worst status among them. One tile per type, so 25 types cost no palette —
+    the label inside each tile carries identity and color is left to mean state."""
+    return {
+        'tooltip': {
+            ':formatter':
+                "p => `${p.name}: ${p.value} monitor${p.value === 1 ? '' : 's'}"
+                " — ${p.data.breakdown}`",
+        },
+        'series': [{
+            'type': 'treemap',
+            'roam': False,
+            # Without this a click zooms into the tile instead of filtering the table.
+            'nodeClick': False,
+            'breadcrumb': {'show': False},
+            'width': '100%', 'height': '100%',
+            'top': 0, 'left': 0, 'right': 0, 'bottom': 0,
+            # Both of these must sit on the series: a treemap silently ignores a
+            # levels[0] block, so styling put there never reaches the tiles.
+            'itemStyle': {'borderWidth': 2, 'gapWidth': 2, 'borderRadius': 4},
+            'label': {'show': True, 'position': 'insideTopLeft', 'fontSize': 10,
+                      'lineHeight': 13, 'overflow': 'truncate', 'formatter': '{b}\n{c}'},
+            'data': [],
+        }],
     }
 
 
@@ -103,26 +144,51 @@ def _build_table_rows(monitors, statuses, flt: _ChartFilter) -> list:
 
 
 def _build_chart_counts(monitors, statuses):
-    """Tallies monitors by status and by type for the two donuts."""
+    """Tallies monitors by status, and per type by status, for the two charts."""
     status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'offline': 0}
     type_counts = {}
     for m in monitors:
         st = statuses.get(m.id, 'offline')
         status_counts[st] = status_counts.get(st, 0) + 1
-        mtype = m.config.get('type', 'unknown')
-        type_counts[mtype] = type_counts.get(mtype, 0) + 1
+        by_status = type_counts.setdefault(m.config.get('type', 'unknown'), {})
+        by_status[st] = by_status.get(st, 0) + 1
     return status_counts, type_counts
 
 
+def _worst_status(by_status: dict) -> str:
+    """The most severe status present among one type's monitors."""
+    for name in _STATUS_SEVERITY:
+        if by_status.get(name):
+            return name
+    return 'offline'
+
+
+def _treemap_tiles(type_counts: dict, colors: dict) -> list:
+    """Builds the treemap's tiles, largest type first so the layout is stable."""
+    tiles = []
+    for mtype, by_status in type_counts.items():
+        status = _worst_status(by_status)
+        tiles.append({
+            'name': mtype.upper(),
+            'value': sum(by_status.values()),
+            'status': status,
+            'breakdown': ', '.join(f'{by_status[s]} {s}' for s in _STATUS_ORDER if by_status.get(s)),
+            'itemStyle': {'color': colors[status]},
+        })
+    tiles.sort(key=lambda t: (-t['value'], t['name']))
+    return tiles
+
+
 def _render_charts():
-    """Renders the two donut cards and returns (status_chart, type_chart)."""
+    """Renders the status and type cards and returns (status_chart, type_chart)."""
     with ui.row().classes('w-full gap-4 mb-6 halon-section-gap'):
         with card('flex-1 h-80 min-w-[320px]'):
             ui.label('Monitors by status').classes('halon-label mb-2')
             status_chart = ui.echart(_pie_options()).classes('w-full h-64')
         with card('flex-1 h-80 min-w-[320px]'):
-            ui.label('Monitors by type').classes('halon-label mb-2')
-            type_chart = ui.echart(_pie_options()).classes('w-full h-64')
+            ui.label('Monitors by type').classes('halon-label')
+            ui.html(_STATUS_LEGEND).classes('halon-caption mb-2')
+            type_chart = ui.echart(_treemap_options()).classes('w-full h-56')
     return status_chart, type_chart
 
 
@@ -185,17 +251,23 @@ def _wire_filtering(engine, monitors, flt: _ChartFilter, status_chart, type_char
 
 
 def _wire_charts(engine, monitors, flt: _ChartFilter, status_chart, type_chart, monitor_table):
-    """Feeds both donuts and the monitor table from status changes, diffing before repaint."""
+    """Feeds both charts and the monitor table from status changes, diffing before repaint."""
     last_statuses = {'value': None}
     chart_colors = {'value': theme.current_palette()}
 
     def _repaint_charts(colors):
         chart_colors['value'] = colors
-        for chart in (status_chart, type_chart):
-            chart.options['series'][0]['itemStyle']['borderColor'] = colors['surface']
-            chart.options['legend'].setdefault('textStyle', {})['color'] = colors['text_secondary']
-        for entry, state_name in zip(status_chart.options['series'][0]['data'], _STATUS_ORDER):
+        donut = status_chart.options['series'][0]
+        donut['itemStyle']['borderColor'] = colors['surface']
+        status_chart.options['legend'].setdefault('textStyle', {})['color'] = colors['text_secondary']
+        for entry, state_name in zip(donut['data'], _STATUS_ORDER):
             entry['itemStyle'] = {'color': colors[state_name]}
+
+        treemap = type_chart.options['series'][0]
+        treemap['itemStyle']['borderColor'] = colors['surface']
+        treemap['label']['color'] = colors['text_on_fill']
+        for tile in treemap['data']:
+            tile['itemStyle'] = {'color': colors[tile['status']]}
         status_chart.update()
         type_chart.update()
 
@@ -212,9 +284,7 @@ def _wire_charts(engine, monitors, flt: _ChartFilter, status_chart, type_chart, 
             {'value': status_counts[name], 'name': name.capitalize(), 'itemStyle': {'color': colors[name]}}
             for name in _STATUS_ORDER
         ]
-        type_chart.options['series'][0]['data'] = [
-            {'value': v, 'name': k.upper()} for k, v in type_counts.items()
-        ]
+        type_chart.options['series'][0]['data'] = _treemap_tiles(type_counts, colors)
         status_chart.update()
         type_chart.update()
         monitor_table.rows = _build_table_rows(monitors, statuses, flt)
@@ -246,7 +316,7 @@ def _render_recent_events(engine):
 
 
 def render_overview(engine: EngineLike, switch_view: Callable):
-    """Renders the overview: donut charts, the filterable monitor table and recent activity."""
+    """Renders the overview: the two charts, the filterable monitor table and recent activity."""
     section_title('Monitors')
 
     monitors = _collect_leaf_monitors(engine.plugins)
