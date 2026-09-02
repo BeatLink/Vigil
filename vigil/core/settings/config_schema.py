@@ -58,8 +58,17 @@ class MemorySettings(TypedDict, total=False):
 
 
 class AuthSettings(TypedDict, total=False):
+    """The single operator account guarding the dashboard, and how long a
+    sign-in lasts. Each secret may be given inline or as a ``*_file`` path read
+    once at startup. Without ``session_secret`` a key is generated per start,
+    so a restart signs everyone out."""
     username: str
+    password: str
     password_file: str
+    session_secret: str
+    session_secret_file: str
+    session_hours: int
+    remember_days: int
 
 
 class InfluxDBExporterSettings(TypedDict, total=False):

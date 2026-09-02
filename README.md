@@ -161,15 +161,24 @@ installation are covered in the [agent guide](docs/agent.md).
 
 ### Authentication
 
-By default the dashboard and REST API are unauthenticated — anyone who can reach the port has full read access and can trigger control actions. Set `auth.username` and `auth.password` (or `auth.password_file`, to keep the secret out of the YAML config) to require HTTP Basic Auth on every route:
+By default the dashboard and REST API are unauthenticated — anyone who can reach the port has full read access and can trigger control actions. Set `auth.username` and `auth.password` (or `auth.password_file`, to keep the secret out of the YAML config) to put every route behind a sign-in page:
 
 ```yaml
 auth:
   username: "admin"
   password_file: "/run/secrets/vigil_dashboard_password"
+  # Optional — sign a session with a fixed key so restarts do not sign everyone
+  # out. Without it a key is generated per start.
+  session_secret_file: "/run/secrets/vigil_session_secret"
+  session_hours: 12      # How long a sign-in lasts (default 12)
+  remember_days: 30      # How long "keep me signed in" lasts (default 30)
 ```
 
-`password_file` is read once at startup. If only one of `username`/`password` is set, auth stays disabled and a warning is logged.
+An unauthenticated browser is redirected to `/login`, where it exchanges the credentials for a signed, expiring session cookie (`HttpOnly`, `SameSite=Lax`, and `Secure` when Vigil is reached over HTTPS — including behind a reverse proxy that sets `X-Forwarded-Proto`). "Keep me signed in" is what makes the cookie outlive the browser session. The dashboard header gains an account menu with **Sign out**, which drops the session at `/logout`. Repeated failures from one address are throttled after five attempts in five minutes.
+
+Scripts and scrapers cannot follow a form redirect, so `/api/...` and `/metrics` also accept HTTP Basic credentials — the same username and password — and answer `401` rather than redirecting. No `WWW-Authenticate` header is sent, so a browser never sees the native credential dialog. `/api/push/...` stays public; it carries its own per-monitor token.
+
+Every `*_file` value is read once at startup. If only one of `username`/`password` is set, auth stays disabled and a warning is logged.
 
 ---
 

@@ -81,6 +81,11 @@ def configure(cfg: dict) -> None:
             _overrides[_CONFIG_TOKENS[key]] = str(value)
 
 
+def forced_scheme() -> str:
+    """The scheme ``theme.scheme`` pins every client to, or 'auto'."""
+    return _forced_scheme
+
+
 def _parse_token_sheet() -> Tuple[Dict[str, str], Dict[str, str]]:
     """The light and dark token tables, read out of Layer 1 so no literal is
     restated in Python. Dark is the light table with its block applied over."""
@@ -202,7 +207,8 @@ _SCHEME_SCRIPT = '''
 '''
 
 
-def _override_css() -> str:
+def override_css() -> str:
+    """The ``theme:`` block's token overrides as a CSS rule, or '' if there are none."""
     if not _overrides:
         return ''
     lines = ''.join(f'    --{name}: {value};\n' for name, value in _overrides.items())
@@ -222,7 +228,7 @@ def install() -> None:
     if not _head_installed:
         ui.add_css(_TOKENS_CSS.read_text(), shared=True)
         ui.add_css(_COMPONENTS_CSS.read_text(), shared=True)
-        override = _override_css()
+        override = override_css()
         if override:
             ui.add_css(override, shared=True)
         ui.add_head_html(_SCHEME_SCRIPT % _forced_scheme, shared=True)

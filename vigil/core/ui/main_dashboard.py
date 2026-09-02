@@ -6,6 +6,7 @@ from typing import Any, Callable, Optional
 from nicegui import app, ui
 from vigil.core.contracts import EngineLike
 from . import theme
+from .auth import LOGOUT_PATH, AuthConfig
 from .sidebar import render_sidebar
 from .views import render_overview, render_events, render_plugin_detail
 
@@ -32,10 +33,11 @@ class DashboardState:
     sync_nav: Optional[Callable[[], None]] = None
 
 
-def _register_endpoints(engine: EngineLike):
-    """Registers auth, the REST API and the agent push endpoint on the app."""
+def _register_endpoints(engine: EngineLike) -> Optional[AuthConfig]:
+    """Registers auth, the REST API and the agent push endpoint on the app,
+    returning the auth config so the header can offer a sign-out."""
     from vigil.core.ui.auth import register_auth
-    register_auth(app, engine.config_loader.auth_settings)
+    auth_config = register_auth(app, engine.config_loader.auth_settings)
 
     # A broken API module must not stop the dashboard from starting.
     try:
@@ -51,16 +53,33 @@ def _register_endpoints(engine: EngineLike):
     except Exception as e:
         logging.error(f"Failed to register the agent endpoint — agents will be unable to connect: {e}")
 
+    return auth_config
 
-def _render_header(left_drawer_toggle: Callable):
-    """Renders the top bar with the drawer toggle and the Vigil brand."""
+
+def _render_account_menu(auth_config: AuthConfig):
+    """Renders the signed-in account menu and its sign-out item."""
+    with ui.button(icon='account_circle', color=None).props('flat dense round'):
+        ui.tooltip(f"Signed in as {auth_config.username}")
+        with ui.menu():
+            ui.label(auth_config.username).classes('px-4 py-2 text-xs').style(
+                f'color: {theme.TEXT_SECONDARY}'
+            )
+            ui.separator()
+            ui.menu_item('Sign out', on_click=lambda: ui.navigate.to(LOGOUT_PATH))
+
+
+def _render_header(left_drawer_toggle: Callable, auth_config: Optional[AuthConfig]):
+    """Renders the top bar with the drawer toggle, the Vigil brand and the account menu."""
     with ui.header().classes('items-center gap-2'):
         ui.button(on_click=left_drawer_toggle, icon='menu', color=None).props('flat dense round')
         ui.image('/icon.svg').style('width: 18px; height: 18px;')
         ui.label('Vigil').classes('halon-brand')
+        if auth_config is not None:
+            ui.space()
+            _render_account_menu(auth_config)
 
 
-def _render_index(engine: EngineLike):
+def _render_index(engine: EngineLike, auth_config: Optional[AuthConfig] = None):
     """Renders the dashboard page: header, sidebar and the switchable main view."""
     theme.install()
 
@@ -74,7 +93,7 @@ def _render_index(engine: EngineLike):
 
     _navigation_state['switch_func'] = switch_view
 
-    _render_header(lambda: left_drawer.toggle())
+    _render_header(lambda: left_drawer.toggle(), auth_config)
     left_drawer, sync_nav = render_sidebar(engine, switch_view)
     state.sync_nav = lambda: sync_nav(state.current_view)
 
@@ -106,11 +125,11 @@ def init_gui(engine: EngineLike, port: int = 8080):
 
     app.add_static_file(local_file=_ICON, url_path='/icon.svg')
 
-    _register_endpoints(engine)
+    auth_config = _register_endpoints(engine)
 
     @ui.page('/')
     def index_page():
-        _render_index(engine)
+        _render_index(engine, auth_config)
 
     svg = _ICON.read_text()
     ui.run(

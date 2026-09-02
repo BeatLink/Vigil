@@ -61,6 +61,20 @@ ssh_defaults:
   username: "beatlink"
   # key_path: "/path/to/private_key"   # optional; falls back to the SSH agent
 
+# Authentication (optional).
+# Without this block the dashboard and API are open to anyone who can reach the
+# port. With it, browsers are sent to a sign-in page at /login and exchange the
+# credentials for a signed session cookie; scripts and Prometheus may present
+# the same credentials as HTTP Basic on /api/... and /metrics instead.
+# auth:
+#   username: "admin"
+#   password: "change-me"                       # or password_file, below
+#   # password_file: "/run/secrets/vigil_password"
+#   # session_secret_file: "/run/secrets/vigil_session_key"  # fixed signing key,
+#   #                       so restarts do not sign everyone out; else generated
+#   # session_hours: 12     # How long a sign-in lasts
+#   # remember_days: 30     # How long "keep me signed in" lasts
+
 # Theme — the dashboard is themed with Halon, whose token set lives in
 # vigil/core/ui/static/halon-tokens.css. Every field here is optional; each one
 # overrides a single Halon token, in both the light and the dark scheme, so an

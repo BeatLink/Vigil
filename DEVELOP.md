@@ -523,11 +523,47 @@ render callback, raising "the client this element belongs to has been deleted."
 Rebinding `_navigation_state['switch_func']` per client keeps `navigate_to`
 pointing at a live element tree (the most recently connected client).
 
-## Auth middleware ordering
+## Auth: a login page, not a credential prompt
 
-HTTP Basic Auth (`register_auth`) is registered before the routes it protects.
-Starlette middleware wraps the whole app regardless of registration order, but
-registering it early keeps intent obvious: everything that follows is gated.
+`core/ui/auth.py` gates every HTTP route on a signed session cookie;
+`core/ui/login.py` is the page that mints one. `register_auth` mounts the login
+routes and then the middleware, before the routes it protects — Starlette wraps
+the whole app regardless of registration order, but registering it early keeps
+intent obvious: everything that follows is gated.
+
+**Why a cookie and not Basic.** A Basic prompt is the browser's, not Vigil's:
+it cannot be styled, carries no sign-out, and re-sends the password on every
+request. The session cookie is a self-contained `v1.<payload>.<hmac>` token —
+username plus expiry, signed with `auth.session_secret` or a key generated at
+startup. Nothing is stored server-side, so sessions cost no memory and a
+restart without a configured key invalidates all of them.
+
+**Why the login page is hand-written HTML and not a NiceGUI page.** Setting a
+cookie needs an HTTP response, and a NiceGUI form submits over the websocket,
+which cannot set one; the alternative is NiceGUI's `app.storage.user`, which
+would add another piece of framework surface to the one page that has to work
+before anything else does. It is styled by inlining Layer 1 of the Halon theme
+(`static/halon-tokens.css`), so it follows the browser's scheme and still
+states no color of its own.
+
+**Two callers, two failure modes.** A browser (a `GET` for `text/html` outside
+`/api/` and `/metrics`) is redirected to `/login` with its original target
+carried in an opaque `next` value, validated on the way back out so the one
+page an anonymous visitor can reach is not an open redirect. Everything else
+gets a `401` — with no `WWW-Authenticate` header, or the native dialog this
+replaced would reappear. Since Prometheus and scripts cannot follow a form
+redirect, Basic credentials remain a valid alternative on any route.
+
+**What stays public.** `/login`, `/logout`, `/icon.svg`, and `/api/push/`,
+which authenticates with its own per-monitor token. As before, this is a
+`BaseHTTPMiddleware` and so runs for `http` scopes only — the agent WebSocket
+authenticates itself (see `core/ui/agent_endpoint.py`).
+
+**Guessing and CSRF.** `LoginThrottle` counts failures per client address (the
+first `X-Forwarded-For` hop when there is one) and answers `429` with a
+`Retry-After` past five in five minutes. The login form carries a
+double-submit CSRF token in a `SameSite=Lax`, `/login`-scoped cookie, so a
+cross-site POST cannot log a victim into an attacker's account.
 
 ## Theme: two CSS layers, no color in Python
 
