@@ -100,11 +100,15 @@ class PluginSnapshot(BaseModel):
 
 class LogLine(BaseModel):
     timestamp = DateTimeField(default=datetime.now, index=True)
-    target = CharField(index=True)
+    target = CharField()
     plugin_id = CharField()
     level = CharField()
     message = TextField()
     dedup_hash = CharField(unique=True)
+
+    class Meta:
+        # Hydration takes the newest N lines per target; without timestamp in the index that sorts every line the target ever logged.
+        indexes = ((("target", "timestamp"), False),)
 
 
 ALL_MODELS = [
