@@ -3,10 +3,32 @@ the DB reconcile/re-adopt behavior. A job is now an ordinary detached command
 on the target, polled through the normal SSH command path — there is no
 long-lived controller, so these are pure functions and DB-state tests."""
 
+import subprocess
+import time
+
 from vigil.core.connectors import ssh_connector as jobs
 
 
+def _wait_for(path, seconds=5.0):
+    deadline = time.monotonic() + seconds
+    while not path.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return path.exists()
+
+
 class TestLaunch:
+    def test_launched_job_really_runs_and_records_its_exit(self, tmp_path):
+        """Executes the launch script under sh: the detached child is a separate
+        process, so the workdir variable has to reach it or nothing runs."""
+        cmd = jobs.launch_command("echo ran; (exit 3)", jobs.workdir_for("real-1"))
+        proc = subprocess.run(["sh", "-c", cmd], capture_output=True, text=True,
+                              env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin:/run/current-system/sw/bin"})
+        assert jobs.parse_launch(proc.stdout) is not None
+        workdir = tmp_path / ".cache" / "vigil" / "jobs" / "real-1"
+        assert _wait_for(workdir / "exit"), "the detached command never finished"
+        assert (workdir / "out").read_text() == "ran\n"
+        assert (workdir / "exit").read_text().strip() == "3"
+
     def test_launch_command_detaches_and_echoes_pid(self):
         cmd = jobs.launch_command("borg create repo::x /data", "$HOME/.cache/vigil/jobs/tok")
         assert "setsid" in cmd

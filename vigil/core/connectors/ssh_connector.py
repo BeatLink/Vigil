@@ -216,8 +216,9 @@ def launch_command(command: str, workdir: str) -> str:
     already a fully-built, quoted shell command from the plugin)."""
     d = shlex.quote(workdir) if not workdir.startswith("$") else f'"{workdir}"'
     inner = f'{{ {command}; }} > "$d/out" 2>&1; echo $? > "$d/exit"'
+    # The detached sh is a child process, so $d must be exported or it opens "/out" and dies before the command runs.
     return (
-        f'd={d}; mkdir -p "$d"; : > "$d/out"; rm -f "$d/exit"; '
+        f'export d={d}; mkdir -p "$d"; : > "$d/out"; rm -f "$d/exit"; '
         f'setsid sh -c {shlex.quote(inner)} < /dev/null > /dev/null 2>&1 & '
         f'echo $!'
     )
