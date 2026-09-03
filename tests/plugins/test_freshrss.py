@@ -118,8 +118,16 @@ class TestFreshrssCollection:
         assert _latest_status() == "failed"
 
     async def test_stale_refresh_cycle_sets_warning(self, plugin, run_requests):
-        _respond(plugin, run_requests, refresh_hours_ago=10.0)
+        _respond(plugin, run_requests, feeds=[_feed(hours_ago=10.0)], refresh_hours_ago=10.0)
         assert _latest_status() == "warning"
+        assert _latest_metric("refresh_age_hours") == pytest.approx(10.0, abs=0.01)
+
+    async def test_refresh_age_is_newest_fetch_not_fever_field(self, plugin, run_requests):
+        _respond(plugin, run_requests,
+                 feeds=[_feed("Paused", hours_ago=14.0), _feed("Live", hours_ago=1.0)],
+                 refresh_hours_ago=14.0)
+        assert _latest_status() == "online"
+        assert _latest_metric("refresh_age_hours") == pytest.approx(1.0, abs=0.01)
 
     async def test_auth_failure_sets_failed(self, plugin, run_requests):
         _respond(plugin, run_requests, auth=0)

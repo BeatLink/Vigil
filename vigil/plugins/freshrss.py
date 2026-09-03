@@ -2,9 +2,12 @@
 Vigil host using the Fever protocol's md5 username:password token. Config:
 api_url (required, Vigil-reachable), username, api_password /
 api_password_command, feed_stale_warning, feed_stale_threshold,
-refresh_stale_warning (all in hours), api_timeout. A stale refresh cycle or
-aging feeds are warning; any feed older than feed_stale_threshold is failed,
-as are transport, HTTP, and auth errors."""
+refresh_stale_warning (all in hours), api_timeout. The refresh-cycle age is
+the newest per-feed fetch time, which is the one signal that proves the
+updater is running (FreshRSS fills Fever's last_refreshed_on_time with the
+*oldest* feed's fetch, which one paused feed would keep permanently stale).
+A stale refresh cycle or aging feeds are warning; any feed older than
+feed_stale_threshold is failed, as are transport, HTTP, and auth errors."""
 
 import hashlib
 import json
@@ -60,6 +63,12 @@ def _survey_feeds(feeds: List[Dict[str, Any]], now: float,
         elif age >= feed_stale_warning:
             stale_warn.append((title, age))
     return stale_warn, stale_fail
+
+
+def _newest_fetch(feeds: List[Dict[str, Any]], fallback: Any) -> float:
+    """The most recent per-feed fetch time, falling back to the Fever field when there are no feeds."""
+    times = [float(feed.get('last_updated_on_time', 0) or 0) for feed in feeds]
+    return max(times) if times else float(fallback or 0)
 
 
 def _accumulate_freshness(refresh_age_hours: float, stale_warn, stale_fail,
@@ -147,7 +156,7 @@ class Freshrss(Plugin):
 
         feeds: List[Dict[str, Any]] = data.get('feeds', [])
         now = time.time()
-        refresh_age_hours = (now - float(data.get('last_refreshed_on_time', 0) or 0)) / 3600.0
+        refresh_age_hours = (now - _newest_fetch(feeds, data.get('last_refreshed_on_time'))) / 3600.0
 
         stale_warn, stale_fail = _survey_feeds(
             feeds, now, self.feed_stale_warning, self.feed_stale_threshold)
