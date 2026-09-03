@@ -138,8 +138,9 @@ in
         Strings are allowed so a deployment can pass
         `"/run/current-system/sw"`, giving the agent the same PATH an SSH login
         to this host would have seen — the closest match to the agentless
-        behaviour when migrating existing monitors. Pass the prefix, not its
-        bin/: systemd appends /bin and /sbin to each entry.
+        behaviour when migrating existing monitors. Entries here precede the
+        module's own tools, so they win over its systemd and coreutils. Pass
+        the prefix, not its bin/: systemd appends /bin and /sbin to each entry.
       '';
     };
 
@@ -170,7 +171,11 @@ in
 
       # The agent runs whatever shell the server sends, so the tools those
       # commands invoke must be on PATH. systemd and coreutils cover the common
-      # monitors; anything else comes from `path`.
+      # monitors; anything else comes from `path`, which sits ahead of them so
+      # a deployment's own system profile is what a command resolves to. That
+      # order matters for sudo: it matches the resolved path, so a `systemctl`
+      # taken from this module's systemd would never match a rule written for
+      # /run/current-system/sw/bin/systemctl.
       #
       # /run/wrappers comes first and is not optional: NixOS's setuid binaries
       # live in its bin/, and the plain `sudo` in the system profile is not
@@ -185,6 +190,9 @@ in
       # the non-setuid sudo first on PATH.
       path = [
         "/run/wrappers"
+      ]
+      ++ cfg.path
+      ++ [
         pkgs.coreutils
         pkgs.systemd
         pkgs.procps
@@ -193,8 +201,7 @@ in
         pkgs.gnused
         pkgs.gawk
         pkgs.bash
-      ]
-      ++ cfg.path;
+      ];
 
       serviceConfig = {
         ExecStart = "${cfg.package}/bin/vigil-agent --config ${configFile}";
