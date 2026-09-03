@@ -5,7 +5,9 @@ subscribes to the unit's journal stream, so log lines arrive live between
 polls while the poll stays the authority on status. Config: service_name,
 lines, max_age, allow_unit_file_edit, allowed_write_paths. Continuous mode:
 an inactive unit is warning and a journal failure is failed; oneshot mode: a
-never-ran unit, a failed last run, or one older than max_age is failed."""
+never-ran unit, a failed last run, or one older than max_age is failed. A
+reboot clears systemd's unit timestamps, so when they are empty the last run
+is taken from the unit's journal instead of being reported as never ran."""
 
 import os
 import shlex
@@ -124,13 +126,15 @@ class SystemdService(Plugin):
         exit_code = tokens.get('exit',   'empty')
         active    = tokens.get('active', 'unknown')
         sub       = tokens.get('sub',    'unknown')
+        source    = tokens.get('source', 'systemd')
         try:
             epoch = int(tokens.get('epoch', '0'))
         except ValueError:
             epoch = 0
 
         logs = [(
-            f"systemd state: result={result!r} exit_code={exit_code!r} epoch={epoch} active={active!r} sub={sub!r}",
+            f"systemd state: result={result!r} exit_code={exit_code!r} epoch={epoch} active={active!r} sub={sub!r}"
+            f" source={source!r}",
             "INFO",
         )]
 
@@ -178,7 +182,20 @@ class SystemdService(Plugin):
             'if [ -n "$ts" ] && [ "$ts" != "n/a" ]; then '
             '  epoch=$(date -d "$ts" +%s 2>/dev/null || echo 0); '
             'else epoch=0; fi; '
-            'echo "result=${result:-empty} exit=${exit_code:-empty} epoch=$epoch active=${active:-unknown} sub=${sub:-unknown}"'
+            'source=systemd; '
+            # A reboot clears every timestamp above; the journal keeps the unit's
+            # last completion line, whose short-unix stamp and quoted result stand in.
+            'if [ "$epoch" = 0 ]; then '
+            f"line=$(journalctl -u {self.service_name} -o short-unix -q -n 1 "
+            "-g 'Deactivated successfully|Failed with result' 2>/dev/null); "
+            'if [ -n "$line" ]; then '
+            '  epoch=${line%% *}; epoch=${epoch%%.*}; source=journal; '
+            '  case "$line" in *"Failed with result"*) '
+            r'''    result=$(printf "%s" "$line" | sed -n "s/.*Failed with result '\([^']*\)'.*/\1/p"); '''
+            '    exit_code=empty;; '
+            '  esac; '
+            'fi; fi; '
+            'echo "result=${result:-empty} exit=${exit_code:-empty} epoch=$epoch active=${active:-unknown} sub=${sub:-unknown} source=$source"'
         )
 
     @staticmethod

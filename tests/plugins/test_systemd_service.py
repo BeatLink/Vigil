@@ -1,3 +1,6 @@
+import os
+import stat
+import subprocess
 import time
 import pytest
 from vigil.plugins.systemd_service import SystemdService
@@ -168,6 +171,91 @@ class TestOneshotMode:
     async def test_last_run_success_metric_recorded_on_failure(self, plugin):
         _run(plugin, [(0, _oneshot_output("failed", "1"), ""), (0, "", "")])
         assert _latest_metric("test-upgrade", "last_run_success") == pytest.approx(0.0)
+
+
+class TestJournalSourcedState:
+    @pytest.fixture
+    def plugin(self, make_plugin):
+        return make_plugin(SystemdService, ONESHOT_CFG)
+
+    async def test_journal_success_within_max_age_is_online(self, plugin):
+        epoch = int(time.time()) - 3600
+        _run(plugin, [(0, f"result=success exit=0 epoch={epoch} active=inactive sub=dead source=journal", ""), (0, "", "")])
+        assert _latest_status("test-upgrade") == "online"
+        assert _latest_metric("test-upgrade", "last_run_epoch") == float(epoch)
+
+    async def test_journal_failure_is_failed(self, plugin):
+        epoch = int(time.time()) - 3600
+        _run(plugin, [(0, f"result=timeout exit=empty epoch={epoch} active=inactive sub=dead source=journal", ""), (0, "", "")])
+        assert _latest_status("test-upgrade") == "failed"
+        assert _latest_metric("test-upgrade", "last_run_success") == 0.0
+
+
+def _stub(path, body: str):
+    path.write_text("#!/usr/bin/env bash\n" + body)
+    path.chmod(path.stat().st_mode | stat.S_IEXEC)
+
+
+def _run_state_script(plugin, tmp_path, exit_ts="", inactive_ts="", journal_line="", result="success"):
+    """Run the oneshot state script under bash against stub systemctl/journalctl on PATH."""
+    calls = tmp_path / "journalctl.calls"
+    _stub(tmp_path / "systemctl", (
+        'while [ $# -gt 0 ]; do case "$1" in -p) prop="$2"; shift;; esac; shift; done\n'
+        'case "$prop" in\n'
+        f'  Result) echo "{result}";;\n'
+        '  ExecMainStatus) echo 0;;\n'
+        '  ActiveState) echo inactive;;\n'
+        '  SubState) echo dead;;\n'
+        f'  ExecMainExitTimestamp) echo "{exit_ts}";;\n'
+        f'  InactiveEnterTimestamp) echo "{inactive_ts}";;\n'
+        'esac\n'
+    ))
+    _stub(tmp_path / "journalctl", (
+        f'echo "$@" >> "{calls}"\n'
+        f'printf "%s" "{journal_line}"\n'
+    ))
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    out = subprocess.run(["bash", "-c", plugin._oneshot_state_cmd()], env=env,
+                         capture_output=True, text=True, check=True).stdout.strip()
+    tokens = dict(tok.split("=", 1) for tok in out.split())
+    return tokens, calls.exists()
+
+
+class TestOneshotStateScript:
+    @pytest.fixture
+    def plugin(self, make_plugin):
+        return make_plugin(SystemdService, ONESHOT_CFG)
+
+    def test_systemd_timestamp_wins_without_touching_journal(self, plugin, tmp_path):
+        tokens, journal_called = _run_state_script(
+            plugin, tmp_path, exit_ts="Sat 2026-08-29 08:03:34 EST",
+            journal_line="1700000000.000000 host systemd[1]: nixos-upgrade.service: Deactivated successfully.")
+        assert tokens["source"] == "systemd"
+        assert int(tokens["epoch"]) > 1700000000
+        assert not journal_called
+
+    def test_empty_timestamps_take_epoch_from_journal(self, plugin, tmp_path):
+        tokens, journal_called = _run_state_script(
+            plugin, tmp_path,
+            journal_line="1788008614.198164 Heimdall systemd[1]: nixos-upgrade.service: Deactivated successfully.")
+        assert journal_called
+        assert tokens == {"result": "success", "exit": "0", "epoch": "1788008614",
+                          "active": "inactive", "sub": "dead", "source": "journal"}
+
+    def test_journal_failure_line_carries_its_result(self, plugin, tmp_path):
+        tokens, _ = _run_state_script(
+            plugin, tmp_path,
+            journal_line="1788441135.956421 Heimdall systemd[1]: nixos-upgrade.service: Failed with result 'timeout'.")
+        assert tokens["epoch"] == "1788441135"
+        assert tokens["result"] == "timeout"
+        assert tokens["exit"] == "empty"
+        assert tokens["source"] == "journal"
+
+    def test_no_journal_line_still_reads_never_ran(self, plugin, tmp_path):
+        tokens, journal_called = _run_state_script(plugin, tmp_path, journal_line="")
+        assert journal_called
+        assert tokens["epoch"] == "0"
+        assert tokens["source"] == "systemd"
 
 
 class TestMaxAgeParsing:
