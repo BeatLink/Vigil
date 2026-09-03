@@ -404,6 +404,21 @@ class TestJobPolling:
         _poll_once(plugin, _poll(5, None, False, ""))
         assert plugin.jobs.recent()[0]['state'] == 'failed'
 
+    async def test_job_started_mid_cycle_does_not_swallow_the_probe(self, plugin):
+        cmds = plugin.commands()                           # asked for a probe: no job yet
+        assert len(cmds) == 3
+        await _launch(plugin)                              # the button lands before parse
+        result = plugin.parse([_probe(), CmdResult(0, TARGET + "\n", ""), _metadata()])
+        plugin.storage.apply(result)
+        assert plugin.jobs.running() is not None           # the job was not judged by probe output
+        assert result.metrics["up_to_date"] == 0.0         # and the probe was still read as a probe
+
+    async def test_unanswered_poll_leaves_the_job_running(self, plugin):
+        await _launch(plugin)
+        result = _poll_once(plugin, CmdResult(-1, "", "Agent 'x' is not connected"))
+        assert plugin.jobs.running() is not None
+        assert any("Could not poll" in msg for msg, _ in result.logs)
+
     async def test_finished_job_forces_a_re_evaluation(self, plugin):
         _collect(plugin)                                   # evaluation is now fresh
         assert len(plugin.commands()) == 1

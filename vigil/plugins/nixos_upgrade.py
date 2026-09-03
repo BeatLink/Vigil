@@ -166,6 +166,7 @@ class NixosUpgrade(Plugin):
         # instead of waiting out eval_interval.
         self._force_eval = False
         self._pending_launch = None
+        self._polling_job = None
 
     # --- flake reference ---
 
@@ -203,6 +204,8 @@ class NixosUpgrade(Plugin):
 
     def commands(self) -> List[Command]:
         job = self._running_job()
+        # parse() must read the results the way they were requested, even if a job starts or ends mid-cycle.
+        self._polling_job = job
         if job is not None:
             return [Command(detached.poll_command(job['workdir'], job['pid'], job['output_seq']))]
 
@@ -252,7 +255,7 @@ class NixosUpgrade(Plugin):
         return await super().run_cycle()
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        job = self._running_job()
+        job, self._polling_job = self._polling_job, None
         if job is not None:
             return self._parse_poll(job, results[0])
 
@@ -404,6 +407,11 @@ class NixosUpgrade(Plugin):
         """Advance a running detached job from one poll's output, finalizing
         the Job row and forcing a re-evaluation when it completes."""
         job_id = job['id']
+        # A poll that never reached the target says nothing about the job; only a real answer may finish it.
+        if result.exit_code != 0 and not result.stdout.strip():
+            return CollectResult(logs=[(
+                f"Could not poll the running {job['kind']}: "
+                f"{(result.stderr or '').strip()[:200] or f'exit {result.exit_code}'}", 'WARNING')])
         poll = detached.parse_poll(result.stdout)
 
         lines, consumed = detached.split_lines(poll.new_output)

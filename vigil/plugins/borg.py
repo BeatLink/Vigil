@@ -189,6 +189,7 @@ class Borg(Plugin):
         # Only an explicitly configured dir is known-writable on a monitor-only target, so polls fall back to mktemp under the default
         self.cache_dir_configured = bool(config.get('cache_dir'))
         self.backup_lock_wait = config.get('backup_lock_wait', 600)
+        self._polling_job = None
 
         from vigil.core.ui.spec import register_enabled_predicate
         self._has_sources_name = f'borg_has_sources_{self.id}'
@@ -294,6 +295,8 @@ class Borg(Plugin):
         # (a plain SSH command) instead of listing the repo — the same command
         # handler, no streaming channel.
         job = self._running_job()
+        # parse() must read the results the way they were requested, even if a job starts or ends mid-cycle.
+        self._polling_job = job
         if job is not None:
             return [Command(detached.poll_command(job['workdir'], job['pid'], job['output_seq']))]
         if not self.repo:
@@ -310,7 +313,7 @@ class Borg(Plugin):
         return None
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
-        job = self._running_job()
+        job, self._polling_job = self._polling_job, None
         if job is not None:
             return self._parse_poll(job, results[0])
 
@@ -546,6 +549,11 @@ class Borg(Plugin):
         new output lines, updates the progress summary, and on completion
         finalizes the Job row and returns the interpreted outcome."""
         job_id = job['id']
+        # A poll that never reached the target says nothing about the job; only a real answer may finish it.
+        if result.exit_code != 0 and not result.stdout.strip():
+            return CollectResult(logs=[(
+                f"Could not poll the running {job['kind']}: "
+                f"{(result.stderr or '').strip()[:200] or f'exit {result.exit_code}'}", 'WARNING')])
         poll = detached.parse_poll(result.stdout)
 
         lines, consumed = detached.split_lines(poll.new_output)

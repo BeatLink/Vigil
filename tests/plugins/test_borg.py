@@ -522,6 +522,20 @@ class TestBackupPolling:
         _poll_once(backup_plugin, _poll(10, None, True, "working\n"))
         assert backup_plugin.jobs.running() is not None
 
+    async def test_unanswered_poll_leaves_the_job_running(self, backup_plugin, db_manager):
+        await _launch(backup_plugin)
+        result = _poll_once(backup_plugin, CmdResult(-1, "", "Agent 'x' is not connected"))
+        assert backup_plugin.jobs.running() is not None
+        assert any("Could not poll" in msg for msg, _ in result.logs)
+
+    async def test_job_started_mid_cycle_does_not_swallow_the_listing(self, backup_plugin, db_manager):
+        cmds = backup_plugin.commands()                    # asked for a repo listing: no job yet
+        assert len(cmds) >= 1
+        await _launch(backup_plugin)                       # the button lands before parse
+        result = backup_plugin.parse([CmdResult(1, "", "repo busy")] * len(cmds))
+        backup_plugin.storage.apply(result)
+        assert backup_plugin.jobs.running() is not None   # the job was not judged by listing output
+
     async def test_poll_completion_marks_succeeded(self, backup_plugin, db_manager):
         await _launch(backup_plugin)
         _poll_once(backup_plugin, _poll(20, 0, False, "done\n"))
