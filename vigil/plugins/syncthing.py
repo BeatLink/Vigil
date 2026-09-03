@@ -5,7 +5,8 @@ Vigil-reachable), api_key / api_key_command, folders, devices, stall_warning
 (minutes), api_timeout. An errored or invalid folder — including one sitting
 idle while still needing data — is failed, as is any API error; pull errors,
 folders syncing or scanning past stall_warning, and expected devices
-disconnected are warning."""
+disconnected are warning. The local device, which the config lists but the
+connections map never does, is not an expected device."""
 
 import json
 import time
@@ -72,11 +73,16 @@ def _watched_folder_ids(config: Dict[str, Any], folders_filter: Optional[List[st
 
 
 def _expected_device_ids(device_names: Dict[str, str],
-                         devices_filter: Optional[List[str]]) -> List[str]:
-    """Device IDs expected to be connected: all of them, or those matching the watch list by name or ID."""
+                         devices_filter: Optional[List[str]],
+                         connections: Dict[str, Any]) -> List[str]:
+    """Device IDs expected to be connected: all remote ones, or those matching the watch list by name or ID.
+
+    The config's device list includes the local device, which never has a
+    connection entry, so only devices Syncthing reports in /rest/system/connections count."""
     return [device_id for device_id in device_names
-            if devices_filter is None or device_names[device_id] in devices_filter
-            or device_id in (devices_filter or [])]
+            if device_id in connections
+            and (devices_filter is None or device_names[device_id] in devices_filter
+                 or device_id in (devices_filter or []))]
 
 
 def _disconnected_names(device_names: Dict[str, str], expected_devices: List[str],
@@ -240,7 +246,7 @@ class Syncthing(Plugin):
 
         device_names = {device['deviceID']: device.get('name', device['deviceID'])
                         for device in config.get('devices', [])}
-        expected_devices = _expected_device_ids(device_names, self.devices)
+        expected_devices = _expected_device_ids(device_names, self.devices, connections)
         disconnected = _disconnected_names(device_names, expected_devices, connections)
 
         (errored_folders, stalled_folders, total_need_bytes, total_pull_errors,

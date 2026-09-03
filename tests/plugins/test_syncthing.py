@@ -126,6 +126,13 @@ class TestSyncthingCollection:
         })
         assert _latest_status() == "warning"
 
+    async def test_local_device_is_not_expected(self, plugin, run_requests):
+        cfg = {**_CONFIG, "devices": _CONFIG["devices"] + [{"deviceID": "SELF", "name": "Heimdall"}]}
+        _collect_twice(plugin, run_requests, config=cfg)
+        assert _latest_status() == "online"
+        assert _latest_metric("devices_expected") == 2
+        assert _latest_metric("devices_disconnected") == 0
+
     async def test_disconnected_device_sets_warning(self, plugin, run_requests):
         _collect_twice(plugin, run_requests, connections=_connections(connected=False))
         assert _latest_status() == "warning"
