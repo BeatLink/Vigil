@@ -1,5 +1,6 @@
 import json
 import time
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -88,6 +89,16 @@ def _collect(plugin, probe=None, eval_result=None, metadata=None):
     result = plugin.parse(outputs)
     plugin.storage.apply(result)
     return result
+
+
+def _rewind_eval(plugin, seconds: int) -> None:
+    """Age the stored evaluation by `seconds`, as if that much time had passed."""
+    state = json.loads(plugin.data.latest_metric("flake_eval_epoch").metadata)
+    state["evaluated_epoch"] = int(time.time()) - seconds
+    plugin.storage.apply(CollectResult(
+        metrics={"flake_eval_epoch": float(state["evaluated_epoch"])},
+        metadata={"flake_eval_epoch": json.dumps(state)},
+    ))
 
 
 class TestDrift:
@@ -198,12 +209,36 @@ class TestEvalSchedule:
 
     async def test_stale_evaluation_is_redone(self, plugin):
         _collect(plugin)
-        state = json.loads(plugin.data.latest_metric("flake_eval_epoch").metadata)
-        state["evaluated_epoch"] = int(time.time()) - 7200
-        plugin.storage.apply(CollectResult(
-            metrics={"flake_eval_epoch": float(state["evaluated_epoch"])},
-            metadata={"flake_eval_epoch": json.dumps(state)},
-        ))
+        _rewind_eval(plugin, 7200)
+        assert len(plugin.commands()) == 3
+
+    async def test_fresh_failure_is_not_retried_immediately(self, plugin):
+        _collect(plugin, eval_result=CmdResult(1, "", "error: attribute missing"))
+        assert len(plugin.commands()) == 1
+
+    async def test_failed_evaluation_retries_after_retry_interval(self, plugin):
+        _collect(plugin, eval_result=CmdResult(1, "", "error: attribute missing"))
+        _rewind_eval(plugin, 20 * 60)                      # past 15m retry, short of 1h eval
+        assert len(plugin.commands()) == 3
+
+    async def test_failed_metadata_retries_too(self, plugin):
+        _collect(plugin, metadata=CmdResult(1, "", "error: unable to download"))
+        _rewind_eval(plugin, 20 * 60)
+        assert len(plugin.commands()) == 3
+
+    async def test_healthy_evaluation_ignores_retry_interval(self, plugin):
+        _collect(plugin)
+        _rewind_eval(plugin, 20 * 60)
+        assert len(plugin.commands()) == 1
+
+    def test_retry_interval_never_exceeds_eval_interval(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "eval_interval": "10m", "retry_interval": "15m"})
+        assert p.retry_interval == 600
+
+    async def test_dashboard_poll_forces_evaluation(self, plugin):
+        _collect(plugin)                                   # fresh, so a tick would probe only
+        plugin.engine = MagicMock(run_cycle_now=AsyncMock(return_value=True))
+        assert await plugin.run_cycle() is True
         assert len(plugin.commands()) == 3
 
     async def test_probe_only_cycle_still_tracks_drift(self, plugin):

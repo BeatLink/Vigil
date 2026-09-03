@@ -5,9 +5,11 @@ script); every `eval_interval` it additionally evaluates
 `<flake>#nixosConfigurations.<host>.config.system.build.toplevel` and reads
 `nix flake metadata`, so drift is a comparison of two store paths rather than
 a guess from revisions, and the flake's own revision and input ages are
-tracked alongside it. Actions launch detached jobs on the target: `nix flake
-update` on the flake, and `nixos-rebuild switch --flake`. Config: flake,
-configuration, eval_interval, eval_timeout, max_input_age, drift_status,
+tracked alongside it. A failed evaluation is retried after `retry_interval`
+rather than held for the full `eval_interval`, and a dashboard poll always
+evaluates. Actions launch detached jobs on the target: `nix flake update` on
+the flake, and `nixos-rebuild switch --flake`. Config: flake, configuration,
+eval_interval, retry_interval, eval_timeout, max_input_age, drift_status,
 reboot_status, require_sudo, nix_bin, rebuild_bin, nix_args, rebuild_args."""
 
 import json
@@ -144,6 +146,8 @@ class NixosUpgrade(Plugin):
         self.flake = str(config.get('flake', '/etc/nixos'))
         self.configuration = config.get('configuration')
         self.eval_interval = parse_duration(config.get('eval_interval', '1h'))
+        self.retry_interval = min(parse_duration(config.get('retry_interval', '15m')),
+                                  self.eval_interval)
         self.eval_timeout = parse_duration(config.get('eval_timeout', '10m'))
         self.max_input_age = (
             parse_duration(config['max_input_age'])
@@ -232,10 +236,19 @@ class NixosUpgrade(Plugin):
     def _due_for_eval(self) -> bool:
         if self._force_eval:
             return True
-        evaluated = self._state().get('evaluated_epoch')
+        state = self._state()
+        evaluated = state.get('evaluated_epoch')
         if not evaluated:
             return True
-        return time.time() - float(evaluated) >= self.eval_interval
+        # A failed evaluation waits only retry_interval; holding its error for a whole eval_interval hides a fix.
+        failed = bool(state.get('eval_error') or state.get('metadata_error'))
+        wait = self.retry_interval if failed else self.eval_interval
+        return time.time() - float(evaluated) >= wait
+
+    async def run_cycle(self) -> bool:
+        """A dashboard poll is an explicit ask, so it evaluates instead of only re-reading the cached result."""
+        self._force_eval = True
+        return await super().run_cycle()
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         job = self._running_job()

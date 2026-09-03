@@ -406,7 +406,7 @@ Tracks a NixOS host against the flake it is deployed from: whether the running s
 
 Drift is a comparison of two store paths — `readlink -f /run/current-system` against what `nix eval` says `…config.system.build.toplevel` is — so it is exact rather than inferred from a `configurationRevision` that a config may never set.
 
-Two cadences share one monitor. Every `interval` it runs one cheap script (`readlink`, `stat`, `nixos-version`) and re-checks drift against the last evaluation, so a completed switch clears the flag on the next cycle. Every `eval_interval` it additionally runs `nix eval` and `nix flake metadata` — the expensive half. The last evaluation is stored with the monitor, so a Vigil restart resumes that schedule instead of re-evaluating.
+Two cadences share one monitor. Every `interval` it runs one cheap script (`readlink`, `stat`, `nixos-version`) and re-checks drift against the last evaluation, so a completed switch clears the flag on the next cycle. Every `eval_interval` it additionally runs `nix eval` and `nix flake metadata` — the expensive half. The last evaluation is stored with the monitor, so a Vigil restart resumes that schedule instead of re-evaluating. A failed evaluation is not held for the whole `eval_interval`: it is retried after `retry_interval`, so a fixed flake or a restored network clears the error promptly. A poll from the dashboard always runs the full evaluation.
 
 Both actions launch a **detached** job on the target, polled to completion by this monitor's own cycle (see [Job control](../DEVELOP.md#job-control)), so a `nixos-rebuild switch` survives a dropped SSH connection and a Vigil restart. Keep `interval` at a few minutes if you want a running job's output to advance at that rate.
 
@@ -415,6 +415,7 @@ Both actions launch a **detached** job on the target, polled to completion by th
 | `flake` | Flake reference the host is deployed from (default: `/etc/nixos`). Either a local path (`/etc/nixos`, `path:…`, `git+file://…`) or a remote ref (`github:owner/config`) |
 | `configuration` | `nixosConfigurations` attribute to compare against (default: the target's own hostname, resolved on the target) |
 | `eval_interval` | How often to evaluate the flake and read its metadata (default: `1h`) |
+| `retry_interval` | How soon to re-evaluate after a failed evaluation (default: `15m`, never longer than `eval_interval`) |
 | `eval_timeout` | Timeout for those two commands (default: `10m`) — a cold evaluation of a large config is not fast |
 | `max_input_age` | Warn once the oldest locked input is older than this (default: unset, never warns) |
 | `drift_status` | Status when the system is out of date: `warning` (default) or `failed` |
