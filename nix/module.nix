@@ -47,10 +47,15 @@ let
     if withBorgPassphrase != null && cfg.authUsername != null && cfg.authPasswordFile != null then
       withBorgPassphrase
       // {
-        auth = {
-          username = cfg.authUsername;
-          password_file = cfg.authPasswordFile;
-        };
+        auth =
+          (cfg.settings.auth or { })
+          // {
+            username = cfg.authUsername;
+            password_file = cfg.authPasswordFile;
+          }
+          // lib.optionalAttrs (cfg.authSessionSecretFile != null) {
+            session_secret_file = cfg.authSessionSecretFile;
+          };
       }
     else
       withBorgPassphrase;
@@ -177,6 +182,19 @@ in
         Vigil reads it at runtime, so the password never enters the Nix
         store — point this at a sops-nix/agenix-managed secret readable by
         the Vigil service user (<option>user</option>).
+      '';
+    };
+
+    authSessionSecretFile = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = "/run/secrets/vigil_session_secret";
+      description = ''
+        Path to a file holding the key that signs dashboard session cookies.
+        Without it Vigil generates a key at every start, so a restart signs
+        every browser out; with it, sessions survive restarts and redeploys.
+        Any random string of 32 or more bytes will do. Read at runtime, so it
+        never enters the Nix store.
       '';
     };
   };
