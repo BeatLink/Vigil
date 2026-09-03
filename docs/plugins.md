@@ -15,6 +15,7 @@ config examples. For what Vigil is and how to run it, see the
   [`ddns_updater`](#ddns_updater) ·
   [`systemd_service`](#systemd_service) ·
   [`service_list`](#service_list) ·
+  [`nixos_upgrade`](#nixos_upgrade) ·
   [`smart`](#smart) ·
   [`zfs`](#zfs) ·
   [`md`](#md) ·
@@ -56,6 +57,7 @@ config examples. For what Vigil is and how to run it, see the
 | [`ddns_updater`](#ddns_updater)         | Dynamic DNS record kept current       | Public IP lookup + DNS query (in-process)        | `in_sync`, `last_update_epoch`                   | Force Update |
 | [`systemd_service`](#systemd_service)   | systemd unit state / last run         | SSH (`systemctl`)                                | `active` *or* `last_run_epoch`, `last_run_success` | Restart, Stop, Enable, Disable |
 | [`service_list`](#service_list)         | Systemd unit browser and control      | SSH (`systemctl`)                                | `services_total`, `services_active`, `services_failed` | Start, Stop, Restart, Enable, Disable, View Status |
+| [`nixos_upgrade`](#nixos_upgrade)       | NixOS system vs. the flake it deploys from | SSH (`nix eval`, `nix flake metadata`)      | `up_to_date`, `reboot_required`, `flake_reachable` | Update Flake, Rebuild & Switch |
 | [`smart`](#smart)                       | SMART health of every physical disk    | SSH (`smartctl`)                                | `disks_total`, `disks_ok`, `disks_failed`       | — |
 | [`zfs`](#zfs)                           | ZFS pool state and capacity            | SSH (`zpool list`)                              | `pools_total`, `pools_degraded`, `zfs_usage_max` | — |
 | [`md`](#md)                             | mdadm array health                     | SSH (`/proc/mdstat`)                            | `arrays_total`, `arrays_ok`, `arrays_degraded`  | — |
@@ -88,7 +90,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `nixos_upgrade`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -395,6 +397,67 @@ The service browser renders a sortable table of all units, and offers per-unit a
   allow_unit_file_edit: true
   allowed_write_paths:
     - /etc/systemd/system
+```
+
+---
+
+### `nixos_upgrade`
+Tracks a NixOS host against the flake it is deployed from: whether the running system *is* the one that flake currently evaluates to, how old the flake and its locked inputs are, and whether the booted kernel is still the current one.
+
+Drift is a comparison of two store paths — `readlink -f /run/current-system` against what `nix eval` says `…config.system.build.toplevel` is — so it is exact rather than inferred from a `configurationRevision` that a config may never set.
+
+Two cadences share one monitor. Every `interval` it runs one cheap script (`readlink`, `stat`, `nixos-version`) and re-checks drift against the last evaluation, so a completed switch clears the flag on the next cycle. Every `eval_interval` it additionally runs `nix eval` and `nix flake metadata` — the expensive half. The last evaluation is stored with the monitor, so a Vigil restart resumes that schedule instead of re-evaluating.
+
+Both actions launch a **detached** job on the target, polled to completion by this monitor's own cycle (see [Job control](../DEVELOP.md#job-control)), so a `nixos-rebuild switch` survives a dropped SSH connection and a Vigil restart. Keep `interval` at a few minutes if you want a running job's output to advance at that rate.
+
+| Option | Description |
+|--------|-------------|
+| `flake` | Flake reference the host is deployed from (default: `/etc/nixos`). Either a local path (`/etc/nixos`, `path:…`, `git+file://…`) or a remote ref (`github:owner/config`) |
+| `configuration` | `nixosConfigurations` attribute to compare against (default: the target's own hostname, resolved on the target) |
+| `eval_interval` | How often to evaluate the flake and read its metadata (default: `1h`) |
+| `eval_timeout` | Timeout for those two commands (default: `10m`) — a cold evaluation of a large config is not fast |
+| `max_input_age` | Warn once the oldest locked input is older than this (default: unset, never warns) |
+| `drift_status` | Status when the system is out of date: `warning` (default) or `failed` |
+| `reboot_status` | Status when a reboot is pending: `warning` (default), `failed`, or `online` to ignore it |
+| `require_sudo` | Prefix both actions with `sudo -n` (default: `true`) |
+| `nix_bin` / `rebuild_bin` | Binaries to invoke (defaults: `nix` / `nixos-rebuild`) |
+| `nix_args` | Extra arguments on every `nix` call (default: `["--extra-experimental-features", "nix-command flakes"]`; set `[]` to drop them) |
+| `rebuild_args` | Extra arguments on `nixos-rebuild switch`, e.g. `["--use-remote-sudo"]` |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `up_to_date` (1/0), `reboot_required` (1/0), `flake_reachable` (1/0), `generation`, `last_switch_epoch`, `flake_last_modified_epoch`, `inputs_last_modified_epoch`, `flake_eval_epoch`
+
+**Actions**: Update Flake (`nix flake update`), Rebuild & Switch (`nixos-rebuild switch --flake`)
+
+**Status**: `failed` when the flake does not evaluate — a config that no longer builds is a real failure, and the error is logged; `drift_status` when the two closures differ; `reboot_status` when the booted `initrd`/`kernel`/`kernel-modules`/`systemd` are not the current ones; `warning` when the oldest locked input exceeds `max_input_age`; `offline` when `/run/current-system` cannot be read or `nix flake metadata` fails.
+
+Update Flake needs a lock file this host can write, so it is offered only for a local flake path; with a remote ref, update the flake where it lives and Vigil picks up the new revision on its next evaluation. Checking never mutates anything: `--no-write-lock-file` is passed to both commands, and `--refresh` only for a remote ref, where a mutable branch would otherwise be served from Nix's tarball cache.
+
+> Both actions run as root by default (`require_sudo`), so the SSH user needs passwordless sudo for `nixos-rebuild` and `nix`. Set `require_sudo: false` when Vigil already connects as root, or add `--use-remote-sudo` to `rebuild_args` for the build-locally-activate-remotely arrangement.
+
+```yaml
+# Local checkout on the host, with a staleness limit on its inputs
+- name: "Web Server NixOS"
+  id: "web-01-nixos"
+  type: "nixos_upgrade"
+  flake: "/etc/nixos"
+  interval: 5m
+  eval_interval: 1h
+  max_input_age: 30d
+  ssh_config:
+    host: "web-01.example.com"
+
+# Deployed from a remote flake; drift is an alarm, not a nudge
+- name: "Gateway NixOS"
+  id: "gateway-nixos"
+  type: "nixos_upgrade"
+  flake: "github:owner/nixos-config"
+  configuration: "gateway"
+  drift_status: "failed"
+  interval: 5m
+  eval_interval: 6h
+  ssh_config:
+    host: "gateway.example.com"
 ```
 
 ---

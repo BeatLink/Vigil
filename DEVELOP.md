@@ -276,8 +276,8 @@ verified against a real sshd:
 
 ## Job control
 
-A long-running job (a borg backup) is **not** a live SSH channel held open for
-hours. It is launched *detached on the target* with one ordinary command
+A long-running job (a borg backup, a `nixos-rebuild switch`) is **not** a live
+SSH channel held open for hours. It is launched *detached on the target* with one ordinary command
 (`setsid sh -c '…' &`), writing its output to `<workdir>/out` and its exit code
 to `<workdir>/exit`, and is then advanced by ordinary polling commands on the
 owning plugin's normal monitor cycle. The builders/parsers in `ssh_connector.py`

@@ -24,10 +24,13 @@ Nothing here is committed work — this is the candidate list.
       SSH-collectable from `/sys/class/power_supply/*`.
 - [ ] **Pending package updates** — LNXlink `sys_updates` counts available packages and flags
       security updates. Vigil can approximate this with a `command` plugin, but a first-class type
-      would normalize across `apt`/`dnf`/`pacman`/`nix` and give a real metric to threshold on.
+      would normalize across `apt`/`dnf`/`pacman` and give a real metric to threshold on. The Nix
+      half is covered: [nixos_upgrade.py](vigil/plugins/nixos_upgrade.py) compares the running
+      system closure to what its flake evaluates to, and carries the update and switch actions.
 - [ ] **Reboot required** — LNXlink `required_restart`. [docs/plugins.md](docs/plugins.md#command)
       already shows this as a `command` example; promoting it to a dedicated plugin removes the
-      per-distro shell snippet from every user's config.
+      per-distro shell snippet from every user's config. NixOS hosts already get this from
+      `nixos_upgrade`'s `reboot_required` metric.
 - [ ] **Network interface inventory** — LNXlink `interfaces` lists active NICs and their assigned
       IPs. The `network` plugin's `throughput` module auto-detects *one* interface but never reports the
       set of interfaces or their addressing. Useful for catching a dropped link or a changed DHCP lease.
