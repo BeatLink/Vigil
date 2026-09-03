@@ -49,6 +49,11 @@ async def run(command: str, timeout: float = DEFAULT_TIMEOUT) -> Tuple[int, str,
     except asyncio.TimeoutError:
         await _kill_group(proc)
         return -1, "", f"Timed out after {timeout}s"
+    except asyncio.CancelledError:
+        # Cancelling the task must not strand the command: nobody is left to
+        # collect its result, so it goes down with the task.
+        await _kill_group(proc)
+        raise
 
     code = proc.returncode if proc.returncode is not None else -1
     return code, _truncate(stdout or b''), _truncate(stderr or b'')

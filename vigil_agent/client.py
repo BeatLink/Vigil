@@ -39,6 +39,7 @@ class AgentClient:
         self._socket: Any = None
         self._send_lock = asyncio.Lock()
         self._streams: Dict[str, asyncio.Task] = {}
+        self._execs: set = set()
 
     # --- Connection lifecycle ---
 
@@ -82,6 +83,7 @@ class AgentClient:
             finally:
                 self._socket = None
                 await self._stop_streams()
+                await self._cancel_execs()
 
     async def _receive_loop(self, socket_: Any) -> None:
         async for raw in socket_:
@@ -89,7 +91,9 @@ class AgentClient:
             tag = frame.get('t')
             if tag == proto.EXEC:
                 # Its own task: a long command must not block the socket.
-                asyncio.create_task(self._handle_exec(frame))
+                task = asyncio.create_task(self._handle_exec(frame))
+                self._execs.add(task)
+                task.add_done_callback(self._execs.discard)
             elif tag == proto.SUBSCRIBE:
                 await self._apply_streams(frame.get('streams') or [])
             elif tag == proto.PING:
@@ -110,6 +114,21 @@ class AgentClient:
             # The socket died while the command ran; the server has already
             # failed the call, so dropping the reply is the correct outcome.
             logging.debug(f"could not deliver result for request {request_id}: {e}")
+
+    async def _cancel_execs(self) -> None:
+        """Kill every command still running for a connection that is gone: the
+        server has already failed those calls, and a long evaluation left
+        running would only load the host for a result nobody will read."""
+        tasks = [t for t in self._execs if not t.done()]
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        if tasks:
+            logging.info(f"cancelled {len(tasks)} command(s) orphaned by the disconnect")
 
     # --- Streams ---
 

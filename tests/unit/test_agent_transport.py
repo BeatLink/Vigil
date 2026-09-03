@@ -174,6 +174,49 @@ class TestAgentExecutor:
         with pytest.raises(ProcessLookupError):
             os.kill(child_pid, 0)
 
+    async def test_cancelling_the_run_kills_the_command(self, tmp_path):
+        """A cancelled exec must not strand its command: the server that
+        asked for it is gone, and a long evaluation would only load the host."""
+        import os
+        from vigil_agent import executor
+
+        pid_file = tmp_path / "cmd.pid"
+        task = asyncio.create_task(executor.run(f"echo $$ > {pid_file}; sleep 30", timeout=60))
+        for _ in range(50):
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            await asyncio.sleep(0.05)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        cmd_pid = int(pid_file.read_text().strip())
+        await asyncio.sleep(0.2)
+        with pytest.raises(ProcessLookupError):
+            os.kill(cmd_pid, 0)
+
+    async def test_disconnect_cancels_in_flight_commands(self, tmp_path):
+        """Losing the socket cancels every exec still running for it."""
+        import os
+        from vigil_agent import executor
+        from vigil_agent.client import AgentClient
+
+        client = AgentClient("ws://unused", "test", "token")
+        pid_file = tmp_path / "cmd.pid"
+        task = asyncio.create_task(executor.run(f"echo $$ > {pid_file}; sleep 30", timeout=60))
+        client._execs.add(task)
+        for _ in range(50):
+            if pid_file.exists() and pid_file.read_text().strip():
+                break
+            await asyncio.sleep(0.05)
+
+        await client._cancel_execs()
+        assert task.cancelled()
+        cmd_pid = int(pid_file.read_text().strip())
+        await asyncio.sleep(0.2)
+        with pytest.raises(ProcessLookupError):
+            os.kill(cmd_pid, 0)
+
 
 class TestEventRouting:
     """The engine glue between an inbound frame and a plugin's parse_event."""
