@@ -274,9 +274,9 @@ class NixosUpgrade(Plugin):
             return CollectResult.failed(
                 '/run/current-system is unreadable — is this a NixOS host?', status='offline')
 
-        state = (self._eval_state(results[1], results[2]) if len(results) > 2
-                 else self._state())
-        return self._assemble(fields, current, state)
+        evaluated = len(results) > 2
+        state = self._eval_state(results[1], results[2]) if evaluated else self._state()
+        return self._assemble(fields, current, state, evaluated)
 
     def _eval_state(self, eval_result: CmdResult, metadata_result: CmdResult) -> Dict[str, Any]:
         """Fold this cycle's evaluation and flake metadata into the stored
@@ -312,7 +312,7 @@ class NixosUpgrade(Plugin):
         return state
 
     def _assemble(self, fields: Dict[str, Any], current: str,
-                  state: Dict[str, Any]) -> CollectResult:
+                  state: Dict[str, Any], evaluated: bool) -> CollectResult:
         """Turn the probe's facts and the stored evaluation into this cycle's
         metrics, log lines and worst-of status."""
         acc = StatusAccumulator()
@@ -339,7 +339,14 @@ class NixosUpgrade(Plugin):
         if state.get('eval_error'):
             acc.escalate('failed')
             logs.append((f"Flake evaluation failed: {state['eval_error']}", 'ERROR'))
-        if target:
+        previous = ((self.data.latest_snapshot(default={}) or {}).get('current')
+                    if self.data else None)
+        if target and not evaluated and previous and previous != current and target != current:
+            # A closure that changed since the last evaluation is judged against a fresh one, not a stale target.
+            self._force_eval = True
+            logs.append((f"Running closure changed to {current}; re-evaluating the flake before "
+                         "judging drift", 'INFO'))
+        elif target:
             up_to_date = target == current
             metrics['up_to_date'] = 1.0 if up_to_date else 0.0
             if up_to_date:

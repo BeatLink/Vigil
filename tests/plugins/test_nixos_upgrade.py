@@ -127,6 +127,22 @@ class TestDrift:
         message = next(m for m, _ in result.logs if "out of date" in m)
         assert TARGET in message and CURRENT in message
 
+    async def test_new_closure_is_re_evaluated_before_being_called_drift(self, plugin):
+        _collect(plugin, eval_result=CmdResult(0, CURRENT + "\n", ""))   # evaluated: matches
+        newer = "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-nixos-system-host-26.11"
+        result = _collect(plugin, probe=_probe(current=newer))            # a deploy landed since
+        assert "up_to_date" not in result.metrics
+        assert _latest_status("test-nixos") == "online"
+        assert len(plugin.commands()) == 3                                # the next cycle evaluates
+
+    async def test_new_closure_that_still_differs_after_evaluation_is_drift(self, plugin):
+        _collect(plugin, eval_result=CmdResult(0, CURRENT + "\n", ""))
+        newer = "/nix/store/eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee-nixos-system-host-26.11"
+        _collect(plugin, probe=_probe(current=newer))
+        _collect(plugin, probe=_probe(current=newer), eval_result=CmdResult(0, TARGET + "\n", ""))
+        assert _latest_status("test-nixos") == "warning"
+        assert _latest_metric("test-nixos", "up_to_date") == 0.0
+
     async def test_evaluation_failure_is_failed(self, plugin):
         _collect(plugin, eval_result=CmdResult(1, "", "error: attribute 'nope' missing"))
         assert _latest_status("test-nixos") == "failed"
