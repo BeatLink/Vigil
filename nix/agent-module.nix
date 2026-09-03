@@ -213,6 +213,12 @@ in
         Restart = "always";
         RestartSec = "10s";
 
+        # Detached jobs (a backup, a `nixos-rebuild switch`) live in this unit's
+        # cgroup. Killing only the main process on stop/restart lets them run to
+        # completion — otherwise a switch that restarts the agent kills itself
+        # mid-activation.
+        KillMode = "process";
+
         # Deliberately mild hardening. The agent's whole job is to run the
         # commands the server sends, so sandboxing it away from the system it
         # monitors would defeat the point — ProtectSystem="strict" would hide
