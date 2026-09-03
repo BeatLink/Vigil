@@ -45,6 +45,7 @@ def _probe(current=CURRENT, booted=None, switched=None, generation=210,
     booted_kernel, current_kernel = kernels
     switched = int(time.time()) - 3600 if switched is None else switched
     lines = [
+        "hostname=host",
         f"current={current}",
         f"booted={booted or current}",
         f"switched={switched}",
@@ -412,6 +413,21 @@ class TestJobPolling:
 
 
 class TestUI:
+    async def test_configuration_row_shows_the_resolved_hostname(self, plugin):
+        _collect(plugin)
+        rows = {r["label"]: r["value"] for r in plugin._detail_rows}
+        assert rows["Configuration"] == "host"
+
+    async def test_configuration_row_prefers_the_configured_name(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "configuration": "gateway"})
+        _collect(p)
+        rows = {r["label"]: r["value"] for r in p._detail_rows}
+        assert rows["Configuration"] == "gateway"
+
+    async def test_configuration_row_before_any_probe(self, plugin):
+        rows = {r["label"]: r["value"] for r in plugin._detail_rows}
+        assert rows["Configuration"] == "the target's hostname"
+
     async def test_detail_rows_cover_both_closures(self, plugin):
         _collect(plugin)
         rows = {r['label']: r['value'] for r in plugin._detail_rows}

@@ -50,6 +50,7 @@ _LOCAL_SCHEMES = ('path:', 'git+file://', 'file://')
 def _probe_script() -> str:
     """One script collecting every cheap fact about the deployed system."""
     return '\n'.join([
+        'echo "hostname=$(uname -n)"',
         'echo "current=$(readlink -f /run/current-system 2>/dev/null)"',
         'echo "booted=$(readlink -f /run/booted-system 2>/dev/null)"',
         'echo "switched=$(stat -c %Y /run/current-system 2>/dev/null)"',
@@ -384,7 +385,8 @@ class NixosUpgrade(Plugin):
         return CollectResult(
             metrics=metrics, metadata=metadata, logs=logs, status=str(acc.status),
             snapshot={'current': current, 'version': version,
-                      'generation': generation, 'booted': fields.get('booted')},
+                      'generation': generation, 'booted': fields.get('booted'),
+                      'hostname': fields.get('hostname')},
         )
 
     @staticmethod
@@ -565,7 +567,7 @@ class NixosUpgrade(Plugin):
 
         rows = [
             ('Flake', self.flake),
-            ('Configuration', self.configuration or "the target's hostname"),
+            ('Configuration', self.configuration or snapshot.get('hostname') or "the target's hostname"),
             ('NixOS version', snapshot.get('version', '--')),
             ('Generation', str(snapshot.get('generation') or '--')),
             ('Last switch', self._switched_text),
