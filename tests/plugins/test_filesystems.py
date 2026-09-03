@@ -118,6 +118,13 @@ class TestFilesystemsCollection:
         run_cycle(plugin, lambda c: CmdResult(1, "", "df: error"))
         assert _latest_status() == "failed"
 
+    async def test_filesystem_count_card(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, _df(
+            ("/", 100, 40, 40),
+            ("/home", 100, 20, 20),
+        ), ""))
+        assert plugin._filesystem_count == "2"
+
 
 class TestParseInodes:
     def test_basic(self):

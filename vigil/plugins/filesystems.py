@@ -253,5 +253,5 @@ class Filesystems(Plugin):
     @property
     def _filesystem_count(self) -> str:
         from vigil.core.ui.components import _scan_metric_family
-        return str(len(_scan_metric_family(self, 'fs_', '_used_pct', set(), 200)))
+        return str(len(_scan_metric_family(self, 'fs_', '_used_pct', set())))
 
