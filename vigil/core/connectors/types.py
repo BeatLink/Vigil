@@ -9,6 +9,8 @@ class Command:
     text: str
     timeout: Optional[float] = None
     action: bool = False
+    # Run on this agent instead of the monitor's own target, e.g. a heavy evaluation offloaded to a bigger host.
+    agent: Optional[str] = None
 
 
 @dataclass(frozen=True)

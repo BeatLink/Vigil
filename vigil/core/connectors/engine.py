@@ -174,8 +174,13 @@ class ConnectorEngine:
 
         async def _one(req: Request) -> Result:
             if isinstance(req, Command):
-                default = CONTROL_TIMEOUT if req.action else ssh_ctx.collect_timeout
-                return await self._command(ssh_ctx, req.text, req.timeout, default)
+                ctx = ssh_ctx
+                if req.agent:
+                    # Offloaded command: same timeout policy, another agent's connection.
+                    ctx = ExecContext(conn=self.agents.require(req.agent),
+                                      collect_timeout=ssh_ctx.collect_timeout)
+                default = CONTROL_TIMEOUT if req.action else ctx.collect_timeout
+                return await self._command(ctx, req.text, req.timeout, default)
             if isinstance(req, HttpRequest):
                 return await self.http.fetch(req)
             if isinstance(req, DnsQuery):

@@ -414,6 +414,7 @@ Both actions launch a **detached** job on the target, polled to completion by th
 |--------|-------------|
 | `flake` | Flake reference the host is deployed from (default: `/etc/nixos`). Either a local path (`/etc/nixos`, `path:…`, `git+file://…`) or a remote ref (`github:owner/config`) |
 | `configuration` | `nixosConfigurations` attribute to compare against (default: the target's own hostname, resolved on the target) |
+| `eval_agent` | Run `nix eval` and `nix flake metadata` on this agent's host instead of the target (default: unset, evaluate on the target). For a target too small to evaluate its own flake — a 2 GB SBC will swap itself to death doing it. The probe and both actions still run on the target |
 | `eval_interval` | How often to evaluate the flake and read its metadata (default: `1h`) |
 | `retry_interval` | How soon to re-evaluate after a failed evaluation (default: `15m`, never longer than `eval_interval`) |
 | `eval_timeout` | Timeout for those two commands (default: `10m`) — a cold evaluation of a large config is not fast |

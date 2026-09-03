@@ -266,6 +266,24 @@ class TestEvalSchedule:
 
 
 class TestCommands:
+    def test_commands_run_on_the_target_by_default(self, plugin):
+        assert all(c.agent is None for c in plugin.commands())
+
+    async def test_eval_agent_offloads_only_the_evaluation(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "eval_agent": "big-host", "configuration": "host"})
+        probe, eval_cmd, meta_cmd = p.commands()
+        assert probe.agent is None                          # the probe stays on the target
+        assert eval_cmd.agent == "big-host" and meta_cmd.agent == "big-host"
+
+    async def test_offloaded_eval_waits_for_the_probed_hostname(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "eval_agent": "big-host"})
+        assert len(p.commands()) == 1                       # no name yet: probe only
+        _collect(p)                                         # the probe reports hostname=host
+        eval_cmd = p.commands()[1]
+        assert eval_cmd.agent == "big-host"
+        assert 'nixosConfigurations.\\"host\\"' in eval_cmd.text
+        assert "uname" not in eval_cmd.text                 # never the evaluating host's own name
+
     def test_local_flake_needs_no_refresh(self, plugin):
         eval_cmd = plugin.commands()[1].text
         assert "--refresh" not in eval_cmd

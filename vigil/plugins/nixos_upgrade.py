@@ -7,8 +7,10 @@ script); every `eval_interval` it additionally evaluates
 a guess from revisions, and the flake's own revision and input ages are
 tracked alongside it. A failed evaluation is retried after `retry_interval`
 rather than held for the full `eval_interval`, and a dashboard poll always
-evaluates. Actions launch detached jobs on the target: `nix flake update` on
-the flake, and `nixos-rebuild switch --flake`. Config: flake, configuration,
+evaluates. `eval_agent` runs the two expensive commands on another agent's
+host, for a target too small to evaluate its own flake. Actions launch
+detached jobs on the target: `nix flake update` on the flake, and
+`nixos-rebuild switch --flake`. Config: flake, configuration, eval_agent,
 eval_interval, retry_interval, eval_timeout, max_input_age, drift_status,
 reboot_status, require_sudo, nix_bin, rebuild_bin, nix_args, rebuild_args."""
 
@@ -146,6 +148,7 @@ class NixosUpgrade(Plugin):
         super().__init__(name, config)
         self.flake = str(config.get('flake', '/etc/nixos'))
         self.configuration = config.get('configuration')
+        self.eval_agent = config.get('eval_agent') or None
         self.eval_interval = parse_duration(config.get('eval_interval', '1h'))
         self.retry_interval = min(parse_duration(config.get('retry_interval', '15m')),
                                   self.eval_interval)
@@ -190,10 +193,20 @@ class NixosUpgrade(Plugin):
         path is read from disk every time and needs none."""
         return [] if self.local_path else ['--refresh']
 
+    def _attribute(self) -> Optional[str]:
+        """The nixosConfigurations attribute to evaluate: the configured name,
+        else the hostname the last probe reported (needed when the evaluation
+        runs on another host, where `uname -n` would name the wrong machine)."""
+        if self.configuration:
+            return str(self.configuration)
+        snapshot = self.data.latest_snapshot(default={}) if self.data else {}
+        return (snapshot or {}).get('hostname') or None
+
     def _installable(self) -> str:
         """The flake installable for this host's system closure, double-quoted
-        so an unset configuration falls back to the target's own hostname."""
-        attr = _escape(str(self.configuration)) if self.configuration else '$(uname -n)'
+        so an unknown attribute falls back to the evaluating host's own hostname."""
+        attr = self._attribute()
+        attr = _escape(attr) if attr else '$(uname -n)'
         return (f'"{_escape(self.flake)}#nixosConfigurations.\\"{attr}\\"'
                 f'.config.system.build.toplevel"')
 
@@ -210,18 +223,19 @@ class NixosUpgrade(Plugin):
             return [Command(detached.poll_command(job['workdir'], job['pid'], job['output_seq']))]
 
         commands = [Command(_probe_script())]
-        if self._due_for_eval():
+        # An offloaded evaluation needs the target's attribute name, which the first probe supplies.
+        if self._due_for_eval() and not (self.eval_agent and self._attribute() is None):
             nix = ' '.join([self.nix_bin] + [shlex.quote(a) for a in self.nix_args])
             refresh = ' '.join(self._refresh_args())
             commands.append(Command(
                 ' '.join(filter(None, [nix, 'eval --raw --no-write-lock-file', refresh,
                                        self._installable()])),
-                timeout=self.eval_timeout,
+                timeout=self.eval_timeout, agent=self.eval_agent,
             ))
             commands.append(Command(
                 ' '.join(filter(None, [nix, 'flake metadata --json --no-write-lock-file',
                                        refresh, shlex.quote(self.flake)])),
-                timeout=self.eval_timeout,
+                timeout=self.eval_timeout, agent=self.eval_agent,
             ))
         return commands
 
