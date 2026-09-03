@@ -1,7 +1,7 @@
 """Reusable NiceGUI building blocks shared by the UI_SPEC renderer and plugin views."""
 import asyncio
 from typing import Optional
-from nicegui import ui
+from nicegui import context, ui
 from vigil.core.contracts import RefreshCallback
 from .theme import STATUS_COLORS
 
@@ -328,6 +328,10 @@ def render_buttons(plugin, button_specs: list):
     """Render a row of action buttons from button specs, honoring their visibility predicates."""
     from vigil.core.ui.spec import ENABLED_PREDICATES, resolve
 
+    # The click runs as its own task, which starts with no slot, so the page's
+    # client is captured here and re-entered before anything is rendered.
+    client = context.client
+
     with ui.row().classes('gap-2 items-center'):
         for spec in button_specs:
             predicate_name = spec.get('visible_if')
@@ -337,16 +341,17 @@ def render_buttons(plugin, button_specs: list):
                     continue
 
             async def _click(_e=None, s=spec):
-                if s.get('kind') == 'dialog':
-                    await open_dialog_impl(plugin, s['dialog'])
-                    return
-                success, _ = await plugin.run_action(s['id'])
-                if s.get('notify', True):
-                    label = s.get('label', s['id'])
-                    ui.notify(
-                        f'{label} {"succeeded" if success else "failed"}',
-                        type='positive' if success else 'negative',
-                    )
+                with client:
+                    if s.get('kind') == 'dialog':
+                        await open_dialog_impl(plugin, s['dialog'])
+                        return
+                    success, _ = await plugin.run_action(s['id'])
+                    if s.get('notify', True):
+                        label = s.get('label', s['id'])
+                        ui.notify(
+                            f'{label} {"succeeded" if success else "failed"}',
+                            type='positive' if success else 'negative',
+                        )
 
             action_button(
                 spec.get('label', spec['id']), icon=spec.get('icon'),
