@@ -163,6 +163,24 @@ class TestCollectionHealth:
         assert _latest_metric("monitors_stalled") == 1.0
         assert _latest_status() == "failed"
 
+    async def test_the_default_late_bound_clears_the_quiet_window(self, make_plugin,
+                                                                  run_io_cycle):
+        """A pushed monitor is only guaranteed an event every
+        SAMPLE_MAX_QUIET_INTERVALS, so the default must not read that silence
+        as late."""
+        from vigil.plugins.base.plugin_base import Plugin
+        cfg = {k: v for k, v in BASE_CFG.items() if k != "stale_warning"}
+        p = make_plugin(VigilSelfPlugin, cfg)
+        quiet = time.monotonic() - (60 * Plugin.SAMPLE_MAX_QUIET_INTERVALS)
+        m = _fake_monitor("quiet", 60)
+        p.engine = _make_engine([m], {"quiet": quiet})
+        try:
+            _run(p, run_io_cycle)
+            assert _latest_metric("monitors_late") == 0.0
+            assert _latest_status() == "online"
+        finally:
+            VigilSelfPlugin.engine = None
+
     async def test_never_collected_monitor_is_not_stalled(self, plugin, run_io_cycle):
         m = _fake_monitor("new", 3600)
         plugin.engine = _make_engine([m], {"new": 0.0})

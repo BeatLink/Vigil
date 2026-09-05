@@ -61,6 +61,9 @@ class Plugin(PluginConfigMixin, ABC):
     # Suffix of the generic sample stream's id, distinct so a plugin can carry
     # other streams beside it.
     SAMPLE_STREAM = 'sample'
+    # Intervals a sample stream may stay quiet before the agent pushes anyway;
+    # any staleness bound on a pushed monitor has to clear this.
+    SAMPLE_MAX_QUIET_INTERVALS = 5
 
     def __init__(self, name: str, config: PluginConfig):
         """Pure plugins take only their name and config. All IO/persistence
@@ -157,7 +160,7 @@ class Plugin(PluginConfigMixin, ABC):
             id=f'{self.id}:{self.SAMPLE_STREAM}',
             kind='sample',
             params={'command': commands[0].text, 'interval': self.interval,
-                    'max_quiet': self.interval * 5},
+                    'max_quiet': self.interval * self.SAMPLE_MAX_QUIET_INTERVALS},
         )]
 
     def event_driven(self) -> bool:

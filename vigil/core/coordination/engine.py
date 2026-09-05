@@ -24,7 +24,7 @@ import inspect
 import random
 import sys
 import time
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Set
 
 from peewee import OperationalError
 
@@ -79,6 +79,9 @@ class VigilEngine:
         # Monitors reachable by a pushed event, keyed by the stream id the
         # agent will send back (which is the plugin's own id).
         self._event_targets: Dict[str, Plugin] = {}
+        # Of those, the streams that stand in for a poll rather than
+        # supplementing one, so an event on them marks the monitor collected.
+        self._collection_streams: Set[str] = set()
         if db_path_override:
             self.db_path = db_path_override
         else:
@@ -151,6 +154,8 @@ class VigilEngine:
         for spec in specs:
             net.conn.register_stream(spec)
             self._event_targets[spec.id] = plugin
+            if spec.kind == 'sample':
+                self._collection_streams.add(spec.id)
         logging.info(
             f"{plugin.name}: subscribed to {len(specs)} agent event stream(s) "
             f"on {net.conn.agent_id!r}"
@@ -169,6 +174,12 @@ class VigilEngine:
         if plugin is None:
             logging.debug(f"agent {agent_id!r}: event for unknown stream {stream_id!r}")
             return
+        # A sample stream is this monitor's whole collection path, so its event
+        # is what records the cycle the suppressed polling loop never runs.
+        # Recorded before the parse, matching the poll's own finally: the mark
+        # means a cycle arrived, not that it carried usable data.
+        if stream_id in self._collection_streams:
+            self._last_collected[plugin.id] = time.monotonic()
         # A plugin's broken parse_event() must not kill the agent's socket task.
         try:
             result = plugin.parse_event(stream_id, payload, timestamp)

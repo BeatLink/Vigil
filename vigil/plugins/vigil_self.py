@@ -49,7 +49,11 @@ class VigilSelfPlugin(Plugin):
         super().__init__(name, config)
         self.memory_warning   = float(config.get('memory_warning',   256))
         self.memory_threshold = float(config.get('memory_threshold', 512))
-        self.stale_warning    = float(config.get('stale_warning',     3))
+        # A pushed monitor is only guaranteed an event every
+        # SAMPLE_MAX_QUIET_INTERVALS, so a bound at or under that would read a
+        # healthy quiet stream as late.
+        self.stale_warning    = float(config.get(
+            'stale_warning', Plugin.SAMPLE_MAX_QUIET_INTERVALS + 1))
         self.stale_threshold  = float(config.get('stale_threshold',  10))
         self._started_at = time.time()
         self._last_cpu_sample: Optional[Tuple[float, float]] = None

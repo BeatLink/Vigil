@@ -230,6 +230,9 @@ class TestEventRouting:
         engine.db = db
         engine._event_targets = {plugin.id: plugin}
         engine._event_targets.update({s.id: plugin for s in plugin.subscriptions()})
+        engine._collection_streams = {s.id for s in plugin.subscriptions()
+                                      if s.kind == 'sample'}
+        engine._last_collected = {}
         return engine
 
     def test_an_event_is_parsed_and_persisted(self, make_plugin, db_manager):
@@ -255,6 +258,43 @@ class TestEventRouting:
         plugin.parse_event = MagicMock(side_effect=RuntimeError("plugin bug"))
 
         engine._on_agent_event('node-a', plugin.id, 1234.0, {'message': 'x'})
+
+    def test_a_sample_event_records_the_monitor_as_collected(self, make_plugin, db_manager):
+        """The engine runs no polling loop for a pushed monitor, so the event
+        is the only thing that can mark it collected; without this it reads as
+        forever stalled to the staleness check."""
+        from vigil.plugins.cpu import Cpu
+        plugin = make_plugin(Cpu, {})
+        engine = self._engine(db_manager, plugin)
+
+        engine._on_agent_event('node-a', f'{plugin.id}:sample', 1234.0,
+                               {'exit_code': 0, 'stdout': '', 'stderr': ''})
+
+        assert engine._last_collected[plugin.id] > 0
+
+    def test_a_sample_event_counts_even_when_the_parse_fails(self, make_plugin, db_manager):
+        """Matches the poll's own finally: the mark means a cycle arrived, not
+        that it carried usable data."""
+        from vigil.plugins.cpu import Cpu
+        plugin = make_plugin(Cpu, {})
+        engine = self._engine(db_manager, plugin)
+        plugin.parse_event = MagicMock(side_effect=RuntimeError("plugin bug"))
+
+        engine._on_agent_event('node-a', f'{plugin.id}:sample', 1234.0, {})
+
+        assert engine._last_collected[plugin.id] > 0
+
+    def test_a_journal_event_does_not_stand_in_for_the_poll(self, make_plugin, db_manager):
+        """A journal stream supplements a monitor that still polls, so a chatty
+        unit must not mask that unit's poll having wedged."""
+        from vigil.plugins.oom import Oom
+        plugin = make_plugin(Oom, {})
+        engine = self._engine(db_manager, plugin)
+
+        engine._on_agent_event('node-a', f'{plugin.id}:journal', 1234.0,
+                               {'message': 'Out of memory: Killed process 42 (redis)'})
+
+        assert plugin.id not in engine._last_collected
 
 
 class TestPluginSubscriptions:
@@ -336,7 +376,8 @@ class TestSampleStreamContract:
         from vigil.plugins.cpu import Cpu
         plugin = make_plugin(Cpu, {})
         spec = plugin.subscriptions()[0]
-        assert spec.params['max_quiet'] == plugin.interval * 5
+        assert spec.params['max_quiet'] == (
+            plugin.interval * Cpu.SAMPLE_MAX_QUIET_INTERVALS)
 
 
 class _Exhausted(Exception):
