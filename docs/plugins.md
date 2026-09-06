@@ -501,7 +501,9 @@ The action launches a **detached** `nix-collect-garbage` on the target, polled t
 
 A collection currently in flight is never counted as stale, so a run that overruns `max_age` does not alarm while it is still working.
 
-> The last run's timestamp comes from the journal first and the unit's own `InactiveEnterTimestamp` second, because systemd drops that timestamp for an inactive unit across a re-exec while the journal keeps it. The SSH user therefore needs journal read access (`systemd-journal`) for the freshness check, and passwordless `sudo` for `nix-collect-garbage` if the action is to be used.
+> The journal, not the unit, is what dates a run and decides whether it succeeded: systemd drops an inactive unit's `InactiveEnterTimestamp` and resets its `Result` to `success` across a daemon re-exec — which is exactly what a NixOS switch does — so `systemctl show` alone reports a run that failed hours ago as a healthy unit that has never run. `Result` is consulted only as a fallback, when the journal holds no outcome line at all. A failed run is reported with the `error:` line the journal recorded for it, and keeps whatever it did manage to free before failing.
+>
+> The SSH user therefore needs journal read access (`systemd-journal`) for the freshness check, and passwordless `sudo` for `nix-collect-garbage` if the action is to be used.
 
 ```yaml
 # The stock NixOS weekly collection, alarming if two pass without one

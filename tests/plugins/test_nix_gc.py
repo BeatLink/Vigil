@@ -34,16 +34,26 @@ def _latest_metric(metric: str, plugin_id: str = "test-nix-gc"):
     return row.value if row else None
 
 
+# The two lines systemd logs when a run ends, as journalctl -o short-unix renders them.
+_OUTCOMES = {
+    "finished": "systemd[1]: Finished Nix Garbage Collector.",
+    "failed":   "systemd[1]: nix-gc.service: Failed with result 'exit-code'.",
+}
+
+
 def _probe(size=200 * GB, used=80 * GB, paths=111121, roots=118,
            svc_state="inactive", svc_result="success", svc_exit="",
            timer_load="loaded", timer_state="active", timer_next=None,
-           last_gc=None, freed="44.4 GiB", deleted=21482, outcome="Finished ",
+           last_gc=None, freed="44.4 GiB", deleted=21482, outcome="finished",
+           summary_at=None, error=None, error_at=None,
            profiles=(("/nix/var/nix/profiles/system", 236, 59, None),)) -> CmdResult:
     """The stdout the probe script produces on a NixOS target."""
     now = int(time.time())
     last_gc = now - 86400 if last_gc is None else last_gc
     timer_next = now + 3 * 86400 if timer_next is None else timer_next
-    summary = (f"{last_gc}.204758 host nix-gc-start[2166397]: "
+    summary_at = last_gc if summary_at is None else summary_at
+    error_at = last_gc if error_at is None else error_at
+    summary = (f"{summary_at}.204758 host nix-gc-start[2166397]: "
                f"{deleted} store paths deleted, {freed} freed") if freed else ""
     lines = [
         "hostname=host",
@@ -57,8 +67,8 @@ def _probe(size=200 * GB, used=80 * GB, paths=111121, roots=118,
         f"timer_state={timer_state}",
         f"timer_next=@{timer_next}" if timer_next else "timer_next=",
         f"summary={summary}",
-        f"outcome={last_gc}.225681 host systemd[1]: {outcome}Nix Garbage Collector."
-        if outcome else "outcome=",
+        f"outcome={last_gc}.225681 host {_OUTCOMES[outcome]}" if outcome else "outcome=",
+        f"error={error_at}.100000 host nix-gc-start[2166397]: {error}" if error else "error=",
     ]
     for path, generation, count, oldest in profiles:
         oldest = now - 30 * 86400 if oldest is None else oldest
@@ -112,9 +122,40 @@ class TestFreshness:
         assert _latest_status() == "online"
 
     async def test_failed_last_run_is_failed(self, plugin):
-        _collect(plugin, _probe(svc_result="exit-code", outcome="Failed with result "))
+        _collect(plugin, _probe(outcome="failed"))
         assert _latest_status() == "failed"
         assert _latest_metric("last_gc_success") == 0.0
+
+    async def test_a_journal_failure_beats_a_reset_unit_result(self, plugin):
+        # systemd resets Result to success on a daemon re-exec, which is what a NixOS switch
+        # does, so a run the journal says failed must still read as failed.
+        result = _collect(plugin, _probe(outcome="failed", svc_result="success"))
+        assert _latest_status() == "failed"
+        assert not any("result success" in message for message, _ in result.logs)
+
+    async def test_a_stale_unit_result_does_not_fail_a_finished_run(self, plugin):
+        _collect(plugin, _probe(outcome="finished", svc_result="exit-code"))
+        assert _latest_status() == "online"
+
+    async def test_a_failure_is_reported_with_the_journal_reason(self, plugin):
+        result = _collect(plugin, _probe(outcome="failed", error="error: interrupted by the user"))
+        message = next(m for m, level in result.logs if level == "ERROR")
+        assert message == "The last collection failed: error: interrupted by the user"
+
+    async def test_an_error_from_an_earlier_run_is_not_this_run_reason(self, plugin):
+        result = _collect(plugin, _probe(outcome="failed", error="error: out of disk",
+                                         error_at=int(time.time()) - 30 * 86400))
+        assert next(m for m, level in result.logs if level == "ERROR") == \
+            "The last collection failed"
+
+    async def test_a_succeeded_run_reports_no_reason(self, plugin):
+        result = _collect(plugin, _probe(error="error: interrupted by the user"))
+        assert _latest_status() == "online"
+        assert not any(level == "ERROR" for _, level in result.logs)
+
+    async def test_the_unit_result_still_decides_when_the_journal_has_no_outcome(self, plugin):
+        _collect(plugin, _probe(outcome=None, svc_result="exit-code"))
+        assert _latest_status() == "failed"
 
     async def test_no_record_of_any_run_is_offline(self, plugin):
         _collect(plugin, _probe(freed=None, outcome=None))
@@ -147,6 +188,19 @@ class TestYield:
         assert _latest_metric("last_gc_epoch") == float(stamp)
         assert _latest_metric("last_gc_freed_gb") == pytest.approx(44.4)
         assert _latest_status() == "online"
+
+    async def test_a_failed_run_keeps_the_yield_it_managed(self, plugin):
+        # nix prints its summary a moment before systemd logs the failure; both are one run.
+        stamp = int(time.time()) - 3600
+        _collect(plugin, _probe(outcome="failed", last_gc=stamp, summary_at=stamp - 1,
+                                freed="2.8 GiB", deleted=2048))
+        assert _latest_status() == "failed"
+        assert _latest_metric("last_gc_freed_gb") == pytest.approx(2.8)
+        assert _latest_metric("last_gc_deleted") == 2048.0
+
+    async def test_a_summary_from_an_older_run_is_not_this_run_yield(self, plugin):
+        _collect(plugin, _probe(summary_at=int(time.time()) - 30 * 86400))
+        assert _latest_metric("last_gc_freed_gb") is None
 
     async def test_a_newer_run_without_a_summary_clears_the_old_yield(self, plugin):
         _collect(plugin, _probe(last_gc=int(time.time()) - 86400))

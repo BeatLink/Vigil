@@ -42,7 +42,14 @@ _STATE_METRIC = 'last_gc_epoch'
 
 _SUMMARY = re.compile(r'(\d+)\s+store paths deleted,\s+([\d.]+)\s*(\w+)\s+freed')
 
-_FAILURE_MARKERS = ('Failed with result', 'Main process exited')
+# systemd logs exactly one of these when a run ends, so the journal — not the unit's
+# Result, which a daemon re-exec resets to success — is what decides the outcome.
+_FAILED, _FINISHED = 'Failed with result', 'Finished '
+
+# How far from a run's outcome line its summary and error lines may be and still be
+# that run's. They land within seconds of each other; this only rejects a stale line
+# the journal has kept from an earlier collection.
+_RUN_WINDOW = 300
 
 # The units nix renders a collection's yield in, as bytes.
 _SIZE_UNITS = {
@@ -68,7 +75,8 @@ def _probe_script(unit: str, timer: str, store: str) -> str:
         f'echo "timer_state=$(systemctl show {timer} -p ActiveState --value 2>/dev/null)"',
         f'echo "timer_next=$(systemctl show {timer} --timestamp=unix -p NextElapseUSecRealtime --value 2>/dev/null)"',
         f"echo \"summary=$(journalctl -u {unit} -o short-unix --no-pager -n 1 -g 'store paths deleted' 2>/dev/null | tail -1)\"",
-        f"echo \"outcome=$(journalctl -u {unit} -o short-unix --no-pager -n 1 -g 'Finished |Failed with result|Main process exited' 2>/dev/null | tail -1)\"",
+        f"echo \"outcome=$(journalctl -u {unit} -o short-unix --no-pager -n 1 -g 'Finished |Failed with result' 2>/dev/null | tail -1)\"",
+        f"echo \"error=$(journalctl -u {unit} -o short-unix --no-pager -n 1 -g 'error:' 2>/dev/null | tail -1)\"",
         # A profile is a symlink whose target is its own generation link; that rules out
         # /nix/var/nix/profiles/default, which points at another profile and would double count.
         'for prof in /nix/var/nix/profiles/* /nix/var/nix/profiles/per-user/*/*; do',
@@ -119,6 +127,17 @@ def _log_epoch(line: str) -> Optional[int]:
         return int(float(stamp))
     except ValueError:
         return None
+
+
+def _log_message(line: str) -> str:
+    """Strip the timestamp, host and unit prefix off a journalctl line."""
+    _, _, message = line.partition(': ')
+    return (message or line).strip()[:200]
+
+
+def _same_run(epoch: Optional[int], run_epoch: int) -> bool:
+    """Whether a journal line close to the run's own end belongs to that run."""
+    return epoch is not None and abs(run_epoch - epoch) <= _RUN_WINDOW
 
 
 def _bytes_from(amount: str, unit: str) -> Optional[float]:
@@ -236,29 +255,47 @@ class NixGc(Plugin):
     def _collection_state(self, fields: Dict[str, Any]) -> Dict[str, Any]:
         """Fold what this cycle saw of the last collection into the stored
         state, keeping the older record whenever the journal no longer has it."""
-        state = dict(self._state())
-        summary, outcome = fields.get('summary', ''), fields.get('outcome', '')
+        seen = self._observed_run(fields)
+        stored = self._state()
+        if seen is None:
+            return stored
+        if seen['epoch'] <= int(stored.get('epoch') or 0):
+            # The same run seen again; a later cycle may have picked up lines the first one missed.
+            return {**stored, **{k: v for k, v in seen.items() if v is not None}}
+        return seen
 
+    def _observed_run(self, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """This cycle's reading of the last collection, as one whole record, or
+        None when nothing on the host records that a collection ever ran."""
+        outcome, summary, error = (str(fields.get(key, ''))
+                                   for key in ('outcome', 'summary', 'error'))
+        outcome_epoch = _log_epoch(outcome)
         match = _SUMMARY.search(summary)
         summary_epoch = _log_epoch(summary) if match else None
-        if match and summary_epoch is not None and summary_epoch >= int(state.get('epoch') or 0):
-            state['epoch'] = summary_epoch
-            state['deleted'] = int(match.group(1))
-            state['freed_bytes'] = _bytes_from(match.group(2), match.group(3))
 
-        # The unit's own last stop bounds the run even when the journal has rotated past its summary.
-        outcome_epoch = _log_epoch(outcome) if outcome else None
-        exit_epoch = _epoch(fields.get('svc_exit'))
-        for epoch in (outcome_epoch, exit_epoch):
-            if epoch is not None and epoch > int(state.get('epoch') or 0):
-                state['epoch'] = epoch
-                state['deleted'] = None
-                state['freed_bytes'] = None
+        # The unit's own stop bounds the run when the journal has rotated past every line of it.
+        epoch = max((e for e in (outcome_epoch, summary_epoch, _epoch(fields.get('svc_exit')))
+                     if e is not None), default=None)
+        if epoch is None:
+            return None
 
-        failed = (fields.get('svc_result') not in (None, '', 'success')
-                  or any(marker in outcome for marker in _FAILURE_MARKERS))
-        state['succeeded'] = not failed
-        return state
+        run: Dict[str, Any] = {'epoch': epoch, 'deleted': None, 'freed_bytes': None,
+                               'error': None}
+        # A `Result` of success proves nothing: systemd resets it on a daemon re-exec, which is
+        # what a NixOS switch does, so only the journal may call a run failed.
+        if _FAILED in outcome:
+            run['succeeded'] = False
+        elif _FINISHED in outcome:
+            run['succeeded'] = True
+        else:
+            run['succeeded'] = fields.get('svc_result') in (None, '', 'success')
+
+        if match and _same_run(summary_epoch, epoch):
+            run['deleted'] = int(match.group(1))
+            run['freed_bytes'] = _bytes_from(match.group(2), match.group(3))
+        if not run['succeeded'] and _same_run(_log_epoch(error), epoch):
+            run['error'] = _log_message(error)
+        return run
 
     def _assemble(self, fields: Dict[str, Any], state: Dict[str, Any]) -> CollectResult:
         """Turn the probe's facts and the stored collection record into this
@@ -359,8 +396,9 @@ class NixGc(Plugin):
 
         if not state.get('succeeded', True):
             acc.escalate('failed')
-            logs.append((f"The last collection failed "
-                         f"(result {fields.get('svc_result') or 'unknown'})", 'ERROR'))
+            reason = state.get('error')
+            logs.append((f"The last collection failed" + (f": {reason}" if reason else ''),
+                         'ERROR'))
         metrics['last_gc_success'] = 1.0 if state.get('succeeded', True) else 0.0
 
         epoch = state.get('epoch')
