@@ -188,7 +188,7 @@ class TestProcessesKillAction:
         cfg = {**BASE_CFG, "name": "test-sudo", "id": "test-sudo", "require_sudo": True}
         p = make_plugin(Processes, cfg)
         plan = p.plan_action('kill_term', pid=99)
-        assert plan.command == "sudo kill -TERM 99"
+        assert plan.command == "sudo -n kill -TERM 99"
 
     async def test_kill_failure_returns_false(self, plugin):
         outcome = plugin.interpret_action(

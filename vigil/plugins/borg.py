@@ -19,7 +19,9 @@ from typing import Dict, Any, List, Optional
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.core.connectors import ssh_connector as detached
-from vigil.plugins.base.plugin_helpers import parse_duration, format_duration, format_age
+from vigil.plugins.base.plugin_helpers import (
+    deadline_prefix, format_age, format_duration, parse_duration,
+)
 
 
 _POLL_BASE_DIR_VAR = "__vigil_poll_base"
@@ -227,10 +229,14 @@ class Borg(Plugin):
             env.append(f'BORG_BASE_DIR="${_POLL_BASE_DIR_VAR}"')
         return env
 
-    def _build(self, args: List[str], persistent_cache: bool = False) -> str:
+    def _build(self, args: List[str], persistent_cache: bool = False,
+               bounded: bool = False) -> str:
         prefix = ["sudo", "-n"] if self.require_sudo else []
         env = self._env_prefix(persistent_cache=persistent_cache)
-        command = " ".join(prefix + env + [shlex.quote(a) for a in args])
+        # Polls only: a backup is launched detached precisely so it outlives the collect cycle, and must not inherit its deadline.
+        # After env, because sudo reads leading VAR=val as assignments and takes the first non-assignment as the command to run.
+        deadline = deadline_prefix(self.timeout) if bounded else []
+        command = " ".join(prefix + env + deadline + [shlex.quote(a) for a in args])
         if persistent_cache and self.cache_dir:
             return command
         # The trap is what keeps the throwaway dir throwaway, since borg builds a full chunks cache in it on every poll
@@ -248,7 +254,7 @@ class Borg(Plugin):
             "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             self.repo,
-        ], persistent_cache=self.cache_dir_configured)
+        ], persistent_cache=self.cache_dir_configured, bounded=True)
 
     def _info_command(self) -> str:
         return self._build([
@@ -258,7 +264,7 @@ class Borg(Plugin):
             "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             self.repo,
-        ], persistent_cache=self.cache_dir_configured)
+        ], persistent_cache=self.cache_dir_configured, bounded=True)
 
     def _backup_command(self, archive_name: Optional[str] = None,
                         dry_run: bool = False) -> str:

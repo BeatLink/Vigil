@@ -87,6 +87,27 @@ def dq(value: str) -> str:
     return f'"{escaped}"'
 
 
+KILL_GRACE_SECONDS = 5
+
+
+def deadline_prefix(timeout: Optional[int]) -> List[str]:
+    """Argv that bounds a command's runtime, to be placed inside any sudo.
+
+    The agent runs unprivileged, so it cannot signal what sudo started as root:
+    killpg reaches only the wrapper the agent owns, and because the group had
+    at least one signalable member the call reports success. The agent then
+    tells the server the timeout was enforced while the root process it spawned
+    keeps running, holding whatever it opened. Putting the deadline on the far
+    side of the privilege boundary lets a root timeout kill its own root child.
+
+    Returns nothing without an explicit timeout, so a monitor that never set one
+    keeps running unbounded rather than acquiring a limit it never asked for.
+    """
+    if not timeout or timeout <= 0:
+        return []
+    return ['timeout', '-k', str(KILL_GRACE_SECONDS), str(int(timeout))]
+
+
 def level_for(value: float, warning: float, threshold: float) -> str:
     """Map a numeric reading onto online/warning/failed by its two thresholds."""
     if value >= threshold:

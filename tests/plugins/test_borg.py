@@ -302,6 +302,36 @@ class TestCommand:
         assert "--lock-wait 30" in cmd
 
 
+class TestPollDeadline:
+    """A sudo'd poll must carry its own deadline, because the agent cannot
+    enforce one on it: the agent runs unprivileged, so killpg reaches only the
+    wrapper it owns and reports success while the root borg keeps running."""
+
+    def test_a_sudo_poll_is_bounded_by_a_root_side_timeout(self, make_plugin):
+        p = make_plugin(Borg, {**BASE_CFG, "require_sudo": True, "timeout": "30m"})
+        assert "timeout -k 5 1800" in p._list_command()
+        assert "timeout -k 5 1800" in p._info_command()
+
+    def test_the_deadline_sits_after_sudo_so_root_owns_it(self, make_plugin):
+        p = make_plugin(Borg, {**BASE_CFG, "require_sudo": True, "timeout": "30m"})
+        cmd = p._list_command()
+        assert cmd.index("sudo -n") < cmd.index("timeout -k"), \
+            "a timeout before sudo runs unprivileged and cannot kill a root child"
+
+    def test_the_deadline_follows_the_env_assignments(self, make_plugin):
+        # sudo reads leading VAR=val as assignments and the first non-assignment as the command
+        p = make_plugin(Borg, {**BASE_CFG, "require_sudo": True, "timeout": "30m",
+                               "passphrase_command": "cat /k"})
+        cmd = p._list_command()
+        assert cmd.index("BORG_PASSCOMMAND=") < cmd.index("timeout -k")
+
+    def test_a_backup_is_not_bounded_by_the_poll_deadline(self, make_plugin):
+        # Backups are launched detached precisely so they outlive the collect cycle
+        p = make_plugin(Borg, {**BASE_CFG, "require_sudo": True, "timeout": "30m"})
+        head = p._backup_command().split("borg")[0]
+        assert "timeout" not in head
+
+
 class TestActions:
     async def test_no_actions_without_source_paths(self, plugin):
         assert plugin.get_actions() == []

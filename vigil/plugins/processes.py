@@ -112,7 +112,8 @@ class Processes(Plugin):
         if pid is None:
             return CollectResult.failed("Kill action missing pid")
 
-        prefix = 'sudo ' if self.require_sudo else ''
+        # -n because a sudo that stops for a password never returns, and nothing here would ever answer it
+        prefix = 'sudo -n ' if self.require_sudo else ''
         return ActionPlan(f"{prefix}kill -{signal} {int(pid)}")
 
     def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
