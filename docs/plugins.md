@@ -16,6 +16,7 @@ config examples. For what Vigil is and how to run it, see the
   [`systemd_service`](#systemd_service) ·
   [`service_list`](#service_list) ·
   [`nixos_upgrade`](#nixos_upgrade) ·
+  [`nix_gc`](#nix_gc) ·
   [`smart`](#smart) ·
   [`zfs`](#zfs) ·
   [`md`](#md) ·
@@ -58,6 +59,7 @@ config examples. For what Vigil is and how to run it, see the
 | [`systemd_service`](#systemd_service)   | systemd unit state / last run         | SSH (`systemctl`)                                | `active` *or* `last_run_epoch`, `last_run_success` | Restart, Stop, Enable, Disable |
 | [`service_list`](#service_list)         | Systemd unit browser and control      | SSH (`systemctl`)                                | `services_total`, `services_active`, `services_failed` | Start, Stop, Restart, Enable, Disable, View Status |
 | [`nixos_upgrade`](#nixos_upgrade)       | NixOS system vs. the flake it deploys from | SSH (`nix eval`, `nix flake metadata`)      | `up_to_date`, `reboot_required`, `flake_reachable` | Update Flake, Rebuild & Switch |
+| [`nix_gc`](#nix_gc)                     | Nix store garbage collection           | SSH (`df`, `systemctl`, `journalctl`)             | `last_gc_epoch`, `last_gc_freed_gb`, `store_used_pct` | Collect Garbage |
 | [`smart`](#smart)                       | SMART health of every physical disk    | SSH (`smartctl`)                                | `disks_total`, `disks_ok`, `disks_failed`       | — |
 | [`zfs`](#zfs)                           | ZFS pool state and capacity            | SSH (`zpool list`)                              | `pools_total`, `pools_degraded`, `zfs_usage_max` | — |
 | [`md`](#md)                             | mdadm array health                     | SSH (`/proc/mdstat`)                            | `arrays_total`, `arrays_ok`, `arrays_degraded`  | — |
@@ -90,7 +92,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `nixos_upgrade`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `nixos_upgrade`, `nix_gc`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -460,6 +462,68 @@ Update Flake needs a lock file this host can write, so it is offered only for a 
   eval_interval: 6h
   ssh_config:
     host: "gateway.example.com"
+```
+
+---
+
+### `nix_gc`
+Whether Nix garbage collection is actually keeping a host's store in check: when it last ran, what it freed, whether it is still scheduled, and how much of the store filesystem is left. A collection that quietly stopped running — a masked timer, a unit that fails every week, a host that was never given `nix.gc.automatic` — otherwise shows up only as a disk that fills months later.
+
+One cheap script per cycle reads the store filesystem (`df`), the store path and indirect-GC-root counts, every profile's generation links, the `nix-gc` unit and timer state (`systemctl show`), and the last collection's own summary line from the journal. Nothing here needs root, and nothing takes the GC lock: `nix-store --gc --print-dead` would give an exact reclaimable figure but walks the whole store — minutes, with the lock held — so it is deliberately not run.
+
+The last collection's epoch, outcome and yield are stored with the monitor, so a journal that has since rotated past that run does not erase what Vigil already saw. The stored record only ever moves forward.
+
+Profiles are discovered rather than configured: every symlink under `/nix/var/nix/profiles/` and `/nix/var/nix/profiles/per-user/*/` whose target is its own generation link. Their generation counts and the age of the oldest generation still on disk are what a `--delete-older-than` collection is supposed to be bounding, so they are the direct evidence that it is working.
+
+The action launches a **detached** `nix-collect-garbage` on the target, polled to completion by this monitor's own cycle (see [Job control](../DEVELOP.md#job-control)), so a collection that runs for an hour survives a dropped connection and a Vigil restart.
+
+| Option | Description |
+|--------|-------------|
+| `unit` | Collection unit to read (default: `nix-gc.service`) |
+| `timer` | Timer that schedules it (default: `nix-gc.timer`) |
+| `store` | Store path whose filesystem is measured (default: `/nix/store`) |
+| `max_age` | Age of the last collection before it counts as stale (default: `2w`) |
+| `stale_status` | Status for a stale collection: `failed` (default), `warning`, or `online` to ignore it |
+| `timer_status` | Status when the timer is not active: `warning` (default), `failed`, or `online` |
+| `warning` / `threshold` | Store filesystem percent used at which to warn / fail (defaults: `80` / `90`) |
+| `max_generations` | Warn once any one profile keeps more than this many generations (default: unset, never warns) |
+| `max_generation_age` | Warn once the oldest generation on disk is older than this (default: unset, never warns) |
+| `require_sudo` | Prefix the action with `sudo -n` (default: `true`) |
+| `gc_bin` | Binary the action invokes (default: `nix-collect-garbage`) |
+| `gc_args` | Arguments it is given (default: `["--delete-older-than", "7d"]`) |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `last_gc_epoch`, `last_gc_success` (1/0), `last_gc_freed_gb`, `last_gc_deleted`, `next_gc_epoch`, `timer_active` (1/0), `store_used_pct`, `store_size_gb`, `store_used_gb`, `store_avail_gb`, `store_paths`, `gc_roots`, `profiles`, `generations`, `oldest_generation_epoch`
+
+**Actions**: Collect Garbage (`nix-collect-garbage`)
+
+**Status**: `failed` when the last collection failed, when it is older than `max_age` (`stale_status`), or when the store filesystem is at `threshold`; `warning` at the `warning` mark, past `max_generations` or `max_generation_age`, and when the timer is inactive (`timer_status`); `offline` when the store cannot be read at all, or when nothing on the host records that a collection ever ran.
+
+A collection currently in flight is never counted as stale, so a run that overruns `max_age` does not alarm while it is still working.
+
+> The last run's timestamp comes from the journal first and the unit's own `InactiveEnterTimestamp` second, because systemd drops that timestamp for an inactive unit across a re-exec while the journal keeps it. The SSH user therefore needs journal read access (`systemd-journal`) for the freshness check, and passwordless `sudo` for `nix-collect-garbage` if the action is to be used.
+
+```yaml
+# The stock NixOS weekly collection, alarming if two pass without one
+- name: "Garbage Collection"
+  id: "web-01-nix-gc"
+  type: "nix_gc"
+  interval: 1h
+  ssh_config:
+    host: "web-01.example.com"
+
+# A small host where the store filling is the real risk
+- name: "Garbage Collection"
+  id: "sbc-nix-gc"
+  type: "nix_gc"
+  interval: 1h
+  max_age: 10d
+  warning: 70
+  threshold: 85
+  max_generation_age: 30d
+  gc_args: ["--delete-older-than", "3d"]
+  ssh_config:
+    host: "sbc.example.com"
 ```
 
 ---
