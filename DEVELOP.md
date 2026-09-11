@@ -675,7 +675,7 @@ out so they're reusable without dragging in the rest of `plugin_base.py`.
 
 `plugins/base/signal_plugin.py` holds what the single-signal monitors (`cpu`,
 `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`,
-`connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io`) share: the severity
+`connections`, `wifi`, `smart`, `zfs`, `btrfs`, `md`, `disk_io`) share: the severity
 ordering, `worst_status` for the ones that fold several disks or pools into one
 verdict, and a `SignalPlugin` base that turns the `cards()`/`charts()`/`rows()`
 a monitor declares into the usual host-card / charts / events page. Each one

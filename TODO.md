@@ -59,7 +59,7 @@ Nothing here is committed work — this is the candidate list.
 ### 1b2. Plugin granularity
 
 Every host signal is its own monitor — `cpu`, `memory`, `load`, `temperature`, `interrupts`,
-`gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io` — each with
+`gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `btrfs`, `md`, `disk_io` — each with
 its own thresholds, interval, status and history, grouped per host and per domain in config.
 They share only [signal_plugin.py](vigil/plugins/base/signal_plugin.py): the severity ordering
 and the page assembly.

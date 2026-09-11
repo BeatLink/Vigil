@@ -8,7 +8,7 @@ from vigil.plugins.base.signal_plugin import SignalPlugin, worst_status
 SIGNALS = [
     'cpu', 'memory', 'load', 'temperature', 'interrupts', 'gpu', 'oom',
     'throughput', 'connections', 'wifi',
-    'smart', 'zfs', 'md', 'disk_io',
+    'smart', 'zfs', 'btrfs', 'md', 'disk_io',
 ]
 
 

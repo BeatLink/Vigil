@@ -19,6 +19,7 @@ config examples. For what Vigil is and how to run it, see the
   [`nix_gc`](#nix_gc) ·
   [`smart`](#smart) ·
   [`zfs`](#zfs) ·
+  [`btrfs`](#btrfs) ·
   [`md`](#md) ·
   [`disk_io`](#disk_io) ·
   [`disk_space`](#disk_space) ·
@@ -62,6 +63,7 @@ config examples. For what Vigil is and how to run it, see the
 | [`nix_gc`](#nix_gc)                     | Nix store garbage collection           | SSH (`df`, `systemctl`, `journalctl`)             | `last_gc_epoch`, `last_gc_freed_gb`, `store_used_pct` | Collect Garbage |
 | [`smart`](#smart)                       | SMART health of every physical disk    | SSH (`smartctl`)                                | `disks_total`, `disks_ok`, `disks_failed`       | — |
 | [`zfs`](#zfs)                           | ZFS pool state and capacity            | SSH (`zpool list`)                              | `pools_total`, `pools_degraded`, `zfs_usage_max` | — |
+| [`btrfs`](#btrfs)                       | Btrfs filesystem health and capacity   | SSH (`btrfs filesystem usage`, `btrfs device stats`) | `filesystems_total`, `filesystems_degraded`, `btrfs_usage_max` | — |
 | [`md`](#md)                             | mdadm array health                     | SSH (`/proc/mdstat`)                            | `arrays_total`, `arrays_ok`, `arrays_degraded`  | — |
 | [`disk_io`](#disk_io)                   | Disk read/write throughput             | SSH (`/proc/diskstats`)                         | `read_kbps`, `write_kbps`                       | — |
 | [`disk_space`](#disk_space)             | Filesystem usage for a path           | SSH (`df`)                                       | `used_pct`, `size_gb`, `used_gb`, `avail_gb`    | — |
@@ -92,7 +94,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `nixos_upgrade`, `nix_gc`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `nixos_upgrade`, `nix_gc`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `btrfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -577,6 +579,43 @@ ZFS pool state and capacity, via `zpool list`. Every pool's health and used perc
   interval: 1h
   warning: 80
   threshold: 90
+  ssh_config:
+    host: "ragnarok.example.com"
+```
+
+---
+
+### `btrfs`
+Btrfs filesystem state and capacity, the btrfs sibling of [`zfs`](#zfs). Every mounted btrfs filesystem is reported once, under its topmost mountpoint, with its usage and the device error counters btrfs keeps.
+
+Btrfs publishes no pool health word, so the verdict comes from those counters — read, write, flush, corruption and generation failures, counted per device since the filesystem was made and cleared only by `btrfs device stats -z`. Any of them above zero is this monitor's DEGRADED.
+
+Usage is measured in raw device terms (bytes occupied / device size), so a DUP or RAID1 profile — where a byte of data costs two bytes of disk — reads as the fuller filesystem it really is, rather than as the half-full one `df` suggests.
+
+Unallocated space is watched separately, because it is the btrfs failure `df` cannot see: once a filesystem has no unallocated space left it cannot create a new chunk, and writes start failing with ENOSPC however much free space the percentage reports.
+
+Everything is read through the mountpoint, which needs no privilege — this monitor adds no sudo rule.
+
+| Option                | Description                                                                        |
+|-----------------------|------------------------------------------------------------------------------------|
+| `filesystems`         | Mountpoints to report (default: every mounted btrfs filesystem). Each filesystem is named by its topmost mountpoint, so list `/`, not a subvolume mounted beneath it. |
+| `warning`             | Usage % that triggers `warning` (default: `80`)                                    |
+| `threshold`           | Usage % that triggers `failed` (default: `90`)                                     |
+| `unallocated_warning` | Unallocated bytes below which the filesystem warns (default: `1073741824`, one GiB) |
+| `interval`            | Polling frequency (default: `60`). The probe is three cheap ioctl reads per filesystem — well under a second even on a small ARM board. |
+| `ssh_config`          | SSH connection details — see [SSH Config](#ssh-config) below                        |
+
+**Metrics**: `filesystems_total`, `filesystems_ok`, `filesystems_degraded`, `btrfs_usage_max`, `device_errors`, `fs_usage_<mount>`, `fs_errors_<mount>`, `fs_unallocated_<mount>`
+
+**Status**: `failed` for any filesystem with a non-zero device error counter, or usage at `threshold`; `warning` above `warning` or with unallocated space under `unallocated_warning`; `offline` if the host has no btrfs filesystem.
+
+```yaml
+- name: "Btrfs"
+  id: "ragnarok-btrfs"
+  type: "btrfs"
+  interval: 10m
+  warning: 90
+  threshold: 96
   ssh_config:
     host: "ragnarok.example.com"
 ```
