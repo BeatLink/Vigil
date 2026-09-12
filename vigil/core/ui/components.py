@@ -436,18 +436,18 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
         if not a.get('visible_if') or (resolve(ENABLED_PREDICATES, a['visible_if']) or (lambda p: True))(plugin)
     ]
 
-    search_in = None
-    if filter_spec:
-        search_in = ui.input(filter_spec.get('placeholder', 'Filter')).props(
-            'outlined dense clearable').classes('w-full mb-4')
-
     render_columns = list(columns)
     if row_actions:
         render_columns = render_columns + [
             {'name': 'actions', 'label': '', 'field': 'actions', 'sortable': False, 'align': 'center'},
         ]
 
-    table = ui.table(columns=render_columns, rows=[], row_key=row_key).classes('w-full')
+    search_in = None
+    with card('w-full'):
+        if filter_spec:
+            search_in = ui.input(filter_spec.get('placeholder', 'Filter')).props(
+                'outlined dense clearable').classes('w-full mb-4')
+        table = ui.table(columns=render_columns, rows=[], row_key=row_key).classes('w-full')
 
     for col in columns:
         color_rule_name = col.get('cell_color_by')
