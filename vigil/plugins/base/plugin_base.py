@@ -42,6 +42,11 @@ class Plugin(PluginConfigMixin, ABC):
     # wiring. See vigil/core/coordination/jobs.py.
     jobs = None
 
+    # The host this monitor is about, when that is not the host it collects on
+    # (a scan run from elsewhere). The engine labels the monitor with this
+    # instead of the transport's target; None keeps the transport's.
+    display_target: Optional[str] = None
+
     # Plugins that use the declarative render path (spec.generic_render)
     # override this as a @property returning a UISpec dict. Plugins with a
     # hand-written render_ui() may leave it unset — every UI_SPEC consumer

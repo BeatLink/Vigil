@@ -9,7 +9,8 @@ warns, and a `vulners` version match is graded by its CVSS score against
 kept alongside so a new exposure is visible even when no script objects to it.
 Config: scan_host, ports, scripts, script_args, service_detection,
 discovery_ports, nmap_args, warning_cvss, threshold_cvss, likely_status,
-max_findings, require_sudo, nmap_bin, timeout."""
+max_findings, require_sudo, nmap_bin, timeout. The monitor is labelled with
+`scan_host`, not with the agent it runs on, and a card names the scanner."""
 
 import shlex
 import time
@@ -24,8 +25,8 @@ from vigil.plugins.base.plugin_helpers import (
 
 
 _DEFAULT_LAYOUT = [
-    ['host_card', 'vulnerable_card', 'suspected_card', 'noted_card'],
-    ['last_scan_card', 'duration_card', 'open_ports_card'],
+    ['host_card', 'scanner_card', 'vulnerable_card', 'suspected_card'],
+    ['last_scan_card', 'duration_card', 'open_ports_card', 'noted_card'],
     ['findings'],
     ['ports'],
     ['chart'],
@@ -131,6 +132,9 @@ class VulnScan(Plugin):
         self.max_findings = int(config.get('max_findings', 200))
         self.require_sudo = bool(config.get('require_sudo', False))
         self.nmap_bin = str(config.get('nmap_bin', 'nmap'))
+        # The monitor is about the scanned host; the agent or SSH host is only where nmap runs.
+        self.display_target = self.scan_host
+        self.scanner = str(config.get('agent') or config.get('ssh_config', {}).get('host') or 'localhost')
 
         from vigil.core.ui.spec import register_item_color_rule
         self._grade_color = f'vuln_scan_grade_{self.id}'
@@ -396,6 +400,7 @@ class VulnScan(Plugin):
         return {
             'layout': _DEFAULT_LAYOUT,
             'cards': {
+                'scanner_card': {'title': 'SCANNED FROM', 'value': self.scanner},
                 'vulnerable_card': {'metric': 'vulnerable', 'title': 'VULNERABLE',
                                     'format': 'int', 'color': 'nonzero_failed'},
                 'suspected_card': {'metric': 'suspected', 'title': 'LIKELY VULNERABLE',

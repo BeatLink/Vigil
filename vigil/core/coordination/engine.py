@@ -113,8 +113,9 @@ class VigilEngine:
         writes via db.apply_result on the collection/action path."""
         net = self.connectors.exec_context(plugin_cfg, collect_timeout=plugin.timeout)
         # The transport resolves the effective target host; keep the plugin's
-        # target in sync so its labels/reads match what's collected.
-        plugin.target = net.target
+        # target in sync so its labels/reads match what's collected, unless the
+        # plugin is about some other host than the one it collects on.
+        plugin.target = plugin.display_target or net.target
         self._exec_contexts[plugin.id] = net
         plugin.bind(PluginDataView(self.db, plugin.id))
 

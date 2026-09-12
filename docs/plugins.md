@@ -537,7 +537,7 @@ A collection currently in flight is never counted as stale, so a run that overru
 ### `vuln_scan`
 What a host exposes to the network and whether any of it is known to be vulnerable: one `nmap --script vuln` sweep per cycle, with service detection, parsed from nmap's XML into a row per open port and a row per finding.
 
-The scan runs on the monitor's target (the agent or SSH host) and is pointed at `scan_host`, which is deliberately a different machine. A host scanning itself goes over loopback, which its firewall trusts, so it reports every listening socket rather than what a peer can actually reach. Scan a host from somewhere else on the network, and pick the vantage point that matters — the LAN, or the VPN the host is reached through.
+The scan runs on the monitor's agent or SSH host and is pointed at `scan_host`, which is deliberately a different machine. The monitor is labelled with `scan_host`, since that is the host it is about, and a card names where the scan ran from. A host scanning itself goes over loopback, which its firewall trusts, so it reports every listening socket rather than what a peer can actually reach. Scan a host from somewhere else on the network, and pick the vantage point that matters — the LAN, or the VPN the host is reached through.
 
 Each finding is graded, and the monitor takes the worst grade:
 

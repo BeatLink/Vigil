@@ -128,6 +128,15 @@ class TestCommand:
         assert "-T4 web-01.example.com" in cmd.text
         assert "-sV" not in cmd.text
 
+    async def test_monitor_is_labelled_with_the_scanned_host(self, plugin):
+        assert plugin.display_target == "web-01.example.com"
+        assert plugin.target == "web-01.example.com"
+        assert plugin.scanner == "scanner.host"
+
+    async def test_scanner_names_the_agent_when_one_is_set(self, make_plugin):
+        p = make_plugin(VulnScan, {**BASE_CFG, "agent": "monitor"})
+        assert p.scanner == "monitor"
+
     async def test_scan_host_falls_back_to_target_host(self, make_plugin):
         cfg = {k: v for k, v in BASE_CFG.items() if k not in ("scan_host", "ssh_config")}
         p = make_plugin(VulnScan, {**cfg, "target_host": "db-01.example.com"})
