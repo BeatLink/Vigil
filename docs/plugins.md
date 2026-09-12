@@ -17,6 +17,7 @@ config examples. For what Vigil is and how to run it, see the
   [`service_list`](#service_list) ·
   [`nixos_upgrade`](#nixos_upgrade) ·
   [`nix_gc`](#nix_gc) ·
+  [`vuln_scan`](#vuln_scan) ·
   [`smart`](#smart) ·
   [`zfs`](#zfs) ·
   [`btrfs`](#btrfs) ·
@@ -61,6 +62,7 @@ config examples. For what Vigil is and how to run it, see the
 | [`service_list`](#service_list)         | Systemd unit browser and control      | SSH (`systemctl`)                                | `services_total`, `services_active`, `services_failed` | Start, Stop, Restart, Enable, Disable, View Status |
 | [`nixos_upgrade`](#nixos_upgrade)       | NixOS system vs. the flake it deploys from | SSH (`nix eval`, `nix flake metadata`)      | `up_to_date`, `reboot_required`, `flake_reachable` | Update Flake, Rebuild & Switch |
 | [`nix_gc`](#nix_gc)                     | Nix store garbage collection           | SSH (`df`, `systemctl`, `journalctl`)             | `last_gc_epoch`, `last_gc_freed_gb`, `store_used_pct` | Collect Garbage |
+| [`vuln_scan`](#vuln_scan)               | Network-facing vulnerabilities of a host | SSH (`nmap --script vuln`, run from the scanning host) | `vulnerable`, `suspected`, `open_ports`      | — |
 | [`smart`](#smart)                       | SMART health of every physical disk    | SSH (`smartctl`)                                | `disks_total`, `disks_ok`, `disks_failed`       | — |
 | [`zfs`](#zfs)                           | ZFS pool state and capacity            | SSH (`zpool list`)                              | `pools_total`, `pools_degraded`, `zfs_usage_max` | — |
 | [`btrfs`](#btrfs)                       | Btrfs filesystem health and capacity   | SSH (`btrfs filesystem usage`, `btrfs device stats`) | `filesystems_total`, `filesystems_degraded`, `btrfs_usage_max` | — |
@@ -94,7 +96,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `nixos_upgrade`, `nix_gc`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `btrfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `nixos_upgrade`, `nix_gc`, `vuln_scan`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `btrfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -531,6 +533,67 @@ A collection currently in flight is never counted as stale, so a run that overru
 ```
 
 ---
+
+### `vuln_scan`
+What a host exposes to the network and whether any of it is known to be vulnerable: one `nmap --script vuln` sweep per cycle, with service detection, parsed from nmap's XML into a row per open port and a row per finding.
+
+The scan runs on the monitor's target (the agent or SSH host) and is pointed at `scan_host`, which is deliberately a different machine. A host scanning itself goes over loopback, which its firewall trusts, so it reports every listening socket rather than what a peer can actually reach. Scan a host from somewhere else on the network, and pick the vantage point that matters — the LAN, or the VPN the host is reached through.
+
+Each finding is graded, and the monitor takes the worst grade:
+
+- **Vulnerable** (`failed`): a script's vulns-library table with a `VULNERABLE`, `VULNERABLE (Exploitable)` or `VULNERABLE (DoS)` state, or a plain-text result that says `VULNERABLE` outright.
+- **Likely** (`likely_status`, default `warning`): a `LIKELY VULNERABLE` state. Some scripts only ever reach this — `http-slowloris-check` flags most web servers — so exclude what you do not want to hear about via `scripts`.
+- **Noted** (`online`): a script that returned structured output without a verdict, listed for the record.
+
+The `vulners` script (part of the `vuln` category, and needs the scanning host to reach vulners.com) matches detected versions against a CVE database rather than testing anything, so its advisories are graded by CVSS score instead: `threshold_cvss` and above fails, `warning_cvss` and above warns, anything lower is noted. Version matching is loose — a distribution that backports fixes keeps the old version string — so set these to what you are willing to investigate.
+
+A host that does not answer on the `discovery_ports` is `offline` rather than clean, and so is a scan that overruns `timeout` or a scanning host with no `nmap`. Nothing here needs root: an unprivileged nmap uses connect scans and a TCP probe for discovery, which is all the `vuln` scripts need. `require_sudo` is there for a scan that wants SYN scanning or OS detection via `nmap_args`.
+
+| Option | Description |
+|--------|-------------|
+| `scan_host` | Host or address nmap is pointed at (default: the monitor's `target_host`, then `localhost`) |
+| `ports` | Port spec passed as `-p` (default: unset, nmap's top 1000) |
+| `scripts` | Script expression passed as `--script` (default: `vuln`) |
+| `script_args` | Passed as `--script-args` (default: unset) |
+| `service_detection` | Add `-sV` so scripts see what is listening (default: `true`) |
+| `discovery_ports` | TCP ports probed to decide the host is up; empty skips discovery with `-Pn` (default: `[22, 80, 443]`) |
+| `nmap_args` | Extra arguments appended verbatim (default: `[]`) |
+| `warning_cvss` / `threshold_cvss` | CVSS score at which a `vulners` advisory warns / fails (defaults: `4.0` / `7.0`) |
+| `likely_status` | Status for a `LIKELY VULNERABLE` finding: `warning` (default), `failed`, or `online` to list it only |
+| `max_findings` | Rows kept in the findings table; the counts are always complete (default: `200`) |
+| `require_sudo` | Prefix the scan with `sudo -n` (default: `false`) |
+| `nmap_bin` | Binary to run (default: `nmap`) |
+| `timeout` | Deadline for the whole scan (default: `20m`) |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `vulnerable`, `suspected`, `noted`, `open_ports`, `scan_seconds`, `host_up` (1/0), `last_scan_epoch`
+
+**Status**: `failed` on any vulnerable finding; `warning` on a likely one (`likely_status`) or a `vulners` advisory at `warning_cvss`; `offline` when the host did not answer discovery, the scan did not finish in `timeout`, or nmap could not run.
+
+> A full `-sV --script vuln` sweep of the top 1000 ports takes a few minutes per host and probes every service it finds, so give it a long `interval` (daily is plenty) and a `timeout` to match. The scanning host needs `nmap` on the agent's PATH.
+
+```yaml
+# Every host scanned from the monitoring server, over the VPN they are reached by
+- name: "Vulnerability Scan"
+  id: "web-01-vuln-scan"
+  type: "vuln_scan"
+  interval: 1d
+  timeout: 30m
+  scan_host: "web-01.example.com"
+  scripts: "vuln and not http-slowloris-check"
+  agent: "monitor"
+
+# The monitoring server itself, scanned from somewhere else
+- name: "Vulnerability Scan"
+  id: "monitor-vuln-scan"
+  type: "vuln_scan"
+  interval: 1d
+  scan_host: "monitor.example.com"
+  warning_cvss: 7.0
+  threshold_cvss: 9.0
+  ssh_config:
+    host: "web-01.example.com"
+```
 
 ### `smart`
 SMART health of every physical disk on a host, via `smartctl`. Classification is by positive assertion: only an explicit `PASSED` verdict counts a disk as healthy, so a check that could not run reads as **failed** rather than as a clean disk. Virtual block devices (zram, ZFS zvols, loop/md/device-mapper nodes) are filtered out before probing, and a device that genuinely has no SMART support is skipped rather than counted.
