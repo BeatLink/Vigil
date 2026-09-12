@@ -40,6 +40,9 @@ _LIKELY_STATE = 'LIKELY VULNERABLE'
 _FAILED, _WARNING, _NOTED = 'failed', 'warning', 'online'
 _GRADE_LABEL = {_FAILED: 'VULNERABLE', _WARNING: 'LIKELY', _NOTED: 'NOTE'}
 
+# Service-detection output nmap attaches as a script when it cannot identify a service; never a finding.
+_IGNORED_SCRIPTS = ('fingerprint-strings',)
+
 # The output a script leaves when it found nothing; a plain-text result that reads like this is not a finding.
 _NEGATIVE_PHRASES = ("couldn't find", 'could not find', 'no vulnerabilities', 'not vulnerable',
                      'no exploitable', 'nothing found')
@@ -276,6 +279,8 @@ class VulnScan(Plugin):
         """The findings one script's result holds: vulns-library tables, a
         vulners advisory list, or a plain-text verdict."""
         script_id = script.get('id', '')
+        if script_id in _IGNORED_SCRIPTS:
+            return []
         base = {'port': port, 'service': service, 'script': script_id}
         if script_id == 'vulners':
             return self._vulners_findings(script, base)

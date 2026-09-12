@@ -184,6 +184,14 @@ class TestGrading:
         assert _latest_status() == "failed"
         assert plugin._finding_rows[0]["title"] == "VULNERABLE:"
 
+    async def test_service_fingerprints_are_not_findings(self, plugin):
+        fingerprint = ('<script id="fingerprint-strings" output="DNSVersionBindReqTCP: ..."><table key="DNSVersionBindReqTCP">'
+                       '<elem>\\x00\\x1e\\x00\\x06\\x01</elem></table></script>')
+        _collect(plugin, _scan(_port(53, "domain", fingerprint)))
+        assert _latest_status() == "online"
+        assert _latest_metric("noted") == 0
+        assert plugin._finding_rows == []
+
     async def test_nothing_found_text_is_ignored(self, plugin):
         _collect(plugin, _scan(_port(80, "http", NEGATIVE)))
         assert _latest_status() == "online"
