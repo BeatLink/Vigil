@@ -275,7 +275,9 @@ Resolves the public record against an explicit `resolver` (default `8.8.8.8`) ra
 
 | Option        | Description                                                                 |
 |---------------|-------------------------------------------------------------------------------|
-| `domain`      | Domain whose public record is kept current *(required)*                      |
+| `domain`      | Domain whose public record is kept current *(required, unless supplied by one of the two below)* |
+| `domain_file` | Path to a file containing the domain (keeps the name out of config.yaml)      |
+| `domain_command` | Shell command whose stdout is the domain                                   |
 | `update_url`  | Provider's per-host dynamic update URL, including its own secret token       |
 | `update_url_file` | Path to a file containing the update URL (keeps the token out of config.yaml) |
 | `update_url_command` | Shell command whose stdout is the update URL                         |
@@ -284,7 +286,9 @@ Resolves the public record against an explicit `resolver` (default `8.8.8.8`) ra
 | `timeout`     | Timeout in seconds for both the IP lookup and the update request (default: `10`) |
 | `min_interval`| Minimum seconds between update attempts regardless of how often `interval` ticks (default: `300`) |
 
-Precedence when more than one update-URL source is set: `update_url` > `update_url_file` > `update_url_command`.
+Precedence when more than one source is set, for the domain and the update URL alike: the inline value > the `_file` > the `_command`. The domain is resolved on first use and remembered, so a `domain_file` that is not readable yet does not permanently break the monitor.
+
+The domain is worth hiding for the same reason the update URL is: it names the connection whose address is being published. A `domain_file` lets it come from a secrets manager instead of the config.
 
 **Metrics**: `in_sync` (1/0), `last_update_epoch` (Unix timestamp of the last successful push)
 
@@ -292,9 +296,9 @@ Precedence when more than one update-URL source is set: `update_url` > `update_u
 
 ```yaml
 - name: "DDNS"
-  id: "ddns-bltechnet"
+  id: "ddns-home"
   type: "ddns_updater"
-  domain: "bltechnet.mooo.com"
+  domain_file: "/run/secrets/rendered/vigil-ddns-domain"
   update_url_file: "/run/secrets/freedns_update_url"
   interval: 5m
 ```
@@ -711,9 +715,11 @@ Linux software RAID health, read from `/proc/mdstat` — the mdadm sibling of [`
 ### `disk_io`
 Disk read/write throughput, from two `/proc/diskstats` samples a second apart taken on the target. With no `device`, it auto-detects the busiest whole disk (ignoring partitions and virtual devices) and persists the choice, showing it on the card.
 
+Kernel names like `sda` are assigned in the order drives answer at boot, so one drive failing to appear renames every drive after it. Give `device` a path under `/dev/disk/by-id/` instead: it is resolved to the current kernel name on each poll, and the monitor fails with "is not present" when the drive itself is gone rather than silently measuring a different disk.
+
 | Option       | Description                                                              |
 |--------------|--------------------------------------------------------------------------|
-| `device`     | Block device to measure, e.g. `sda` (default: auto-detect the busiest)    |
+| `device`     | Block device to measure — a `/dev/disk/by-id/...` path (recommended) or a kernel name like `sda` (default: auto-detect the busiest) |
 | `interval`   | Polling frequency (default: `60`, recommend `30s`)                        |
 | `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below             |
 
@@ -724,6 +730,7 @@ Disk read/write throughput, from two `/proc/diskstats` samples a second apart ta
   id: "ragnarok-disk-io"
   type: "disk_io"
   interval: 30s
+  device: "/dev/disk/by-id/ata-EXAMPLE_SSD_1TB_1234567890"
   ssh_config:
     host: "ragnarok.example.com"
 ```

@@ -2,10 +2,11 @@
 network's real public IP. Uses the io_call escape hatch for sequential local
 IO on the Vigil host — fetch the public IP from echo services, resolve the
 record, and on drift GET the provider's update URL, throttled by
-min_interval. Config: domain, record_type, resolver, timeout, min_interval,
-update_url / update_url_file / update_url_command. In sync, or freshly
-updated, is online; drift with the update throttled is warning; a failed or
-unconfigured update, or no determinable public IP, is failed."""
+min_interval. Config: domain / domain_file / domain_command, record_type,
+resolver, timeout, min_interval, update_url / update_url_file /
+update_url_command. In sync, or freshly updated, is online; drift with the
+update throttled is warning; a failed or unconfigured update, or no
+determinable public IP, is failed."""
 
 import subprocess
 import time
@@ -35,7 +36,10 @@ _DEFAULT_LAYOUT = [
 class DdnsUpdater(Plugin):
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
-        self.domain = config.get('domain')
+        self._domain = config.get('domain')
+        self._domain_file = config.get('domain_file')
+        self._domain_command = config.get('domain_command')
+        self._domain_error = None
         self.record_type = str(config.get('record_type', 'A')).upper()
         self.resolver_addr = config.get('resolver', '8.8.8.8')
         self.timeout = float(config.get('timeout', 10))
@@ -47,28 +51,44 @@ class DdnsUpdater(Plugin):
         self._last_update_attempt = 0.0
         self._session = requests.Session()
 
+    @property
+    def domain(self) -> Optional[str]:
+        """The domain being kept current, resolved once and remembered."""
+        if self._domain is None:
+            self._domain, self._domain_error = self._resolve_setting(
+                'domain', None, self._domain_file, self._domain_command)
+        return self._domain
+
     def _resolve_update_url(self) -> Tuple[Optional[str], Optional[str]]:
         """Returns (url, error_message)."""
-        if self._update_url:
-            return self._update_url, None
-        if self._update_url_file:
+        return self._resolve_setting(
+            'update_url', self._update_url, self._update_url_file, self._update_url_command)
+
+    def _resolve_setting(
+        self, option: str, value: Optional[str], file_path: Optional[str],
+        command: Optional[str],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        """Returns (value, error_message) for a setting given inline, in a file, or as a
+        command's stdout, in that order of precedence."""
+        if value:
+            return value, None
+        if file_path:
             try:
-                with open(self._update_url_file) as fh:
+                with open(file_path) as fh:
                     return fh.read().strip(), None
             except OSError as e:
-                return None, f"Could not read update_url_file: {e}"
-        if self._update_url_command:
+                return None, f"Could not read {option}_file: {e}"
+        if command:
             try:
                 result = subprocess.run(
-                    self._update_url_command, shell=True, capture_output=True,
-                    text=True, timeout=10,
+                    command, shell=True, capture_output=True, text=True, timeout=10,
                 )
                 if result.returncode != 0:
-                    return None, f"update_url_command failed: {result.stderr.strip()}"
+                    return None, f"{option}_command failed: {result.stderr.strip()}"
                 return result.stdout.strip(), None
             # subprocess.run raises OSError or SubprocessError (incl. TimeoutExpired) here.
             except (OSError, subprocess.SubprocessError) as e:
-                return None, f"update_url_command failed: {e}"
+                return None, f"{option}_command failed: {e}"
         return None, None
 
     def _fetch_public_ip(self) -> Optional[str]:
@@ -145,13 +165,16 @@ class DdnsUpdater(Plugin):
         # compare, then conditionally push with throttling), so it uses the
         # io_call escape hatch rather than a declarative request list.
         if not self.domain:
-            return lambda: {'no_domain': True}
+            return lambda: {'no_domain': True, 'domain_error': self._domain_error}
         return self._collect_sync
 
     def parse_results(self, results: List[Any]) -> CollectResult:
         result = results[0]
         if result.get('no_domain'):
-            return CollectResult.failed("No 'domain' configured")
+            return CollectResult.failed(
+                result.get('domain_error')
+                or "No domain/domain_file/domain_command configured"
+            )
 
         public_ip, dns_ip, updated = result['public_ip'], result['dns_ip'], result['updated']
 

@@ -27,7 +27,7 @@ def _latest_metric(pid, name):
 def _cfg(**extra):
     base = {
         "name": "test-ddns", "id": "test-ddns",
-        "domain": "bltechnet.mooo.com",
+        "domain": "home.example.com",
         "update_url": "https://freedns.example/update?token=secret",
     }
     base.update(extra)
@@ -127,6 +127,37 @@ class TestUpdateUrlResolution:
     async def test_no_source_configured_returns_none(self, make_plugin):
         p = make_plugin(DdnsUpdater, _cfg(update_url=None))
         assert p._resolve_update_url() == (None, None)
+
+
+class TestDomainResolution:
+    async def test_domain_file_is_read(self, make_plugin, tmp_path):
+        secret_file = tmp_path / "domain.txt"
+        secret_file.write_text("fromfile.example.com\n")
+        p = make_plugin(DdnsUpdater, _cfg(domain=None, domain_file=str(secret_file)))
+        assert p.domain == "fromfile.example.com"
+
+    async def test_domain_command_is_run(self, make_plugin):
+        p = make_plugin(DdnsUpdater, _cfg(domain=None, domain_command="echo fromcmd.example.com"))
+        assert p.domain == "fromcmd.example.com"
+
+    async def test_direct_domain_takes_precedence(self, make_plugin, tmp_path):
+        secret_file = tmp_path / "domain.txt"
+        secret_file.write_text("fromfile.example.com")
+        p = make_plugin(DdnsUpdater, _cfg(domain_file=str(secret_file)))
+        assert p.domain == "home.example.com"
+
+    async def test_unreadable_domain_file_is_retried(self, make_plugin, tmp_path):
+        secret_file = tmp_path / "domain.txt"
+        p = make_plugin(DdnsUpdater, _cfg(domain=None, domain_file=str(secret_file)))
+        assert p.domain is None
+        secret_file.write_text("late.example.com")
+        assert p.domain == "late.example.com"
+
+    async def test_missing_domain_file_sets_failed(self, make_plugin, run_io_cycle, tmp_path):
+        p = make_plugin(DdnsUpdater, _cfg(domain=None, domain_file=str(tmp_path / "absent")))
+        run_io_cycle(p)
+        assert _latest_status("test-ddns") == "failed"
+        assert "Could not read domain_file" in p._domain_error
 
 
 class TestPushUpdate:
