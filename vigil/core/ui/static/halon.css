@@ -358,6 +358,12 @@ a, .q-link { color: var(--accent); }
     color: var(--text-on-fill) !important;
 }
 
+/* A flat toggle that is switched on: the glyph takes the accent, the border stays quiet. */
+.q-btn.q-btn--flat.halon-button-active {
+    border-color: var(--border-default);
+    color: var(--accent) !important;
+}
+
 .q-btn:disabled, .q-btn.disabled { opacity: 0.5 !important; }
 
 .q-btn.q-btn--round, .q-btn.q-btn--dense.q-btn--round {
