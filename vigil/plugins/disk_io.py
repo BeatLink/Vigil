@@ -1,5 +1,6 @@
 """Disk read/write throughput, sampled from /proc/diskstats."""
 
+import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.plugins.base.signal_plugin import (
@@ -57,6 +58,19 @@ def _auto_detect_device(s1: Dict[str, Tuple[int, int]], s2: Dict[str, Tuple[int,
     return max(activity, key=activity.__getitem__)
 
 
+def _is_device_path(device: str) -> bool:
+    """Whether a configured device is a path to resolve rather than a kernel name."""
+    return device.startswith('/')
+
+
+def _resolve_device_path(stdout: str) -> Optional[str]:
+    """The kernel name a resolved device path points at, or None when the path is absent."""
+    path = stdout.strip().splitlines()[-1].strip() if stdout.strip() else ''
+    if not path.startswith('/dev/'):
+        return None
+    return path.rsplit('/', 1)[-1] or None
+
+
 def _format_rate(kbps: float) -> str:
     """A KB/s rate rendered as a human-readable throughput string."""
     if kbps >= 1024:
@@ -79,21 +93,31 @@ class DiskIo(SignalPlugin):
     SAMPLED = True
 
     def commands(self) -> List[Command]:
-        return [Command("cat /proc/diskstats && sleep 1 && echo '---SNAP---' && cat /proc/diskstats")]
+        text = "cat /proc/diskstats && sleep 1 && echo '---SNAP---' && cat /proc/diskstats"
+        if self.device and _is_device_path(self.device):
+            text += f" && echo '---DEVICE---' && {{ readlink -e {shlex.quote(self.device)} || true; }}"
+        return [Command(text)]
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
             return CollectResult.failed(f"Failed to read /proc/diskstats: {stderr}")
 
-        halves = stdout.split('---SNAP---')
+        samples, _, resolved = stdout.partition('---DEVICE---')
+
+        halves = samples.split('---SNAP---')
         if len(halves) < 2:
             return CollectResult.failed("Unexpected /proc/diskstats output format")
 
         s1 = _parse_diskstats(halves[0])
         s2 = _parse_diskstats(halves[1])
 
-        device = self.device or _auto_detect_device(s1, s2)
+        if self.device and _is_device_path(self.device):
+            device = _resolve_device_path(resolved)
+            if not device:
+                return CollectResult.failed(f"Device '{self.device}' is not present")
+        else:
+            device = self.device or _auto_detect_device(s1, s2)
         if not device:
             return CollectResult.failed("No usable disk device found")
 

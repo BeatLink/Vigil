@@ -46,6 +46,7 @@ def plugin(make_plugin):
 
 from vigil.plugins.disk_io import (
     _parse_diskstats, _is_physical, _auto_detect_device, _format_rate,
+    _is_device_path, _resolve_device_path,
 )
 
 
@@ -88,6 +89,20 @@ class TestAutoDetect:
         assert _auto_detect_device({}, {}) is None
 
 
+class TestDevicePaths:
+    def test_path_recognised(self):
+        assert _is_device_path("/dev/disk/by-id/ata-EXAMPLE_1234")
+
+    def test_kernel_name_is_not_a_path(self):
+        assert not _is_device_path("sda")
+
+    def test_resolves_to_kernel_name(self):
+        assert _resolve_device_path("/dev/sdb\n") == "sdb"
+
+    def test_absent_link_resolves_to_none(self):
+        assert _resolve_device_path("") is None
+
+
 class TestFormatRate:
     def test_below_1024_shows_kbps(self):
         assert _format_rate(512.0) == "512.0 KB/s"
@@ -115,6 +130,20 @@ class TestCollection:
     async def test_explicit_device_missing_fails(self, make_plugin, run_cycle):
         p = make_plugin(DiskIo, dict(CFG, device='sda'))
         _run(p, run_cycle, _two_snaps({"sdb": (0, 0)}, {"sdb": (2, 0)}))
+        assert _latest_status() == "failed"
+
+    async def test_by_id_path_resolves_to_current_letter(self, make_plugin, run_cycle):
+        p = make_plugin(DiskIo, dict(CFG, device='/dev/disk/by-id/ata-EXAMPLE_1234'))
+        body = _two_snaps({"sdb": (0, 0)}, {"sdb": (2, 4)}) + "---DEVICE---\n/dev/sdb\n"
+        result = _run(p, run_cycle, body)
+        assert _latest_status() == "online"
+        assert result.settings[f"disks:{p.id}:active_device"] == "sdb"
+        assert _latest_metric("read_kbps") == pytest.approx(1.0)
+
+    async def test_by_id_path_absent_fails(self, make_plugin, run_cycle):
+        p = make_plugin(DiskIo, dict(CFG, device='/dev/disk/by-id/ata-EXAMPLE_1234'))
+        body = _two_snaps({"sdb": (0, 0)}, {"sdb": (2, 4)}) + "---DEVICE---\n"
+        _run(p, run_cycle, body)
         assert _latest_status() == "failed"
 
     async def test_malformed_fails(self, plugin, run_cycle):
