@@ -6,7 +6,8 @@ Config: api_url (required, Vigil-reachable), api_key / api_key_command,
 min_domains, api_timeout, write_probe, probe_url. It counts the domains and
 blocked URLs in the response; fewer than min_domains domains is warning (the
 database may be empty or wiped), while an unreachable API, a non-200 reply, a
-malformed response or a write that does not round-trip is failed.
+malformed response or a write that does not round-trip is failed. A probe
+that could not run at all (agent not connected) is offline, not failed.
 
 Reading alone cannot see a database whose every write fails, which is how a
 corrupt index once held this monitor green while nothing could be blocked."""
@@ -33,14 +34,20 @@ def _parse_response(stdout: str) -> list:
     return data
 
 
+AGENT_UNAVAILABLE = "agent-unavailable"
+"""Sentinel: the probe could not run at all, which is not evidence that writes fail."""
+
+
 def _write_probe_error(result) -> str:
     """Return why the block/check/unblock round-trip failed, or an empty string when it worked."""
     if result is None:
-        return "probe did not run"
+        return AGENT_UNAVAILABLE
     if not isinstance(result, CmdResult):
         return f"unexpected probe result type {type(result).__name__}"
     if result.exit_code != 0:
         detail = (result.stderr or result.stdout).strip()[:200]
+        if "is not connected" in detail:
+            return AGENT_UNAVAILABLE
         return f"probe command exited {result.exit_code}: {detail!r}"
 
     fields = dict(
@@ -166,7 +173,16 @@ class Blockurl(Plugin):
         write_error = None
         if self.write_probe:
             write_error = _write_probe_error(results[1] if len(results) > 1 else None)
-            metrics["write_ok"] = 0.0 if write_error else 1.0
+            # An unrun probe measured nothing, so it neither passes nor fails the write metric.
+            if write_error != AGENT_UNAVAILABLE:
+                metrics["write_ok"] = 0.0 if write_error else 1.0
+
+        if write_error == AGENT_UNAVAILABLE:
+            return CollectResult(
+                metrics=metrics,
+                logs=[("Write probe did not run: agent not connected", "WARNING")],
+                status="offline",
+            )
 
         if write_error:
             return CollectResult(

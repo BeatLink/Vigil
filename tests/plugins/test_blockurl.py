@@ -2,7 +2,9 @@ import json
 
 import pytest
 
-from vigil.plugins.blockurl import Blockurl, _parse_response, _write_probe_error
+from vigil.plugins.blockurl import (
+    AGENT_UNAVAILABLE, Blockurl, _parse_response, _write_probe_error,
+)
 from vigil.core.connectors.types import CmdResult, Command, HttpRequest, HttpResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -135,8 +137,12 @@ class TestWriteProbeParsing:
     def test_clean_round_trip_is_no_error(self):
         assert _write_probe_error(_probe()) == ""
 
-    def test_missing_result_is_an_error(self):
-        assert "did not run" in _write_probe_error(None)
+    def test_missing_result_is_unavailable_not_a_failure(self):
+        assert _write_probe_error(None) == AGENT_UNAVAILABLE
+
+    def test_disconnected_agent_is_unavailable_not_a_failure(self):
+        probe = _probe(exit_code=-1, stderr="Agent 'heimdall' is not connected")
+        assert _write_probe_error(probe) == AGENT_UNAVAILABLE
 
     def test_nonzero_exit_is_an_error(self):
         assert "exited 7" in _write_probe_error(_probe(exit_code=7, stderr="boom"))
@@ -182,3 +188,17 @@ class TestWriteProbeCollection:
         run_requests(p, lambda r: _result())
         assert _latest_status("bu-noprobe") == "online"
         assert _latest_metric("write_ok", "bu-noprobe") is None
+
+
+class TestProbeUnavailable:
+    async def test_disconnected_agent_is_offline_not_failed(self, plugin, run_requests):
+        """A Vigil restart races the agent connection; that is not a write failure."""
+        probe = _probe(exit_code=-1, stderr="Agent 'heimdall' is not connected")
+        run_requests(plugin, _respond(probe=probe))
+        assert _latest_status() == "offline"
+
+    async def test_unrun_probe_records_no_write_metric(self, plugin, run_requests):
+        probe = _probe(exit_code=-1, stderr="Agent 'heimdall' is not connected")
+        run_requests(plugin, _respond(probe=probe))
+        assert _latest_metric("write_ok") is None
+        assert _latest_metric("domains_total") == 2.0
