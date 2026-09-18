@@ -11,6 +11,7 @@ from vigil.plugins.pihole import (
     _build_gravity_script,
     _format_age_compact,
     _parse_response,
+    _rate_is_checked,
 )
 from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
@@ -223,6 +224,46 @@ class TestBlockingDisabled:
     async def test_worst_condition_wins(self, plugin, run_cycle):
         old = time.time() - (86400 * 30)
         _respond(plugin, run_cycle, _summary(domains=0, last_update=old))
+        assert _latest_status() == "failed"
+
+
+class TestBlockRateDisabled:
+    """Both thresholds at zero: the rate is charted but judged by nothing."""
+
+    @pytest.fixture
+    def off(self, make_plugin):
+        return make_plugin(Pihole, dict(BASE_CFG, block_rate_warning=0,
+                                        block_rate_threshold=0))
+
+    def test_predicate_is_off_only_when_both_are_zero(self):
+        assert _rate_is_checked(5, 1)
+        assert _rate_is_checked(5, 0)
+        assert _rate_is_checked(0, 1)
+        assert not _rate_is_checked(0, 0)
+
+    @pytest.mark.parametrize("rate", [0.0, 0.4, 2.0, 50.0])
+    def test_card_is_unstyled_at_every_rate(self, off, rate):
+        assert off._block_rate_color(rate) is None
+
+    @pytest.mark.parametrize("rate,expected", [(0.4, "failed"), (2.0, "warning"),
+                                               (50.0, "online")])
+    def test_card_still_colours_when_thresholds_are_set(self, plugin, rate, expected):
+        assert plugin._block_rate_color(rate) == expected
+
+    async def test_a_zero_block_rate_stays_online(self, off, run_cycle):
+        _respond(off, run_cycle, _summary(percent=0.0))
+        assert _latest_status() == "online"
+
+    async def test_the_rate_is_still_recorded(self, off, run_cycle):
+        _respond(off, run_cycle, _summary(percent=0.0))
+        assert _latest_metric("block_rate_pct") == pytest.approx(0.0)
+
+    async def test_disabled_blocking_still_fails(self, off, run_cycle):
+        _respond(off, run_cycle, _summary(percent=0.0), blocking="disabled")
+        assert _latest_status() == "failed"
+
+    async def test_an_empty_gravity_list_still_fails(self, off, run_cycle):
+        _respond(off, run_cycle, _summary(percent=0.0, domains=0))
         assert _latest_status() == "failed"
 
 

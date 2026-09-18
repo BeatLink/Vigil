@@ -5,7 +5,9 @@ the session on exit. Config: api_url, api_password / api_password_command,
 block_rate_warning, block_rate_threshold, gravity_max_age, min_queries,
 api_timeout, gravity_timeout. Disabled blocking, an empty gravity list, or a
 block rate under block_rate_threshold (once min_queries is reached) is
-failed; a merely low block rate or a stale gravity list is warning."""
+failed; a merely low block rate or a stale gravity list is warning.
+Setting both block_rate thresholds to 0 stops the rate being judged at
+all -- it is then charted but sets neither the status nor the card colour."""
 
 import json
 import shlex
@@ -145,6 +147,17 @@ def _gravity_age_seconds(gravity: Dict[str, Any], now: float) -> Optional[float]
     return max(0.0, now - float(last_update))
 
 
+def _rate_is_checked(warning: float, threshold: float) -> bool:
+    """Whether the block rate is being judged at all.
+
+    Both thresholds at zero turns it off: the rate measures what clients
+    happened to ask for, not whether Pi-hole is still blocking, so a site whose
+    traffic is mostly cached and local lookups has no meaningful floor. Blocking
+    being enabled and the gravity list being non-empty are the checks that
+    answer that, and they are judged regardless."""
+    return warning > 0 or threshold > 0
+
+
 def _evaluate_health(metrics: Dict[str, float], gravity_age: Optional[float],
                      block_rate_warning: float, block_rate_threshold: float,
                      gravity_max_age: int, min_queries: int) -> StatusAccumulator:
@@ -158,7 +171,7 @@ def _evaluate_health(metrics: Dict[str, float], gravity_age: Optional[float],
     if metrics['gravity_domains'] <= 0:
         acc.escalate('failed', "gravity list is empty")
 
-    if metrics['queries_total'] >= min_queries:
+    if _rate_is_checked(block_rate_warning, block_rate_threshold)             and metrics['queries_total'] >= min_queries:
         if block_rate < block_rate_threshold:
             acc.escalate('failed',
                          f"block rate {block_rate:.1f}% below {block_rate_threshold}%")
@@ -300,6 +313,10 @@ class Pihole(Plugin):
 
     def _block_rate_color(self, v: Optional[float]) -> Optional[str]:
         if v is None:
+            return None
+        # None leaves the card unstyled, so a rate nothing judges reads as the
+        # figure it is rather than as a health verdict.
+        if not _rate_is_checked(self.block_rate_warning, self.block_rate_threshold):
             return None
         if v < self.block_rate_threshold:
             return 'failed'
