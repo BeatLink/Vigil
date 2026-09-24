@@ -6,7 +6,8 @@ that stopped running, failed, or was never scheduled reads as a failure rather
 than as a slowly filling disk. The last run's epoch and yield are carried
 forward as metric metadata, so a journal that has since rotated past it does
 not erase what was already seen. The action launches a detached
-`nix-collect-garbage` on the target, the same collection the timer runs.
+`nix-collect-garbage` on the target, the same collection the timer runs, and
+its outcome is recorded as the last collection just as a timer run would be.
 Config: unit, timer, store, max_age, stale_status, timer_status, warning,
 threshold, max_generations, max_generation_age, require_sudo, gc_bin,
 gc_args."""
@@ -259,10 +260,12 @@ class NixGc(Plugin):
         stored = self._state()
         if seen is None:
             return stored
-        if seen['epoch'] <= int(stored.get('epoch') or 0):
+        stored_epoch = int(stored.get('epoch') or 0)
+        if _same_run(seen['epoch'], stored_epoch):
             # The same run seen again; a later cycle may have picked up lines the first one missed.
             return {**stored, **{k: v for k, v in seen.items() if v is not None}}
-        return seen
+        # A manual collection outlives the unit's last run in the journal, so the newer record wins.
+        return seen if seen['epoch'] > stored_epoch else stored
 
     def _observed_run(self, fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """This cycle's reading of the last collection, as one whole record, or
@@ -467,11 +470,34 @@ class NixGc(Plugin):
             return CollectResult.failed('Collection ended unexpectedly')
 
         state = 'succeeded' if poll.exit_code == 0 else 'failed'
-        self.jobs.finish(job_id, state, exit_code=poll.exit_code,
-                         error=None if state == 'succeeded' else f"Exited with status {poll.exit_code}")
+        error = None if state == 'succeeded' else f"Exited with status {poll.exit_code}"
+        self.jobs.finish(job_id, state, exit_code=poll.exit_code, error=error)
+        run = self._job_run(lines or [job.get('progress') or ''], poll.exit_code == 0, error)
         if poll.exit_code == 0:
-            return CollectResult(logs=[('Collection completed successfully', 'INFO')], success=True)
-        return CollectResult.failed(f"Collection failed (exit {poll.exit_code})")
+            return CollectResult(logs=[('Collection completed successfully', 'INFO')], success=True,
+                                 **self._run_record(run))
+        return CollectResult(logs=[(f"Collection failed (exit {poll.exit_code})", 'ERROR')],
+                             status='failed', **self._run_record(run))
+
+    def _job_run(self, lines: List[str], succeeded: bool, error: Optional[str]) -> Dict[str, Any]:
+        """The finished manual collection as the same record the journal probe builds."""
+        run: Dict[str, Any] = {'epoch': int(time.time()), 'deleted': None, 'freed_bytes': None,
+                               'error': error, 'succeeded': succeeded}
+        match = next((m for m in (_SUMMARY.search(line) for line in reversed(lines)) if m), None)
+        if match:
+            run['deleted'] = int(match.group(1))
+            run['freed_bytes'] = _bytes_from(match.group(2), match.group(3))
+        return run
+
+    @staticmethod
+    def _run_record(run: Dict[str, Any]) -> Dict[str, Any]:
+        """The metrics and metadata that carry a collection record to the next cycle."""
+        metrics = {_STATE_METRIC: float(run['epoch']),
+                   'last_gc_success': 1.0 if run['succeeded'] else 0.0}
+        if run['freed_bytes'] is not None:
+            metrics['last_gc_freed_gb'] = run['freed_bytes'] / (1024 ** 3)
+            metrics['last_gc_deleted'] = float(run['deleted'] or 0)
+        return {'metrics': metrics, 'metadata': {_STATE_METRIC: json.dumps(run)}}
 
     # --- actions ---
 

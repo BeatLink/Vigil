@@ -434,3 +434,30 @@ class TestUiSpec:
     def test_a_stale_collection_colors_its_card(self, plugin):
         _collect(plugin, _probe(last_gc=int(time.time()) - 21 * 86400))
         assert plugin._last_gc_color == "failed"
+
+
+class TestManualRunIsTheLastCollection:
+    async def test_a_finished_job_becomes_the_last_collection(self, plugin):
+        old = int(time.time()) - 16 * 86400
+        _collect(plugin, _probe(last_gc=old, freed="359.3 MiB", deleted=101))
+        await _launch(plugin)
+        _poll_once(plugin, _poll(20, 0, False, "7529 store paths deleted, 3.3 GiB freed\n"))
+        state = _state(plugin)
+        assert state["epoch"] >= int(time.time()) - 5
+        assert state["deleted"] == 7529 and state["succeeded"] is True
+        assert _latest_metric("last_gc_freed_gb") == pytest.approx(3.3)
+
+    async def test_the_journal_does_not_roll_back_to_the_timer_run(self, plugin):
+        old = int(time.time()) - 16 * 86400
+        await _launch(plugin)
+        _poll_once(plugin, _poll(20, 0, False, "7529 store paths deleted, 3.3 GiB freed\n"))
+        _collect(plugin, _probe(last_gc=old, freed="359.3 MiB", deleted=101))
+        assert _state(plugin)["deleted"] == 7529
+        assert _latest_status() == "online"
+
+    async def test_a_failed_job_is_a_failed_last_collection(self, plugin):
+        await _launch(plugin)
+        _poll_once(plugin, _poll(5, 1, False, ""))
+        _collect(plugin, _probe(last_gc=int(time.time()) - 86400))
+        assert _latest_status() == "failed"
+        assert _latest_metric("last_gc_success") == 0.0
