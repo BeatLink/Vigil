@@ -70,20 +70,32 @@ class TestFoldersCollection:
         run_cycle(p, lambda c: CmdResult(0, f"{999 * _GB}\t/media", ""))
         assert _latest_status() == "online"
 
-    async def test_du_timeout_failed(self, make_plugin, run_cycle):
+    async def test_du_timeout_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Folders, _cfg(folders=[{"path": "/huge"}], timeout=1))
         run_cycle(p, lambda c: CmdResult(124, "", ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_missing_folder_failed(self, make_plugin, run_cycle):
+    async def test_missing_folder_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Folders, _cfg(folders=[{"path": "/nope"}]))
         run_cycle(p, lambda c: CmdResult(1, "", "du: cannot access"))
+        assert _latest_status() == "unavailable"
+
+    async def test_measured_breach_outranks_an_unmeasured_folder(self, make_plugin, run_cycle):
+        p = make_plugin(Folders, _cfg(folders=[
+            {"path": "/a", "warning": 5, "threshold": 10},
+            {"path": "/b"},
+        ]))
+        outputs = [
+            CmdResult(0, f"{12 * _GB}\t/a", ""),
+            CmdResult(1, "", "du: cannot access"),
+        ]
+        run_cycle(p, lambda c, _it=iter(outputs): next(_it))
         assert _latest_status() == "failed"
 
-    async def test_no_folders_offline(self, make_plugin, run_cycle):
+    async def test_no_folders_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Folders, _cfg())
         run_cycle(p, lambda c: CmdResult(0, "", ""))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
 
 class TestFoldersActions:

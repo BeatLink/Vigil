@@ -47,6 +47,10 @@ class Plugin(PluginConfigMixin, ABC):
     # instead of the transport's target; None keeps the transport's.
     display_target: Optional[str] = None
 
+    # An availability monitor measures reachability itself, so an unreachable
+    # host is its failed verdict; every other monitor reads unavailable instead.
+    AVAILABILITY: bool = False
+
     # Plugins that use the declarative render path (spec.generic_render)
     # override this as a @property returning a UISpec dict. Plugins with a
     # hand-written render_ui() may leave it unset — every UI_SPEC consumer

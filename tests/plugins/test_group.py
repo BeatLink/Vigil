@@ -37,8 +37,8 @@ class TestSeverityOrder:
 
     def test_failed_is_most_severe(self):
         assert Status.FAILED.severity > Status.WARNING.severity
-        assert Status.WARNING.severity > Status.OFFLINE.severity
-        assert Status.OFFLINE.severity > Status.ONLINE.severity
+        assert Status.WARNING.severity > Status.UNAVAILABLE.severity
+        assert Status.UNAVAILABLE.severity > Status.ONLINE.severity
 
 
 class TestStatusAggregation:
@@ -70,9 +70,9 @@ class TestStatusAggregation:
         ]
         assert _aggregated(group, db_manager) == "warning"
 
-    def test_warning_beats_offline(self, group, db_manager):
+    def test_warning_beats_unavailable(self, group, db_manager):
         group.children = [
-            _make_child("a", "offline", db_manager),
+            _make_child("a", "unavailable", db_manager),
             _make_child("b", "warning", db_manager),
         ]
         assert _aggregated(group, db_manager) == "warning"
@@ -81,19 +81,19 @@ class TestStatusAggregation:
         group.children = []
         assert _aggregated(group, db_manager) == "online"
 
-    def test_child_with_no_history_treated_as_offline(self, group, db_manager):
+    def test_child_with_no_history_treated_as_unavailable(self, group, db_manager):
         child = MagicMock()
         child.id = "never-polled"
         child.children = []
         group.children = [child]
-        assert _aggregated(group, db_manager) == "offline"
+        assert _aggregated(group, db_manager) == "unavailable"
 
-    def test_mixed_online_and_offline_returns_offline(self, group, db_manager):
+    def test_mixed_online_and_unavailable_returns_unavailable(self, group, db_manager):
         group.children = [
             _make_child("a", "online", db_manager),
-            _make_child("b", "offline", db_manager),
+            _make_child("b", "unavailable", db_manager),
         ]
-        assert _aggregated(group, db_manager) == "offline"
+        assert _aggregated(group, db_manager) == "unavailable"
 
     def test_all_failed_returns_failed(self, group, db_manager):
         group.children = [

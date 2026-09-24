@@ -127,10 +127,10 @@ class TestCollection:
             {"sda": (0, 0), "sdb": (0, 0)}, {"sda": (2, 0), "sdb": (1000, 0)}))
         assert result.settings[f"disks:{plugin.id}:active_device"] == "sdb"
 
-    async def test_explicit_device_missing_fails(self, make_plugin, run_cycle):
+    async def test_explicit_device_missing_is_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(DiskIo, dict(CFG, device='sda'))
         _run(p, run_cycle, _two_snaps({"sdb": (0, 0)}, {"sdb": (2, 0)}))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
     async def test_by_id_path_resolves_to_current_letter(self, make_plugin, run_cycle):
         p = make_plugin(DiskIo, dict(CFG, device='/dev/disk/by-id/ata-EXAMPLE_1234'))
@@ -140,16 +140,16 @@ class TestCollection:
         assert result.settings[f"disks:{p.id}:active_device"] == "sdb"
         assert _latest_metric("read_kbps") == pytest.approx(1.0)
 
-    async def test_by_id_path_absent_fails(self, make_plugin, run_cycle):
+    async def test_by_id_path_absent_is_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(DiskIo, dict(CFG, device='/dev/disk/by-id/ata-EXAMPLE_1234'))
         body = _two_snaps({"sdb": (0, 0)}, {"sdb": (2, 4)}) + "---DEVICE---\n"
         _run(p, run_cycle, body)
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_malformed_fails(self, plugin, run_cycle):
+    async def test_malformed_is_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, "no separator here")
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_ssh_failure_fails(self, plugin, run_cycle):
+    async def test_ssh_failure_is_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, "", code=-1, stderr="err")
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"

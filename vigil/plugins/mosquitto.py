@@ -4,7 +4,8 @@ hosts — subscribes to a probe topic, publishes a nonce, and requires that
 same nonce back. Config: host, port, username, password / password_command,
 probe_topic, probe_timeout. A completed round trip is online; a delivery
 timeout, a payload mismatch, or any other script failure is failed — there is
-no warning tier."""
+no warning tier. Only a host missing the mosquitto clients is unavailable,
+since the broker was never probed."""
 
 import shlex
 import time
@@ -106,6 +107,9 @@ class Mosquitto(Plugin):
                     f"Publish/subscribe round trip returned an unexpected payload: "
                     f"{stderr.strip()}"
                 )
+            elif 'not found' in stderr:
+                return CollectResult.unavailable(
+                    f"Cannot run the MQTT round trip, the mosquitto clients are missing: {stderr.strip()}")
             else:
                 message = f"Failed to run MQTT round trip: {stderr.strip()}"
             return CollectResult(metrics={'roundtrip_ok': 0.0}, logs=[(message, "ERROR")], status='failed')

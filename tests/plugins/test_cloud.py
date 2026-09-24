@@ -52,10 +52,10 @@ class TestCloudCollection:
         assert _latest_status() == "online"
         assert _latest_metric("on_cloud") == pytest.approx(1.0)
 
-    async def test_not_cloud_offline(self, make_plugin, run_cycle):
+    async def test_not_cloud_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Cloud, _cfg(provider="aws"))
         run_cycle(p, lambda c: CmdResult(7, "", ""))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
         assert _latest_metric("on_cloud") == pytest.approx(0.0)
 
     async def test_auto_falls_through_providers(self, make_plugin, run_cycle):
@@ -68,10 +68,15 @@ class TestCloudCollection:
         run_cycle(p, lambda c, _it=iter(outputs): next(_it))
         assert _latest_status() == "online"
 
-    async def test_auto_none_respond_offline(self, make_plugin, run_cycle):
+    async def test_auto_none_respond_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Cloud, _cfg(provider="auto"))
         run_cycle(p, lambda c: CmdResult(7, "", ""))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
+
+    async def test_unreachable_host_is_unavailable(self, make_plugin, run_cycle):
+        p = make_plugin(Cloud, _cfg(provider="aws"))
+        run_cycle(p, lambda c: CmdResult(-1, "", "Agent 'h' is not connected"))
+        assert _latest_status() == "unavailable"
 
 
 class TestCloudActions:

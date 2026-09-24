@@ -603,7 +603,7 @@ cycling, so the tenth type is painted the same blue as the first.
 The type card is a treemap instead. Tile area is the monitor count and the label
 inside each tile carries identity, which frees color to mean something: each
 tile takes the *worst* status among its monitors (`_worst_status`, severity
-`failed > warning > offline > online`), drawn from the four reserved status
+`failed > warning > unavailable > online`), drawn from the four reserved status
 tokens. So the chart costs no categorical palette at any type count, and one
 failed unit inside an otherwise healthy type is visible without opening it.
 Clicking a tile still filters the monitor table exactly as the donut slice did.
@@ -686,7 +686,7 @@ verdict, and a `SignalPlugin` base that turns the `cards()`/`charts()`/`rows()`
 a monitor declares into the usual host-card / charts / events page. Each one
 collects exactly one signal, so it carries its own status, interval and history,
 and a monitor that needs hardware the host lacks is simply not configured rather
-than reporting offline for something nobody asked about.
+than reporting unavailable for something nobody asked about.
 
 **One signal per monitor, grouped in config.** A host's page is assembled by a
 `group` — per host, then per domain — not by one plugin collecting seven things.

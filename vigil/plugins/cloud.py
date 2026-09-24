@@ -3,9 +3,8 @@ established by curling the 169.254.169.254 metadata endpoint via SSH commands
 on the target. Config: provider ('auto' tries all three, or name one to probe
 just it). A recognized provider is online, with its instance fields stored as
 a setting for the summary cards and as the snapshot behind the detail cards;
-no responding metadata endpoint is offline
-rather than failed, since not being a cloud host is a finding, not an
-error."""
+no responding metadata endpoint is unavailable rather than failed, since not
+being a cloud host is a finding, not an error."""
 
 from typing import Dict, Any, List
 
@@ -96,7 +95,7 @@ class Cloud(Plugin):
         return CollectResult(
             metrics={'on_cloud': 0.0},
             logs=[("No cloud metadata endpoint responded — not a recognized cloud host", "INFO")],
-            status='offline',
+            status='unavailable',
         )
 
     def _cloud_fields(self) -> Dict[str, str]:

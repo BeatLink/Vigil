@@ -1,7 +1,7 @@
 """Disk usage of one filesystem path, read with df over SSH — sampled locally
 by the agent on agent-backed hosts. Config: path (default /) and threshold
-(percent used, default 90). Usage at or above the threshold is failed, as is
-a df or parse error; this monitor has no separate warning tier."""
+(percent used, default 90). Usage at or above the threshold is failed; a df
+or parse error is unavailable. This monitor has no separate warning tier."""
 
 from typing import Dict, Any, List
 from vigil.plugins.base.plugin_base import Plugin
@@ -37,7 +37,7 @@ class DiskSpace(Plugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"df failed for '{self.path}': {stderr}")
+            return CollectResult.unavailable(f"df failed for '{self.path}': {stderr}")
 
         try:
             fields = stdout.strip().split()
@@ -46,7 +46,7 @@ class DiskSpace(Plugin):
             avail_bytes = int(fields[2])
             used_pct = float(fields[3].rstrip('%'))
         except (IndexError, ValueError) as e:
-            return CollectResult.failed(f"Failed to parse df output '{stdout.strip()}': {e}")
+            return CollectResult.unavailable(f"Failed to parse df output '{stdout.strip()}': {e}")
 
         size_gb  = size_bytes  / (1024 ** 3)
         used_gb  = used_bytes  / (1024 ** 3)

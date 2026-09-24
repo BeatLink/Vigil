@@ -1,4 +1,5 @@
-"""Load average, read from /proc/loadavg and scaled by core count."""
+"""Load average, read from /proc/loadavg and scaled by core count. A sample
+that could not be read or parsed is unavailable."""
 
 from typing import Any, Dict, List
 
@@ -33,13 +34,13 @@ class Load(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Load collection failed: {stderr}")
+            return CollectResult.unavailable(f"Load collection failed: {stderr}")
 
         lines = stdout.splitlines()
         load_line = next((l for l in lines if l.startswith('LOAD:')), None)
         cpus_line = next((l for l in lines if l.startswith('CPUS:')), None)
         if not load_line:
-            return CollectResult.failed(f"Incomplete load output: {stdout!r}")
+            return CollectResult.unavailable(f"Incomplete load output: {stdout!r}")
 
         try:
             cpu_count    = max(1, int(cpus_line.removeprefix('CPUS:').strip())) if cpus_line else 1
@@ -48,7 +49,7 @@ class Load(SignalPlugin):
             load_pct_5m  = float(parts[1]) / cpu_count * 100.0
             load_pct_15m = float(parts[2]) / cpu_count * 100.0
         except (ValueError, IndexError) as e:
-            return CollectResult.failed(f"Failed to parse load output: {e}")
+            return CollectResult.unavailable(f"Failed to parse load output: {e}")
 
         if self.warning is not None and self.threshold is not None:
             status = level_for(load_pct_1m, self.warning, self.threshold)

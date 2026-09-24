@@ -105,6 +105,12 @@ class TestSelfCollection:
         _run(plugin, run_io_cycle)
         assert _latest_metric("memory_mb") > 0
 
+    async def test_sample_that_raises_is_unavailable(self, plugin, run_io_cycle):
+        with patch("vigil.plugins.vigil_self._read_rss_mb", side_effect=RuntimeError("boom")):
+            _run(plugin, run_io_cycle)
+        assert _latest_status() == "unavailable"
+        assert _latest_metric("uptime_seconds") is None
+
     async def test_memory_above_threshold_sets_failed(self, plugin, run_io_cycle):
         with patch("vigil.plugins.vigil_self._read_rss_mb", return_value=600.0):
             _run(plugin, run_io_cycle)

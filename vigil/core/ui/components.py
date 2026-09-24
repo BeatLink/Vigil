@@ -588,7 +588,7 @@ def render_job_panel(plugin, spec: dict):
                 color = STATUS_COLORS['online']
             elif not enabled:
                 progress_label.text = 'Not available — check monitor configuration'
-                color = STATUS_COLORS['offline']
+                color = STATUS_COLORS['unavailable']
             else:
                 progress_label.text = ''
                 color = None

@@ -1,4 +1,5 @@
-"""CPU utilization, sampled from /proc/stat."""
+"""CPU utilization, sampled from /proc/stat and ranked against
+warning/threshold; a sample that could not be read or parsed is unavailable."""
 
 from typing import Any, Dict, List, Tuple
 
@@ -51,16 +52,16 @@ class Cpu(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"CPU collection failed: {stderr}")
+            return CollectResult.unavailable(f"CPU collection failed: {stderr}")
 
         cpu_lines = [l for l in stdout.splitlines() if l.startswith('cpu ')]
         if len(cpu_lines) < 2:
-            return CollectResult.failed(f"Incomplete CPU output: {stdout!r}")
+            return CollectResult.unavailable(f"Incomplete CPU output: {stdout!r}")
 
         try:
             cpu_pct = _cpu_pct(cpu_lines[0], cpu_lines[1])
         except (ValueError, IndexError) as e:
-            return CollectResult.failed(f"Failed to parse CPU output: {e}")
+            return CollectResult.unavailable(f"Failed to parse CPU output: {e}")
 
         status = level_for(cpu_pct, self.warning, self.threshold)
         return CollectResult(

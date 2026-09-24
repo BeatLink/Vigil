@@ -5,7 +5,8 @@ inode_warning / inode_threshold, readonly_is_failure. The worst filesystem
 sets the status: space or inode use past the warning level is warning and
 past the threshold is failed, while a read-only mount is failed (warning when
 readonly_is_failure is off) because the kernel may have remounted it after an
-I/O error."""
+I/O error. A df that produced nothing, or no real filesystems at all, is
+unavailable."""
 
 from typing import Dict, Any, List
 from vigil.plugins.base.plugin_base import Plugin
@@ -174,7 +175,7 @@ class Filesystems(Plugin):
         and the worst filesystem's level as status."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0 and not stdout.strip():
-            return CollectResult.failed(f"df failed: {stderr}")
+            return CollectResult.unavailable(f"df failed: {stderr}")
 
         sections = stdout.split(_SNAP)
         inode_pct = _parse_inodes(sections[1]) if len(sections) > 1 else {}
@@ -182,7 +183,7 @@ class Filesystems(Plugin):
         filesystems = _parse_space(sections[0])
 
         if not filesystems:
-            return CollectResult.failed("No real filesystems found", level="WARNING", status='offline')
+            return CollectResult.unavailable("No real filesystems found")
 
         readonly_level = 'failed' if self.readonly_is_failure else 'warning'
         metrics, logs, worst, worst_inode, ro_mounts, acc = _assess_filesystems(

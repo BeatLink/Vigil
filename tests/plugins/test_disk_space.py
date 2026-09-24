@@ -109,17 +109,17 @@ class TestDiskSpaceCollection:
         run_cycle(plugin, lambda c: CmdResult(0, _df_line(200 * GB, 75 * GB, 125 * GB, 37), ""))
         assert _latest_metric("test-disk", "avail_gb") == pytest.approx(125.0)
 
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+    async def test_ssh_failure_sets_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(-1, "", "connection refused"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_malformed_output_sets_failed(self, plugin, run_cycle):
+    async def test_malformed_output_sets_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, "unexpected garbage", ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_empty_output_sets_failed(self, plugin, run_cycle):
+    async def test_empty_output_sets_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, "", ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
     async def test_no_metrics_written_on_ssh_failure(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(-1, "", "timeout"))

@@ -4,7 +4,7 @@ start/stop/restart/enable/disable actions and unit-file view/edit dialogs.
 Config: lines, allow_unit_file_edit, and allowed_write_paths restricting
 where an edited unit file may be written back. The monitor is online whenever
 collection succeeds — failed units are surfaced as counts, not escalated —
-and only a failed systemctl run makes it failed."""
+and a systemctl run that could not complete makes it unavailable."""
 
 import os
 import shlex
@@ -54,12 +54,12 @@ class ServiceList(Plugin):
         units_result, unit_files_result = results
 
         if units_result.exit_code != 0:
-            return CollectResult.failed(f'Collection failed: {units_result.stderr}')
+            return CollectResult.unavailable(f'Collection failed: {units_result.stderr}')
 
         services = self._parse_unit_list(units_result.stdout)
 
         if unit_files_result.exit_code != 0:
-            return CollectResult.failed(f'Unit-file collection failed: {unit_files_result.stderr}')
+            return CollectResult.unavailable(f'Unit-file collection failed: {unit_files_result.stderr}')
 
         enabled_map = self._parse_unit_file_list(unit_files_result.stdout)
         for service in services:

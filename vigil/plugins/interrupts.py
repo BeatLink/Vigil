@@ -1,4 +1,5 @@
-"""Interrupt and context-switch rates, read from /proc/stat."""
+"""Interrupt and context-switch rates, read from /proc/stat. A sample that
+could not be read or parsed is unavailable."""
 
 from typing import Any, Dict, List, Optional
 
@@ -42,11 +43,11 @@ class Interrupts(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Failed to read /proc/stat: {stderr}")
+            return CollectResult.unavailable(f"Failed to read /proc/stat: {stderr}")
 
         halves = stdout.split('---SNAP---')
         if len(halves) < 2:
-            return CollectResult.failed("Unexpected /proc/stat output format")
+            return CollectResult.unavailable("Unexpected /proc/stat output format")
 
         intr1 = _extract_counter(halves[0], 'intr')
         intr2 = _extract_counter(halves[1], 'intr')
@@ -54,7 +55,7 @@ class Interrupts(SignalPlugin):
         ctxt2 = _extract_counter(halves[1], 'ctxt')
 
         if intr1 is None or intr2 is None:
-            return CollectResult.failed("Could not read 'intr' from /proc/stat")
+            return CollectResult.unavailable("Could not read 'intr' from /proc/stat")
 
         irq_rate = max(0.0, float(intr2 - intr1))
         metrics = {'irq_per_sec': irq_rate}

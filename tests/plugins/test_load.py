@@ -49,6 +49,10 @@ class TestCollection:
         run_cycle(p, lambda c: CmdResult(0, _loadavg(12.0, cpus=4), ""))
         assert _latest_status() == "failed"
 
-    async def test_a_failed_command_fails_the_monitor(self, plugin, run_cycle):
+    async def test_a_failed_command_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(1, "", "boom"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_unparseable_output_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "LOAD:garbage\nCPUS:4\n", ""))
+        assert _latest_status() == "unavailable"

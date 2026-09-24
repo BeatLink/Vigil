@@ -308,9 +308,9 @@ The domain is worth hiding for the same reason the update URL is: it names the c
 ### `systemd_service`
 Monitors systemd units over SSH. Operates in two modes depending on whether `max_age` is set.
 
-**Continuous mode** (default) — for long-running daemons. Checks `systemctl is-active` each cycle and reports `online`/`warning`/`failed`.
+**Continuous mode** (default) — for long-running daemons. Checks `systemctl is-active` each cycle and reports `online`/`warning`/`failed` from the unit's state, or `unavailable` when the journal cannot be read.
 
-**Oneshot mode** (`max_age` set) — for timer-driven services that run and exit (e.g. `nixos-upgrade`, backup jobs). Checks the result and timestamp of the last completed run via `systemctl show`. Reports `failed` if the last run did not succeed or completed more than `max_age` seconds ago.
+**Oneshot mode** (`max_age` set) — for timer-driven services that run and exit (e.g. `nixos-upgrade`, backup jobs). Checks the result and timestamp of the last completed run via `systemctl show`. Reports `failed` if the last run did not succeed or completed more than `max_age` seconds ago, and `unavailable` when the unit's state could not be queried.
 
 | Option         | Description                                                                     |
 |----------------|---------------------------------------------------------------------------------|
@@ -441,7 +441,7 @@ Both actions launch a **detached** job on the target, polled to completion by th
 
 **Actions**: Update Flake (`nix flake update`), Rebuild & Switch (`nixos-rebuild switch --flake`)
 
-**Status**: `failed` when the flake does not evaluate — a config that no longer builds is a real failure, and the error is logged; `drift_status` when the two closures differ; `reboot_status` when the booted `initrd`/`kernel`/`kernel-modules`/`systemd` are not the current ones; `warning` when the oldest locked input exceeds `max_input_age`; `offline` when `/run/current-system` cannot be read or `nix flake metadata` fails.
+**Status**: `failed` when the flake evaluates and errors — a config that no longer builds is a real failure, and the error is logged; `drift_status` when the two closures differ; `reboot_status` when the booted `initrd`/`kernel`/`kernel-modules`/`systemd` are not the current ones; `warning` when the oldest locked input exceeds `max_input_age`; `unavailable` when the target is unreachable, `/run/current-system` cannot be read, `nix flake metadata` fails, or the evaluation host never answered.
 
 Update Flake needs a lock file this host can write, so it is offered only for a local flake path; with a remote ref, update the flake where it lives and Vigil picks up the new revision on its next evaluation. Checking never mutates anything: `--no-write-lock-file` is passed to both commands, and `--refresh` only for a remote ref, where a mutable branch would otherwise be served from Nix's tarball cache.
 
@@ -505,7 +505,7 @@ The action launches a **detached** `nix-collect-garbage` on the target, polled t
 
 **Actions**: Collect Garbage (`nix-collect-garbage`)
 
-**Status**: `failed` when the last collection failed, when it is older than `max_age` (`stale_status`), or when the store filesystem is at `threshold`; `warning` at the `warning` mark, past `max_generations` or `max_generation_age`, and when the timer is inactive (`timer_status`); `offline` when the store cannot be read at all, or when nothing on the host records that a collection ever ran.
+**Status**: `failed` when the last collection failed, when it is older than `max_age` (`stale_status`), or when the store filesystem is at `threshold`; `warning` at the `warning` mark, past `max_generations` or `max_generation_age`, and when the timer is inactive (`timer_status`); `unavailable` when the store cannot be read at all, when the probe returned nothing, or when nothing on the host records that a collection ever ran.
 
 A collection currently in flight is never counted as stale, so a run that overruns `max_age` does not alarm while it is still working.
 
@@ -551,7 +551,7 @@ Each finding is graded, and the monitor takes the worst grade:
 
 The `vulners` script (part of the `vuln` category, and needs the scanning host to reach vulners.com) matches detected versions against a CVE database rather than testing anything, so its advisories are graded by CVSS score instead: `threshold_cvss` and above fails, `warning_cvss` and above warns, anything lower is noted. Version matching is loose — a distribution that backports fixes keeps the old version string — so set these to what you are willing to investigate.
 
-A host that does not answer on the `discovery_ports` is `offline` rather than clean, and so is a scan that overruns `timeout` or a scanning host with no `nmap`. Nothing here needs root: an unprivileged nmap uses connect scans and a TCP probe for discovery, which is all the `vuln` scripts need. `require_sudo` is there for a scan that wants SYN scanning or OS detection via `nmap_args`.
+A host that does not answer on the `discovery_ports` is `unavailable` rather than clean, and so is a scan that overruns `timeout` or a scanning host with no `nmap`. Nothing here needs root: an unprivileged nmap uses connect scans and a TCP probe for discovery, which is all the `vuln` scripts need. `require_sudo` is there for a scan that wants SYN scanning or OS detection via `nmap_args`.
 
 | Option | Description |
 |--------|-------------|
@@ -572,7 +572,7 @@ A host that does not answer on the `discovery_ports` is `offline` rather than cl
 
 **Metrics**: `vulnerable`, `suspected`, `noted`, `open_ports`, `scan_seconds`, `host_up` (1/0), `last_scan_epoch`
 
-**Status**: `failed` on any vulnerable finding; `warning` on a likely one (`likely_status`) or a `vulners` advisory at `warning_cvss`; `offline` when the host did not answer discovery, the scan did not finish in `timeout`, or nmap could not run.
+**Status**: `failed` on any vulnerable finding; `warning` on a likely one (`likely_status`) or a `vulners` advisory at `warning_cvss`; `unavailable` when the host did not answer discovery, the scan did not finish in `timeout`, or nmap could not run.
 
 > A full `-sV --script vuln` sweep of the top 1000 ports takes a few minutes per host and probes every service it finds, so give it a long `interval` (daily is plenty) and a `timeout` to match. The scanning host needs `nmap` on the agent's PATH.
 
@@ -600,7 +600,7 @@ A host that does not answer on the `discovery_ports` is `offline` rather than cl
 ```
 
 ### `smart`
-SMART health of every physical disk on a host, via `smartctl`. Classification is by positive assertion: only an explicit `PASSED` verdict counts a disk as healthy, so a check that could not run reads as **failed** rather than as a clean disk. Virtual block devices (zram, ZFS zvols, loop/md/device-mapper nodes) are filtered out before probing, and a device that genuinely has no SMART support is skipped rather than counted.
+SMART health of every physical disk on a host, via `smartctl`. Classification is by positive assertion: only an explicit `PASSED` verdict counts a disk as healthy, so a check that could not run reads as **unavailable** rather than as a clean disk. Virtual block devices (zram, ZFS zvols, loop/md/device-mapper nodes) are filtered out before probing, and a device that genuinely has no SMART support is skipped rather than counted.
 
 > Needs passwordless `sudo` access to `smartctl` for the SSH user (e.g. `vigil ALL=(ALL) NOPASSWD: /usr/bin/smartctl`).
 
@@ -611,7 +611,7 @@ SMART health of every physical disk on a host, via `smartctl`. Classification is
 
 **Metrics**: `disks_total`, `disks_ok`, `disks_failed`
 
-**Status**: `failed` if any disk fails or cannot be read, `offline` if the host has no SMART-capable disk, otherwise `online`.
+**Status**: `failed` if any disk fails, `unavailable` if a disk cannot be read, smartctl could not run, or the host has no SMART-capable disk, otherwise `online`.
 
 ```yaml
 - name: "SMART"
@@ -637,7 +637,7 @@ ZFS pool state and capacity, via `zpool list`. Every pool's health and used perc
 
 **Metrics**: `pools_total`, `pools_ok`, `pools_degraded`, `zfs_usage_max`, `pool_usage_<pool>`
 
-**Status**: `failed` for any pool not `ONLINE`, or usage at `threshold`; `warning` above `warning`; `offline` if the host has no pools.
+**Status**: `failed` for any pool not `ONLINE`, or usage at `threshold`; `warning` above `warning`; `unavailable` if `zpool` could not run or the host has no pools.
 
 ```yaml
 - name: "ZFS"
@@ -674,7 +674,7 @@ Everything is read through the mountpoint, which needs no privilege — this mon
 
 **Metrics**: `filesystems_total`, `filesystems_ok`, `filesystems_degraded`, `btrfs_usage_max`, `device_errors`, `fs_usage_<mount>`, `fs_errors_<mount>`, `fs_unallocated_<mount>`
 
-**Status**: `failed` for any filesystem with a non-zero device error counter, or usage at `threshold`; `warning` above `warning` or with unallocated space under `unallocated_warning`; `offline` if the host has no btrfs filesystem.
+**Status**: `failed` for any filesystem with a non-zero device error counter, or usage at `threshold`; `warning` above `warning` or with unallocated space under `unallocated_warning`; `unavailable` if the host has no btrfs filesystem, btrfs-progs is missing, or the probe could not run.
 
 ```yaml
 - name: "Btrfs"
@@ -699,7 +699,7 @@ Linux software RAID health, read from `/proc/mdstat` — the mdadm sibling of [`
 
 **Metrics**: `arrays_total`, `arrays_ok`, `arrays_degraded`
 
-**Status**: `failed` for a degraded array, `warning` while one is rebuilding, `offline` on a host with no arrays.
+**Status**: `failed` for a degraded array, `warning` while one is rebuilding, `unavailable` on a host with no arrays or when `/proc/mdstat` cannot be read.
 
 ```yaml
 - name: "RAID"
@@ -883,7 +883,7 @@ Interrupt and context-switch rates, from two `/proc/stat` snapshots a second apa
 ### `gpu`
 NVIDIA GPU utilization, memory and temperature via `nvidia-smi`. The peak across cards sets the status; every card is also kept individually.
 
-A GPU that sleeps with a laptop lid can wedge `nvidia-smi` uninterruptibly. After `timeout_trip` consecutive timeouts the monitor stops issuing the probe entirely for `suspend_seconds` and reports `offline` rather than stranding a process per cycle.
+A GPU that sleeps with a laptop lid can wedge `nvidia-smi` uninterruptibly. After `timeout_trip` consecutive timeouts the monitor stops issuing the probe entirely for `suspend_seconds` and reports `unavailable` rather than stranding a process per cycle.
 
 | Option            | Description                                                       |
 |-------------------|-------------------------------------------------------------------|
@@ -1140,7 +1140,7 @@ Auto-discovers and monitors **every** mounted filesystem on the target over SSH 
 ---
 
 ### `folders`
-Monitors the size of arbitrary directories over SSH via `du` — for watching things a filesystem check can't see: a growing log directory, a download spool, a media library nearing a soft cap. Each folder may set its own `warning`/`threshold` (in GB); a folder with neither is size-only. A folder that can't be read (missing/permission/timeout) reports failed.
+Monitors the size of arbitrary directories over SSH via `du` — for watching things a filesystem check can't see: a growing log directory, a download spool, a media library nearing a soft cap. Each folder may set its own `warning`/`threshold` (in GB); a folder with neither is size-only. A folder that can't be read (missing/permission/timeout) is unmeasured and reports `unavailable`, unless another folder measured `warning` or `failed`.
 
 | Option     | Description                                                                 |
 |------------|-----------------------------------------------------------------------------|
@@ -1192,7 +1192,7 @@ Monitors libvirt/KVM virtual machines over SSH via `virsh list --all`, counting 
 ---
 
 ### `cloud`
-Detects the cloud provider of the target and surfaces its instance metadata (id, type, region/zone) over SSH via the link-local metadata endpoint (`169.254.169.254`). Auto-detects across AWS (IMDSv2), GCP, and Azure, or query one provider explicitly. Informational — no thresholds; reports online when metadata is reachable, offline when the host isn't on a recognized cloud.
+Detects the cloud provider of the target and surfaces its instance metadata (id, type, region/zone) over SSH via the link-local metadata endpoint (`169.254.169.254`). Auto-detects across AWS (IMDSv2), GCP, and Azure, or query one provider explicitly. Informational — no thresholds; reports online when metadata is reachable, unavailable when the host isn't on a recognized cloud.
 
 | Option       | Description                                                   |
 |--------------|--------------------------------------------------------------|

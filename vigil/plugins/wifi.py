@@ -68,14 +68,14 @@ class Wifi(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Failed to read /proc/net/wireless: {stderr}")
+            return CollectResult.unavailable(f"Failed to read /proc/net/wireless: {stderr}")
 
         stats = _parse_wireless(stdout)
         iface = self.interface or _strongest_interface(stats)
         if not iface:
-            return CollectResult.failed("No wireless interface found")
+            return CollectResult.unavailable("No wireless interface found")
         if iface not in stats:
-            return CollectResult.failed(f"Interface '{iface}' not found in /proc/net/wireless")
+            return CollectResult.unavailable(f"Interface '{iface}' not found in /proc/net/wireless")
 
         quality, signal = stats[iface]
         status = self._level_for_quality(quality)

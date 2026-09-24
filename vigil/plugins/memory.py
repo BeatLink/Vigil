@@ -1,4 +1,5 @@
-"""Memory and swap use, read from /proc/meminfo."""
+"""Memory and swap use, read from /proc/meminfo. A sample that could not be
+read or parsed is unavailable."""
 
 from typing import Any, Dict, List
 
@@ -39,13 +40,13 @@ class Memory(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Memory collection failed: {stderr}")
+            return CollectResult.unavailable(f"Memory collection failed: {stderr}")
 
         lines = stdout.splitlines()
         total_line = next((l for l in lines if l.startswith('MemTotal:')),     None)
         avail_line = next((l for l in lines if l.startswith('MemAvailable:')), None)
         if not total_line or not avail_line:
-            return CollectResult.failed(f"Incomplete memory output: {stdout!r}")
+            return CollectResult.unavailable(f"Incomplete memory output: {stdout!r}")
 
         try:
             total_kb = int(total_line.split()[1])
@@ -55,7 +56,7 @@ class Memory(SignalPlugin):
             memory_total_gb = total_kb / (1024 ** 2)
             memory_used_gb  = used_kb  / (1024 ** 2)
         except (ValueError, IndexError, ZeroDivisionError) as e:
-            return CollectResult.failed(f"Failed to parse memory output: {e}")
+            return CollectResult.unavailable(f"Failed to parse memory output: {e}")
 
         status = level_for(memory_pct, self.warning, self.threshold)
         return CollectResult(

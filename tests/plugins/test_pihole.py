@@ -156,13 +156,17 @@ class TestPiholeCollection:
         _respond(plugin, run_cycle, s)
         assert _latest_metric("block_rate_pct") == pytest.approx(25.0)
 
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+    async def test_api_failure_sets_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_garbage_response_sets_failed(self, plugin, run_cycle):
+    async def test_garbage_response_sets_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, "<html>404</html>", ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_unreachable_host_sets_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "not connected"))
+        assert _latest_status() == "unavailable"
 
 
 class TestBlockRateThresholds:

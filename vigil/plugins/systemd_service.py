@@ -4,8 +4,9 @@ did the last run succeed, and recently enough). On agent-backed hosts it also
 subscribes to the unit's journal stream, so log lines arrive live between
 polls while the poll stays the authority on status. Config: service_name,
 lines, max_age, allow_unit_file_edit, allowed_write_paths. Continuous mode:
-an inactive unit is warning and a journal failure is failed; oneshot mode: a
-never-ran unit, a failed last run, or one older than max_age is failed. A
+an inactive unit is warning and an unreadable journal is unavailable;
+oneshot mode: a never-ran unit, a failed last run, or one older than max_age
+is failed, and a unit whose state could not be queried is unavailable. A
 reboot clears systemd's unit timestamps, so when they are empty the last run
 is taken from the unit's journal instead of being reported as never ran."""
 
@@ -105,8 +106,8 @@ class SystemdService(Plugin):
         if not journal_ok:
             return CollectResult(
                 metrics=metrics,
-                logs=[(f"Log collection failed: {journal_result.stderr}", "ERROR")],
-                status='failed',
+                logs=[(f"Log collection failed: {journal_result.stderr}", "WARNING")],
+                status='unavailable',
             )
 
         return CollectResult(
@@ -119,7 +120,7 @@ class SystemdService(Plugin):
         state_result, journal_result = results
 
         if state_result.exit_code != 0:
-            return CollectResult.failed(f"Failed to query service state: {state_result.stderr}")
+            return CollectResult.unavailable(f"Failed to query service state: {state_result.stderr}")
 
         tokens = dict(tok.split('=', 1) for tok in state_result.stdout.strip().split() if '=' in tok)
         result    = tokens.get('result', 'empty')
@@ -390,7 +391,7 @@ class SystemdService(Plugin):
 
                 if epoch_val is None:
                     state_label.text = 'UNKNOWN'
-                    state_label.style(f"color: {STATUS_COLORS['offline']}")
+                    state_label.style(f"color: {STATUS_COLORS['unavailable']}")
                     return
 
                 is_ok = success_val is not None and success_val > 0.5

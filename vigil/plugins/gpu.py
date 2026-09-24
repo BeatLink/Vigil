@@ -1,4 +1,6 @@
-"""NVIDIA GPU utilization, memory and temperature via nvidia-smi."""
+"""NVIDIA GPU utilization, memory and temperature via nvidia-smi. A missing
+nvidia-smi, an absent GPU, a probe timeout, or a wedged driver is unavailable;
+nvidia-smi reporting an error of its own is failed."""
 
 import time
 
@@ -97,18 +99,17 @@ class Gpu(SignalPlugin):
         return [Command(self._QUERY, timeout=self._COMMAND_TIMEOUT)]
 
     def _suspended_result(self) -> CollectResult:
-        """Reports the tripped breaker as offline, the same status an absent GPU gets."""
+        """Reports the tripped breaker as unavailable, the same status an absent GPU gets."""
         minutes = self.suspend_seconds / 60.0
-        return CollectResult.failed(
+        return CollectResult.unavailable(
             f"nvidia-smi timed out {self._consecutive_timeouts}x and could not be killed — the "
-            f"driver is wedged and only a reboot clears it; probe suspended for {minutes:.0f}m",
-            level="WARNING", status='offline')
+            f"driver is wedged and only a reboot clears it; probe suspended for {minutes:.0f}m")
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         """Turns the nvidia-smi CSV output into a CollectResult with per-card and
         peak util/VRAM/temperature metrics, one summary log line, and the worst
         threshold breach as status; a wedged driver trips the suspend breaker and
-        an absent GPU reports offline."""
+        an absent GPU reports unavailable."""
         if not results:
             return self._suspended_result()
 
@@ -119,20 +120,18 @@ class Gpu(SignalPlugin):
             if self._consecutive_timeouts >= self.timeout_trip:
                 self._suspended_until = time.monotonic() + self.suspend_seconds
                 return self._suspended_result()
-            return CollectResult.failed(f"GPU collection failed: {stderr}")
+            return CollectResult.unavailable(f"GPU collection failed: {stderr}")
         self._consecutive_timeouts = 0
 
         if _looks_absent(ret, stdout, stderr):
-            return CollectResult.failed("nvidia-smi unavailable or no NVIDIA GPU present",
-                                        level="WARNING", status='offline')
+            return CollectResult.unavailable("nvidia-smi unavailable or no NVIDIA GPU present")
         if ret != 0:
             return CollectResult.failed(f"GPU collection failed: {stderr}")
 
         metrics, max_util, max_mem_pct, max_temp, count = _parse_gpu_table(stdout)
 
         if count == 0:
-            return CollectResult.failed(f"No GPUs parsed from output: {stdout!r}",
-                                        level="WARNING", status='offline')
+            return CollectResult.unavailable(f"No GPUs parsed from output: {stdout!r}")
 
         metrics['gpu_util'] = max_util
         metrics['gpu_mem_pct'] = max_mem_pct

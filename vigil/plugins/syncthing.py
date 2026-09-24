@@ -3,9 +3,10 @@ system config and connections each cycle, plus per-folder /rest/db/status for
 the folder IDs learned the cycle before. Config: api_url (required,
 Vigil-reachable), api_key / api_key_command, folders, devices, stall_warning
 (minutes), api_timeout. An errored or invalid folder — including one sitting
-idle while still needing data — is failed, as is any API error; pull errors,
-folders syncing or scanning past stall_warning, and expected devices
-disconnected are warning. The local device, which the config lists but the
+idle while still needing data — is failed; pull errors, folders syncing or
+scanning past stall_warning, and expected devices disconnected are warning;
+an API that did not answer, or answered with an error or something
+unparseable, is unavailable. The local device, which the config lists but the
 connections map never does, is not an expected device."""
 
 import json
@@ -211,9 +212,9 @@ class Syncthing(Plugin):
         """Turns the [config, connections, *per-folder status] HTTP results into a
         CollectResult with folder/device/need-bytes metrics, one summary log line,
         and a worst-of status (errored folders failed; pull errors, stalls, and
-        disconnected devices warning)."""
+        disconnected devices warning; an API error unavailable)."""
         if not results:
-            return CollectResult.failed("No 'api_url' configured")
+            return CollectResult.unavailable("No 'api_url' configured")
 
         config_result, connections_result = results[0], results[1]
         folder_results = results[2:]
@@ -221,7 +222,7 @@ class Syncthing(Plugin):
         try:
             config = _decode_config(config_result)
         except ValueError as e:
-            return CollectResult.failed(str(e))
+            return CollectResult.unavailable(str(e))
 
         watched_ids = _watched_folder_ids(config, self.folders)
         self._cached_folder_ids = watched_ids
@@ -242,7 +243,7 @@ class Syncthing(Plugin):
             folder_states = _decode_folder_states(watched_ids, folder_results)
             connections = _decode_connections(connections_result)
         except ValueError as e:
-            return CollectResult.failed(str(e))
+            return CollectResult.unavailable(str(e))
 
         device_names = {device['deviceID']: device.get('name', device['deviceID'])
                         for device in config.get('devices', [])}

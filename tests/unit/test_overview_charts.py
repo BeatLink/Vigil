@@ -5,7 +5,7 @@ from vigil.core.ui.views.overview import (
     _worst_status,
 )
 
-COLORS = {'online': 'green', 'warning': 'amber', 'failed': 'red', 'offline': 'grey'}
+COLORS = {'online': 'green', 'warning': 'amber', 'failed': 'red', 'unavailable': 'grey'}
 
 
 def _monitor(mid: str, mtype: str, children=()):
@@ -18,7 +18,7 @@ class TestChartCounts:
         monitors = [_monitor('a', 'cpu'), _monitor('b', 'cpu'), _monitor('c', 'zfs')]
         statuses = {'a': 'online', 'b': 'failed', 'c': 'online'}
         status_counts, _ = _build_chart_counts(monitors, statuses)
-        assert status_counts == {'online': 2, 'failed': 1, 'warning': 0, 'offline': 0}
+        assert status_counts == {'online': 2, 'failed': 1, 'warning': 0, 'unavailable': 0}
 
     def test_each_type_is_broken_down_by_status(self):
         monitors = [_monitor('a', 'cpu'), _monitor('b', 'cpu'), _monitor('c', 'zfs')]
@@ -26,10 +26,10 @@ class TestChartCounts:
         _, type_counts = _build_chart_counts(monitors, statuses)
         assert type_counts == {'cpu': {'online': 1, 'failed': 1}, 'zfs': {'warning': 1}}
 
-    def test_an_unknown_monitor_counts_as_offline(self):
+    def test_an_unknown_monitor_counts_as_unavailable(self):
         status_counts, type_counts = _build_chart_counts([_monitor('a', 'cpu')], {})
-        assert status_counts['offline'] == 1
-        assert type_counts == {'cpu': {'offline': 1}}
+        assert status_counts['unavailable'] == 1
+        assert type_counts == {'cpu': {'unavailable': 1}}
 
     def test_a_monitor_without_a_type_is_grouped_as_unknown(self):
         m = SimpleNamespace(id='a', name='a', target='h', config={}, children=[])
@@ -39,13 +39,13 @@ class TestChartCounts:
 
 class TestWorstStatus:
     def test_failed_outranks_everything(self):
-        assert _worst_status({'online': 9, 'warning': 2, 'offline': 1, 'failed': 1}) == 'failed'
+        assert _worst_status({'online': 9, 'warning': 2, 'unavailable': 1, 'failed': 1}) == 'failed'
 
-    def test_warning_outranks_offline_and_online(self):
-        assert _worst_status({'online': 9, 'offline': 3, 'warning': 1}) == 'warning'
+    def test_warning_outranks_unavailable_and_online(self):
+        assert _worst_status({'online': 9, 'unavailable': 3, 'warning': 1}) == 'warning'
 
-    def test_offline_outranks_online(self):
-        assert _worst_status({'online': 9, 'offline': 1}) == 'offline'
+    def test_unavailable_outranks_online(self):
+        assert _worst_status({'online': 9, 'unavailable': 1}) == 'unavailable'
 
     def test_an_all_healthy_type_reads_online(self):
         assert _worst_status({'online': 4}) == 'online'
@@ -53,8 +53,8 @@ class TestWorstStatus:
     def test_a_zero_count_does_not_win(self):
         assert _worst_status({'failed': 0, 'online': 2}) == 'online'
 
-    def test_an_empty_tally_falls_back_to_offline(self):
-        assert _worst_status({}) == 'offline'
+    def test_an_empty_tally_falls_back_to_unavailable(self):
+        assert _worst_status({}) == 'unavailable'
 
 
 class TestTreemapTiles:

@@ -4,8 +4,9 @@ cameras (the subset to watch, default all), min_fps_ratio, api_timeout. A
 camera Frigate has disarmed is reported as disarmed and never faults the
 monitor; an armed one fails when its capture process is gone or its stream has
 stopped, and warns when it delivers less than min_fps_ratio of its configured
-detect fps. An unreachable API or malformed payload is failed, and no matching
-cameras is a warning pointing at the 'cameras' list."""
+detect fps. An API answering with an HTTP error is failed; an unreachable API,
+a malformed payload, or a missing api_url is unavailable, since no camera was
+measured. No matching cameras is a warning pointing at the 'cameras' list."""
 
 import json
 from typing import Any, Dict, List, Optional, Tuple
@@ -46,9 +47,9 @@ def _parse_config(stdout: str) -> Dict[str, Any]:
 
 
 def _http_failure(result) -> Optional[CollectResult]:
-    """The failed CollectResult for a transport or HTTP error, or None when the response is usable."""
+    """The unavailable or failed CollectResult for a transport or HTTP error, or None when the response is usable."""
     if result.error is not None:
-        return CollectResult.failed(f"Failed to query Frigate API: {result.error}")
+        return CollectResult.unavailable(f"Failed to query Frigate API: {result.error}")
     if result.status_code != 200:
         return CollectResult.failed(f"Frigate API returned HTTP {result.status_code}")
     return None
@@ -141,7 +142,7 @@ class Frigate(Plugin):
         watched camera's state as status — an armed camera that is not
         streaming failed, a degraded one warning, a disarmed one online."""
         if len(results) < 2:
-            return CollectResult.failed("No 'api_url' configured")
+            return CollectResult.unavailable("No 'api_url' configured")
 
         stats_result: HttpResult = results[0]
         config_result: HttpResult = results[1]
@@ -154,7 +155,7 @@ class Frigate(Plugin):
             stats = _parse_response(stats_result.text)
             camera_configs = _parse_config(config_result.text)
         except ValueError as e:
-            return CollectResult.failed(str(e))
+            return CollectResult.unavailable(str(e))
 
         cameras = stats.get('cameras', {})
         watched = {name: data for name, data in cameras.items()

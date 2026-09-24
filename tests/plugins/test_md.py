@@ -78,13 +78,13 @@ class TestCollection:
         assert _latest_status() == "warning"
         assert _latest_metric("arrays_ok") == pytest.approx(1.0)
 
-    async def test_a_host_with_no_arrays_is_offline(self, plugin, run_cycle):
+    async def test_a_host_with_no_arrays_is_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, _MDSTAT_EMPTY)
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
-    async def test_an_unreadable_mdstat_fails(self, plugin, run_cycle):
+    async def test_an_unreadable_mdstat_is_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, "", code=1, stderr="no such file")
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
     async def test_it_contributes_its_cards(self, plugin):
         assert {'md_total_card', 'md_ok_card', 'md_degraded_card'} <= set(plugin.UI_SPEC['cards'])

@@ -19,7 +19,7 @@ them is yours to audit — the shipped values are contrast-audited in both.
 | `status_online`    | `--status-success`      | A monitor that is up                      |
 | `status_warning`   | `--status-warning-text` | A monitor in warning                      |
 | `status_failed`    | `--status-danger`       | A monitor that has failed                 |
-| `status_offline`   | `--text-tertiary`       | A monitor not reporting                   |
+| `status_unavailable` | `--text-tertiary`     | A monitor that could not measure          |
 
 ```yaml
 theme:

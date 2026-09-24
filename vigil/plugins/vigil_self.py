@@ -5,7 +5,8 @@ than issuing connector requests. Config: memory_warning / memory_threshold
 (MB of RSS), stale_warning / stale_threshold (how many intervals overdue a
 monitor may run). RSS past its bounds sets warning/failed, monitors overdue
 past stale_warning are warning ("late"), and any past stale_threshold makes
-the status failed ("stalled")."""
+the status failed ("stalled"). A sample that raises before anything was
+read is unavailable."""
 
 import os
 import time
@@ -101,35 +102,44 @@ class VigilSelfPlugin(Plugin):
     def io_call(self) -> Optional[Callable[[], Any]]:
         # Reads /proc/self plus the engine's live collection-health map —
         # local introspection the declarative connector requests can't model.
+        # A sample that raises is handed to parse_results as an error so the cycle records unavailable instead of nothing.
         def _sample():
-            rss_mb = _read_rss_mb()
-            cpu_seconds = _read_cpu_seconds()
-            uptime_seconds = time.time() - self._started_at
-
-            cpu_pct = None
-            if cpu_seconds is not None:
-                now = time.monotonic()
-                if self._last_cpu_sample:
-                    prev_time, prev_cpu = self._last_cpu_sample
-                    elapsed = now - prev_time
-                    if elapsed > 0:
-                        cpu_pct = 100.0 * (cpu_seconds - prev_cpu) / elapsed
-                self._last_cpu_sample = (now, cpu_seconds)
-
-            total, late, stalled, offenders = self._collection_health()
-            return {
-                'rss_mb': rss_mb,
-                'cpu_pct': cpu_pct,
-                'uptime_seconds': uptime_seconds,
-                'total': total,
-                'late': late,
-                'stalled': stalled,
-                'offenders': offenders,
-            }
+            try:
+                return self._sample()
+            except Exception as e:
+                return {'error': f"{type(e).__name__}: {e}"}
         return _sample
+
+    def _sample(self) -> Dict[str, Any]:
+        rss_mb = _read_rss_mb()
+        cpu_seconds = _read_cpu_seconds()
+        uptime_seconds = time.time() - self._started_at
+
+        cpu_pct = None
+        if cpu_seconds is not None:
+            now = time.monotonic()
+            if self._last_cpu_sample:
+                prev_time, prev_cpu = self._last_cpu_sample
+                elapsed = now - prev_time
+                if elapsed > 0:
+                    cpu_pct = 100.0 * (cpu_seconds - prev_cpu) / elapsed
+            self._last_cpu_sample = (now, cpu_seconds)
+
+        total, late, stalled, offenders = self._collection_health()
+        return {
+            'rss_mb': rss_mb,
+            'cpu_pct': cpu_pct,
+            'uptime_seconds': uptime_seconds,
+            'total': total,
+            'late': late,
+            'stalled': stalled,
+            'offenders': offenders,
+        }
 
     def parse_results(self, results: List[Any]) -> CollectResult:
         result = results[0]
+        if 'error' in result:
+            return CollectResult.unavailable(f"Self sample could not be taken: {result['error']}")
         rss_mb = result['rss_mb']
         cpu_pct = result['cpu_pct']
         uptime_seconds = result['uptime_seconds']

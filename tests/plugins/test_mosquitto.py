@@ -118,6 +118,10 @@ class TestMosquittoCollection:
         run_cycle(plugin, lambda c: _failure("connection refused"))
         assert _latest_status() == "failed"
 
+    async def test_missing_clients_set_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: _failure("sh: mosquitto_sub: not found"))
+        assert _latest_status() == "unavailable"
+
 
 class TestMosquittoActions:
     async def test_on_action_always_returns_none(self, plugin):

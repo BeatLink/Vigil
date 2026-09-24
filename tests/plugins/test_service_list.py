@@ -47,6 +47,10 @@ class TestServiceListPlugin:
         assert _latest_metric("services_active") == pytest.approx(2.0)
         assert _latest_metric("services_failed") == pytest.approx(0.0)
 
+    async def test_failed_collection_is_unavailable(self, plugin, run_cycle):
+        result = run_cycle(plugin, lambda c: CmdResult(-1, "", "not connected"))
+        assert result.status == "unavailable"
+
     async def test_start_service_action(self, plugin):
         plan = plugin.plan_action("start_service", service_name="nginx.service")
         assert plan.command == "sudo systemctl start nginx.service"

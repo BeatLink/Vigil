@@ -130,21 +130,21 @@ class TestCollection:
         assert _latest_metric("filesystems_total") == 1
         assert _latest_metric("fs_usage_Storage") == pytest.approx(20.0)
 
-    async def test_no_filesystems_sets_offline(self, plugin, run_cycle):
+    async def test_no_filesystems_sets_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, "")
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
     async def test_a_filesystem_with_no_size_is_skipped(self, plugin, run_cycle):
         _run(plugin, run_cycle, "FS /broken\nDEV [/dev/x].read_io_errs 0\n")
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
-    async def test_missing_btrfs_progs_fails(self, plugin, run_cycle):
+    async def test_missing_btrfs_progs_is_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, "ERROR btrfs-progs not found\n", code=1)
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_transport_failure_sets_failed(self, plugin, run_cycle):
+    async def test_transport_failure_sets_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, "", code=-1, stderr="timeout")
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
 
 class TestProbe:

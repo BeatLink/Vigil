@@ -5,7 +5,8 @@ warning, threshold, invert, nonzero_is_warning, value_label, value_unit.
 Without a pattern, exit 0 is online and non-zero is failed (or warning when
 nonzero_is_warning is set); with one, the first captured number is ranked
 against warning/threshold (reversed when invert is set), and a timeout or a
-non-matching output is failed."""
+non-matching output is failed. A command that never ran because the host was
+unreachable is unavailable."""
 
 import re
 from typing import Dict, Any, List, Optional
@@ -72,6 +73,8 @@ class CommandPlugin(Plugin):
 
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
+        if ret == -1:
+            return CollectResult.unavailable(f"Command did not run: {(stderr or stdout).strip()[:200]}")
         if ret == 124:
             return CollectResult.failed(f"Command timed out after {self.command_timeout}s")
 

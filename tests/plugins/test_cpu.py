@@ -48,13 +48,17 @@ class TestCollection:
         assert _latest_status() == "online"
         assert _latest_metric("cpu_pct") == pytest.approx(0.0)
 
-    async def test_a_failed_command_fails_the_monitor(self, plugin, run_cycle):
+    async def test_a_failed_command_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(1, "", "boom"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_incomplete_output_fails(self, plugin, run_cycle):
+    async def test_incomplete_output_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, "cpu  1 2 3 4 0 0 0 0\n", ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_unreachable_host_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "Agent 'h' is not connected"))
+        assert _latest_status() == "unavailable"
 
     def test_one_command_per_cycle(self, plugin):
         assert len(plugin.commands()) == 1

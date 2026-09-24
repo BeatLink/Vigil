@@ -24,12 +24,13 @@ import inspect
 import random
 import sys
 import time
-from typing import List, Optional, Dict, Set
+from dataclasses import replace
+from typing import Any, List, Optional, Dict, Set
 
 from peewee import OperationalError
 
 from vigil.plugins.base.plugin_base import Plugin
-from vigil.core.connectors.types import DispatchResult
+from vigil.core.connectors.types import CollectResult, DispatchResult, Status, unreachable
 from vigil.core.coordination.data_view import PluginDataView
 from vigil.core.coordination.jobs import JobsGateway
 from vigil.core.settings.config_file import ConfigFileManager as VigilConfig
@@ -55,6 +56,15 @@ def _plugin_class(module, module_path: str) -> type:
             f"({[c.__name__ for c in candidates]}) — a plugin module must define exactly one")
     return candidates[0]
 
+
+
+def _settle(plugin: Plugin, results: List[Any], result: CollectResult) -> CollectResult:
+    """A cycle that never reached its host is unavailable, whatever the plugin made of the empty results."""
+    if plugin.AVAILABILITY or not results or not all(map(unreachable, results)):
+        return result
+    if result.status == str(Status.UNAVAILABLE):
+        return result
+    return replace(result, status=str(Status.UNAVAILABLE))
 
 class VigilEngine:
     def __init__(self, config_path: str, db_path_override: Optional[str] = None):
@@ -348,7 +358,7 @@ class VigilEngine:
             net = self._exec_context_for(plugin)
             results = await self.connectors.dispatch(net, requests) if requests else []
             collected = time.perf_counter()
-            result = plugin.parse_results(results)
+            result = _settle(plugin, results, plugin.parse_results(results))
             did_io = bool(requests)
         parsed = time.perf_counter()
         self._apply(plugin, result)

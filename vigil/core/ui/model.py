@@ -197,7 +197,7 @@ def schedule_callback(callback: RefreshCallback, run_now: bool = True) -> None:
 
 @ng.bindable_dataclass
 class PluginModel:
-    status: str = 'offline'
+    status: str = 'unavailable'
     status_color: str = ''
     metrics: Dict[str, Any] = None
 

@@ -6,7 +6,8 @@ stalled_threshold, error_threshold, firewalled_warning, min_downloading,
 api_timeout. A DISCONNECTED connection status, errored torrents at
 error_threshold, or stalls at stalled_threshold are failed; a firewalled
 connection or stalls at stalled_warning are warning (stall counts only apply
-while at least min_downloading torrents are downloading)."""
+while at least min_downloading torrents are downloading). An API that did
+not answer, rejected the credentials, or replied unparseably is unavailable."""
 
 import json
 import shlex
@@ -260,19 +261,20 @@ class Qbittorrent(Plugin):
         """Turns the transfer-info+torrent-list curl output into a CollectResult
         with speed/count metrics, one summary log line, and a status where a
         DISCONNECTED link, errored torrents, or heavy stalling is failed and a
-        firewalled link or moderate stalling is warning."""
+        firewalled link or moderate stalling is warning; an API that did not
+        answer, rejected the login, or replied unparseably is unavailable."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
             if _AUTH_FAILED in stderr:
-                return CollectResult.failed(
+                return CollectResult.unavailable(
                     "qBittorrent rejected the configured credentials "
-                    "(check username / password_command)")
-            return CollectResult.failed(f"Failed to query qBittorrent API: {stderr.strip()}")
+                    "(check username / password_command)", level="ERROR")
+            return CollectResult.unavailable(f"Failed to query qBittorrent API: {stderr.strip()}")
 
         try:
             transfer, torrents = _parse_response(stdout)
         except ValueError as e:
-            return CollectResult.failed(str(e))
+            return CollectResult.unavailable(str(e))
 
         connection = str(transfer.get('connection_status', 'unknown'))
         dl_speed = float(transfer.get('dl_info_speed', 0) or 0)

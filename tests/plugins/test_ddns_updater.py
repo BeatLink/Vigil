@@ -85,11 +85,11 @@ class TestDriftAndUpdate:
 
 
 class TestFailureModes:
-    async def test_public_ip_lookup_failure_sets_failed(self, make_plugin, run_io_cycle):
+    async def test_public_ip_lookup_failure_sets_unavailable(self, make_plugin, run_io_cycle):
         p = make_plugin(DdnsUpdater, _cfg())
         with patch.object(p, '_fetch_public_ip', return_value=None):
             run_io_cycle(p)
-        assert _latest_status("test-ddns") == "failed"
+        assert _latest_status("test-ddns") == "unavailable"
 
     async def test_missing_domain_sets_failed(self, make_plugin, run_io_cycle):
         p = make_plugin(DdnsUpdater, _cfg(domain=None))

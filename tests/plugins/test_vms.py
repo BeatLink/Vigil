@@ -79,15 +79,21 @@ class TestVmsCollection:
         run_cycle(p, lambda c: CmdResult(0, _LIST, ""))
         assert _latest_status() == "online"
 
-    async def test_virsh_missing_offline(self, make_plugin, run_cycle):
+    async def test_virsh_missing_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Vms, _cfg())
         run_cycle(p, lambda c: CmdResult(127, "", "bash: virsh: command not found"))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
-    async def test_libvirt_unreachable_failed(self, make_plugin, run_cycle):
+    async def test_libvirt_unreachable_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Vms, _cfg())
         run_cycle(p, lambda c: CmdResult(1, "", "error: failed to connect to the hypervisor"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_virsh_list_error_unavailable(self, make_plugin, run_cycle):
+        p = make_plugin(Vms, _cfg(expect_running=["web"]))
+        run_cycle(p, lambda c: CmdResult(1, "", "error: authentication failed"))
+        assert _latest_status() == "unavailable"
+        assert _latest_metric("vms_total") is None
 
 
 class TestVmsActions:

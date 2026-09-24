@@ -48,7 +48,7 @@ class Temperature(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Temperature collection failed: {stderr}")
+            return CollectResult.unavailable(f"Temperature collection failed: {stderr}")
 
         sensors: Dict[str, float] = {}
         for line in stdout.splitlines():

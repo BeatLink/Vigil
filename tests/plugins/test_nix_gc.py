@@ -157,9 +157,9 @@ class TestFreshness:
         _collect(plugin, _probe(outcome=None, svc_result="exit-code"))
         assert _latest_status() == "failed"
 
-    async def test_no_record_of_any_run_is_offline(self, plugin):
+    async def test_no_record_of_any_run_is_unavailable(self, plugin):
         _collect(plugin, _probe(freed=None, outcome=None))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
         assert _latest_metric("last_gc_epoch") == 0.0
 
 
@@ -246,13 +246,18 @@ class TestStore:
         _collect(plugin, _probe(size=100 * GB, used=95 * GB))
         assert _latest_status() == "failed"
 
-    async def test_unreadable_store_is_offline(self, plugin):
+    async def test_unreadable_store_is_unavailable(self, plugin):
         _collect(plugin, CmdResult(0, "hostname=host\ndf=\n", ""))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
-    async def test_unreachable_target_is_offline(self, plugin):
+    async def test_unreachable_target_is_unavailable(self, plugin):
         _collect(plugin, CmdResult(255, "", "ssh: connect failed"))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
+
+    async def test_no_probe_result_is_unavailable(self, plugin):
+        plugin.commands()
+        plugin.storage.apply(plugin.parse([]))
+        assert _latest_status() == "unavailable"
 
 
 class TestProfiles:

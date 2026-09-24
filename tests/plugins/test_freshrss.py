@@ -96,7 +96,7 @@ class TestParseResponse:
         assert len(data["feeds"]) == 1
 
     def test_auth_zero_raises(self):
-        with pytest.raises(ValueError, match="rejected the credentials"):
+        with pytest.raises(PermissionError, match="rejected the credentials"):
             _parse_response(_response(auth=0))
 
     def test_malformed_json_raises(self):
@@ -133,16 +133,20 @@ class TestFreshrssCollection:
         _respond(plugin, run_requests, auth=0)
         assert _latest_status() == "failed"
 
-    async def test_http_error_sets_failed(self, plugin, run_requests):
+    async def test_http_error_sets_unavailable(self, plugin, run_requests):
         run_requests(plugin, lambda r: HttpResult(
             status_code=None, text="", error="connection refused"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_missing_username_sets_failed(self, make_plugin, run_requests):
+    async def test_non_json_response_sets_unavailable(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(status_code=200, text="<html>"))
+        assert _latest_status() == "unavailable"
+
+    async def test_missing_username_sets_unavailable(self, make_plugin, run_requests):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "username"}
         p = make_plugin(Freshrss, cfg)
         run_requests(p, lambda r: HttpResult(status_code=200, text="{}"))
-        assert _latest_status("test-freshrss") == "failed"
+        assert _latest_status("test-freshrss") == "unavailable"
 
 
 class TestFreshrssActions:

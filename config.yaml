@@ -89,7 +89,7 @@ theme:
   # status_online:    "#047857" # --status-success
   # status_warning:   "#c2410c" # --status-warning-text
   # status_failed:    "#dc2626" # --status-danger
-  # status_offline:   "#64748b" # --text-tertiary
+  # status_unavailable: "#64748b" # --text-tertiary
 
 # Domain-based Plugins
 plugins:

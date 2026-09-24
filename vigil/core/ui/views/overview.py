@@ -8,11 +8,11 @@ from .. import theme
 from ..theme import STATUS_COLORS, ACCENT
 from ..components import card, feed_columns, section_title, on_data_event, offload, refresh_rows
 
-_STATUS_ORDER = ('online', 'failed', 'warning', 'offline')
+_STATUS_ORDER = ('online', 'failed', 'warning', 'unavailable')
 
 # Worst first. A type's tile takes the most severe status among its monitors, so
 # one failed service is visible even inside a type that is otherwise healthy.
-_STATUS_SEVERITY = ('failed', 'warning', 'offline', 'online')
+_STATUS_SEVERITY = ('failed', 'warning', 'unavailable', 'online')
 
 # The treemap's key, in DOM rather than on the canvas so it follows the scheme
 # with no repaint.
@@ -126,7 +126,7 @@ def _build_table_rows(monitors, statuses, flt: _ChartFilter) -> list:
     """Builds the monitor-table rows, honoring the active chart filter."""
     rows = []
     for m in monitors:
-        st = statuses.get(m.id, 'offline')
+        st = statuses.get(m.id, 'unavailable')
         mtype = m.config.get('type', 'unknown')
         if flt.field == 'status' and st != flt.value:
             continue
@@ -138,17 +138,17 @@ def _build_table_rows(monitors, statuses, flt: _ChartFilter) -> list:
             'type': mtype.upper(),
             'host': m.target,
             'status': st.upper(),
-            'status_color': STATUS_COLORS.get(st, STATUS_COLORS['offline']),
+            'status_color': STATUS_COLORS.get(st, STATUS_COLORS['unavailable']),
         })
     return rows
 
 
 def _build_chart_counts(monitors, statuses):
     """Tallies monitors by status, and per type by status, for the two charts."""
-    status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'offline': 0}
+    status_counts = {'online': 0, 'failed': 0, 'warning': 0, 'unavailable': 0}
     type_counts = {}
     for m in monitors:
-        st = statuses.get(m.id, 'offline')
+        st = statuses.get(m.id, 'unavailable')
         status_counts[st] = status_counts.get(st, 0) + 1
         by_status = type_counts.setdefault(m.config.get('type', 'unknown'), {})
         by_status[st] = by_status.get(st, 0) + 1
@@ -160,7 +160,7 @@ def _worst_status(by_status: dict) -> str:
     for name in _STATUS_SEVERITY:
         if by_status.get(name):
             return name
-    return 'offline'
+    return 'unavailable'
 
 
 def _treemap_tiles(type_counts: dict, colors: dict) -> list:

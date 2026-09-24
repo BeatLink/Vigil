@@ -41,14 +41,15 @@ STATUS_COLORS = {
     'online':  'var(--status-success)',
     'warning': 'var(--status-warning-text)',
     'failed':  'var(--status-danger)',
-    'offline': 'var(--text-tertiary)',
+    'unavailable': 'var(--text-tertiary)',
+    'offline': 'var(--text-tertiary)', # the old name for unavailable, still in stored history
 }
 
 _STATUS_TOKENS = {
     'online':  'status-success',
     'warning': 'status-warning-text',
     'failed':  'status-danger',
-    'offline': 'text-tertiary',
+    'unavailable': 'text-tertiary',
 }
 
 # Config keys are kept from Vigil's pre-Halon theme block and mapped onto the
@@ -62,7 +63,8 @@ _CONFIG_TOKENS = {
     'status_online':    'status-success',
     'status_warning':   'status-warning-text',
     'status_failed':    'status-danger',
-    'status_offline':   'text-tertiary',
+    'status_unavailable': 'text-tertiary',
+    'status_offline':   'text-tertiary', # the old config key, kept so an existing theme block still applies
 }
 
 _overrides: Dict[str, str] = {}

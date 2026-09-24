@@ -7,7 +7,9 @@ script); every `eval_interval` it additionally evaluates
 a guess from revisions, and the flake's own revision and input ages are
 tracked alongside it. A failed evaluation is retried after `retry_interval`
 rather than held for the full `eval_interval`, and a dashboard poll always
-evaluates. `eval_agent` runs the two expensive commands on another agent's
+evaluates. An unreachable or non-NixOS target, unreadable flake metadata,
+or an evaluation that never ran is unavailable; an evaluation that ran and
+errored is failed. `eval_agent` runs the two expensive commands on another agent's
 host, for a target too small to evaluate its own flake. Actions launch
 detached jobs on the target: `nix flake update` on the flake, and
 `nixos-rebuild switch --flake`. Config: flake, configuration, eval_agent,
@@ -274,19 +276,18 @@ class NixosUpgrade(Plugin):
             return self._parse_poll(job, results[0])
 
         if not results:
-            return CollectResult.failed('No probe result for this cycle', status='offline')
+            return CollectResult.unavailable('No probe result for this cycle')
 
         probe = results[0]
         if probe.exit_code != 0 and not probe.stdout.strip():
-            return CollectResult.failed(
-                f"Could not read the deployed system: {(probe.stderr or probe.stdout).strip()[:200]}",
-                status='offline')
+            return CollectResult.unavailable(
+                f"Could not read the deployed system: {(probe.stderr or probe.stdout).strip()[:200]}")
 
         fields = _parse_probe(probe.stdout)
         current = fields.get('current')
         if not current:
-            return CollectResult.failed(
-                '/run/current-system is unreadable — is this a NixOS host?', status='offline')
+            return CollectResult.unavailable(
+                '/run/current-system is unreadable — is this a NixOS host?')
 
         evaluated = len(results) > 2
         state = self._eval_state(results[1], results[2]) if evaluated else self._state()
@@ -306,6 +307,8 @@ class NixosUpgrade(Plugin):
             state['eval_error'] = (
                 (eval_result.stderr or eval_result.stdout).strip()[:400]
                 or f'nix eval exited {eval_result.exit_code}')
+            # An eval host that never answered measured nothing, unlike an evaluation that ran and errored.
+            state['eval_unreachable'] = eval_result.exit_code == -1
 
         data = _decode_json(metadata_result.stdout) if metadata_result.exit_code == 0 else {}
         if data:
@@ -351,8 +354,10 @@ class NixosUpgrade(Plugin):
 
         target = state.get('target')
         if state.get('eval_error'):
-            acc.escalate('failed')
-            logs.append((f"Flake evaluation failed: {state['eval_error']}", 'ERROR'))
+            unreachable = bool(state.get('eval_unreachable'))
+            acc.escalate('unavailable' if unreachable else 'failed')
+            logs.append((f"Flake evaluation failed: {state['eval_error']}",
+                         'WARNING' if unreachable else 'ERROR'))
         previous = ((self.data.latest_snapshot(default={}) or {}).get('current')
                     if self.data else None)
         if target and not evaluated and previous and previous != current and target != current:
@@ -371,7 +376,7 @@ class NixosUpgrade(Plugin):
                              f"running {current}", Status(self.drift_status).log_level))
 
         if state.get('metadata_error'):
-            acc.escalate('offline')
+            acc.escalate('unavailable')
             logs.append((f"Could not read flake metadata: {state['metadata_error']}", 'WARNING'))
         metrics['flake_reachable'] = 0.0 if state.get('metadata_error') else 1.0
 
@@ -529,7 +534,7 @@ class NixosUpgrade(Plugin):
             return 'EVAL FAILED', 'failed'
         value = self._metric('up_to_date')
         if value is None:
-            return 'UNKNOWN', 'offline'
+            return 'UNKNOWN', 'unavailable'
         if value > 0.5:
             return 'UP TO DATE', 'online'
         return 'OUT OF DATE', self.drift_status
@@ -537,7 +542,7 @@ class NixosUpgrade(Plugin):
     def _reboot_pair(self) -> Tuple[str, Optional[str]]:
         value = self._metric('reboot_required')
         if value is None:
-            return '--', 'offline'
+            return '--', 'unavailable'
         if value > 0.5:
             return 'REQUIRED', self.reboot_status
         return 'NOT NEEDED', 'online'

@@ -4,7 +4,8 @@ ports) — sampled locally by the agent on agent-backed hosts — so each check
 is measured from the target's own vantage point. Config: checks (a list of
 {url} or {host, port} entries, optionally named) and timeout per probe.
 Every check reachable is online; any check down is failed — there is no
-warning tier."""
+warning tier. The target itself being unreachable, so the probe never ran,
+is unavailable: nothing was measured."""
 
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -100,11 +101,11 @@ class Ports(Plugin):
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         if not self.checks:
-            return CollectResult.failed("No checks configured", level="WARNING", status='offline')
+            return CollectResult.unavailable("No checks configured")
 
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Probe script failed to run: {stderr}")
+            return CollectResult.unavailable(f"Probe script failed to run: {stderr}")
 
         parsed = _parse_results(stdout, len(self.checks))
         metrics: Dict[str, float] = {}

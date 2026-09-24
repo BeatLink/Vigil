@@ -1,4 +1,6 @@
-"""SMART health of every physical disk, via smartctl."""
+"""SMART health of every physical disk, via smartctl. A disk reporting FAILED
+is failed; a disk whose verdict could not be read, a host with no disks, or a
+script that could not run is unavailable, never healthy."""
 
 from typing import Any, Dict, List
 
@@ -36,7 +38,7 @@ _SMART_SCRIPT = (
 class Smart(SignalPlugin):
     """Per-disk SMART overall-health verdicts from smartctl, counted into
     healthy/failed/unreadable. A disk whose health could not be read counts as
-    failed, not healthy: "I cannot tell" and "it is fine" must not look alike."""
+    unavailable, not healthy: "I cannot tell" and "it is fine" must not look alike."""
 
     SAMPLED = True
 
@@ -46,7 +48,7 @@ class Smart(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"SMART check script failed: {stdout or stderr}")
+            return CollectResult.unavailable(f"SMART check script failed: {stdout or stderr}")
 
         passed, failed, unknown = 0, 0, 0
         logs = []
@@ -73,7 +75,7 @@ class Smart(SignalPlugin):
 
         total = passed + failed + unknown
         if total == 0:
-            return CollectResult(logs=[("No physical disks found", "WARNING")], status='offline')
+            return CollectResult.unavailable("No physical disks found")
 
         return CollectResult(
             metrics={
@@ -83,7 +85,7 @@ class Smart(SignalPlugin):
                 'disks_unknown': unknown,
             },
             logs=logs,
-            status='failed' if (failed > 0 or unknown > 0) else 'online',
+            status='failed' if failed > 0 else ('unavailable' if unknown > 0 else 'online'),
         )
 
     def cards(self) -> Dict[str, Dict[str, Any]]:

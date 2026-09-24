@@ -47,9 +47,17 @@ class TestCollection:
         run_cycle(p, lambda c: CmdResult(0, _nvidia_smi(temp=60.0), ""))
         assert _latest_status() == "failed"
 
-    async def test_missing_nvidia_smi_is_offline(self, plugin, run_cycle):
+    async def test_missing_nvidia_smi_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(127, "", "nvidia-smi: command not found"))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
+
+    async def test_nvidia_smi_reporting_an_error_fails(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "Unable to determine the device handle for GPU 0000:01:00.0: GPU is lost"))
+        assert _latest_status() == "failed"
+
+    async def test_empty_output_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "", ""))
+        assert _latest_status() == "unavailable"
 
 
 class TestTimeoutBreaker:
@@ -57,12 +65,12 @@ class TestTimeoutBreaker:
         p = make_plugin(Gpu, dict(CFG, timeout_trip=2, suspend_seconds=600))
         timed_out = lambda c: CmdResult(1, "", "Command timed out after 15s")
         run_cycle(p, timed_out)
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
         run_cycle(p, timed_out)
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
         assert p.commands() == []           # breaker open: nothing issued at all
         run_cycle(p, timed_out)
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
 
 class TestUiSpec:

@@ -224,10 +224,14 @@ class TestFrigateCollection:
         assert _latest_metric("detector_inference_ms") == 9.5
         assert _latest_metric("cameras_total") == 1.0
 
-    async def test_http_error_sets_failed(self, plugin, run_requests):
+    async def test_http_error_sets_unavailable(self, plugin, run_requests):
         run_requests(plugin, lambda r: HttpResult(
             status_code=None, text="", error="connection refused"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_malformed_stats_sets_unavailable(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(status_code=200, text="not json"))
+        assert _latest_status() == "unavailable"
 
     async def test_non_200_sets_failed(self, plugin, run_requests):
         run_requests(plugin, lambda r: HttpResult(status_code=502, text=""))
@@ -242,11 +246,11 @@ class TestFrigateCollection:
         run_requests(plugin, run)
         assert _latest_status() == "failed"
 
-    async def test_missing_url_sets_failed(self, make_plugin, run_requests):
+    async def test_missing_url_sets_unavailable(self, make_plugin, run_requests):
         p = make_plugin(Frigate, {"name": "f", "id": "f",
                                   "ssh_config": {"host": "h"}})
         run_requests(p, _responder())
-        assert _latest_status("f") == "failed"
+        assert _latest_status("f") == "unavailable"
 
     async def test_camera_filter_excludes_others(self, make_plugin, run_requests):
         p = make_plugin(Frigate, {**BASE_CFG, "cameras": ["only_this"]})

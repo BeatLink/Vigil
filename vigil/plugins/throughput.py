@@ -66,20 +66,20 @@ class Throughput(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Failed to read /proc/net/dev: {stderr}")
+            return CollectResult.unavailable(f"Failed to read /proc/net/dev: {stderr}")
 
         halves = stdout.split('Inter-|')
         if len(halves) < 3:
-            return CollectResult.failed("Unexpected /proc/net/dev output format")
+            return CollectResult.unavailable("Unexpected /proc/net/dev output format")
 
         sample1 = _parse_net_dev(halves[1])
         sample2 = _parse_net_dev(halves[2])
 
         iface = self.interface or _busiest_interface(sample1)
         if not iface:
-            return CollectResult.failed("No usable network interface found")
+            return CollectResult.unavailable("No usable network interface found")
         if iface not in sample1 or iface not in sample2:
-            return CollectResult.failed(f"Interface '{iface}' not found in /proc/net/dev")
+            return CollectResult.unavailable(f"Interface '{iface}' not found in /proc/net/dev")
 
         rx1, tx1 = sample1[iface]
         rx2, tx2 = sample2[iface]

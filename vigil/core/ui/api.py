@@ -30,7 +30,7 @@ def register_api(app: Any, engine: EngineLike) -> None:
                 'name': p.name,
                 'type': p.config.get('type'),
                 'target': getattr(p, 'target', None),
-                'status': statuses.get(p.id, 'offline'),
+                'status': statuses.get(p.id, 'unavailable'),
                 'is_group': bool(p.children),
             })
         return out
@@ -55,7 +55,7 @@ def register_api(app: Any, engine: EngineLike) -> None:
             'name': target.name,
             'type': target.config.get('type'),
             'target': getattr(target, 'target', None),
-            'status': statuses.get(target.id, 'offline'),
+            'status': statuses.get(target.id, 'unavailable'),
             'metrics': metrics,
         })
 

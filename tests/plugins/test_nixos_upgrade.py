@@ -148,13 +148,18 @@ class TestDrift:
         assert _latest_status("test-nixos") == "failed"
         assert _latest_metric("test-nixos", "up_to_date") is None
 
-    async def test_non_nixos_host_is_offline(self, plugin):
+    async def test_non_nixos_host_is_unavailable(self, plugin):
         _collect(plugin, probe=CmdResult(0, "current=\nbooted=\n", ""))
-        assert _latest_status("test-nixos") == "offline"
+        assert _latest_status("test-nixos") == "unavailable"
 
-    async def test_unreachable_target_is_offline(self, plugin):
+    async def test_unreachable_target_is_unavailable(self, plugin):
         _collect(plugin, probe=CmdResult(255, "", "ssh: connect failed"))
-        assert _latest_status("test-nixos") == "offline"
+        assert _latest_status("test-nixos") == "unavailable"
+
+    async def test_unreachable_eval_host_is_unavailable(self, plugin):
+        _collect(plugin, eval_result=CmdResult(-1, "", "not connected"))
+        assert _latest_status("test-nixos") == "unavailable"
+        assert _latest_metric("test-nixos", "up_to_date") is None
 
 
 class TestReboot:
@@ -195,12 +200,12 @@ class TestFlakeMetadata:
         assert state["flake_revision"] == "a" * 40 + "-dirty"
         assert plugin._revision_text == "a" * 12 + "-dirty"
 
-    async def test_metadata_failure_is_offline_and_keeps_drift(self, plugin):
+    async def test_metadata_failure_is_unavailable_and_keeps_drift(self, plugin):
         _collect(plugin, eval_result=CmdResult(0, CURRENT + "\n", ""),
                  metadata=CmdResult(1, "", "error: unable to fetch"))
         assert _latest_metric("test-nixos", "flake_reachable") == 0.0
         assert _latest_metric("test-nixos", "up_to_date") == 1.0
-        assert _latest_status("test-nixos") == "offline"
+        assert _latest_status("test-nixos") == "unavailable"
 
     async def test_stale_inputs_warn_when_max_input_age_set(self, make_plugin):
         p = make_plugin(NixosUpgrade, {**BASE_CFG, "max_input_age": "7d"})

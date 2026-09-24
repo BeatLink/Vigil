@@ -1,4 +1,6 @@
-"""mdadm array health, read from /proc/mdstat."""
+"""mdadm array health, read from /proc/mdstat. A degraded array is failed and a
+rebuilding one warning; an unreadable /proc/mdstat or a host with no arrays
+is unavailable."""
 
 import re
 
@@ -31,7 +33,7 @@ class Md(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0 and not stdout.strip():
-            return CollectResult.failed(f"Failed to read /proc/mdstat: {stderr}")
+            return CollectResult.unavailable(f"Failed to read /proc/mdstat: {stderr}")
 
         ok = degraded = 0
         recovering = False
@@ -63,8 +65,7 @@ class Md(SignalPlugin):
             logs.append((f"{dev}: clean", "INFO"))
 
         if ok + degraded == 0:
-            return CollectResult(
-                logs=[("No RAID arrays found in /proc/mdstat", "WARNING")], status='offline')
+            return CollectResult.unavailable("No RAID arrays found in /proc/mdstat")
 
         metrics = {
             'arrays_total': float(ok + degraded),

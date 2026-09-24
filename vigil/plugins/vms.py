@@ -3,8 +3,8 @@ agent on agent-backed hosts — with start/shutdown actions for expected VMs.
 Config: uri (the libvirt connection), expect_running, offline_warning. Any VM
 named in expect_running that is not running makes the status failed; VMs in
 other unexpected states are warning when offline_warning is on, while cleanly
-shut-off VMs count as benign. A missing virsh reports offline, and an
-unreachable libvirt is failed."""
+shut-off VMs count as benign. A missing virsh or an unreachable libvirt
+measured nothing, so both are unavailable."""
 
 from typing import Dict, Any, List, Optional, Union
 
@@ -78,16 +78,16 @@ class Vms(Plugin):
         """Turns the `virsh list --all` output into a CollectResult with total/
         running/stopped counts and a status where a missing expected VM is failed,
         VMs in unexpected states are warning (when offline_warning), and a missing
-        virsh is offline."""
+        virsh or unreachable libvirt is unavailable."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         combined = f"{stdout}\n{stderr}".lower()
         if ret != 0 and ('command not found' in combined or 'not found' in combined):
-            return CollectResult.failed("virsh not installed on target", level="WARNING", status='offline')
+            return CollectResult.unavailable("virsh not installed on target")
         if ret != 0 and 'failed to connect' in combined:
-            return CollectResult.failed(f"libvirt not reachable: {stderr}")
+            return CollectResult.unavailable(f"libvirt not reachable: {stderr}")
         if ret != 0:
-            return CollectResult.failed(f"virsh list failed: {stderr}")
+            return CollectResult.unavailable(f"virsh list failed: {stderr}")
 
         running, stopped, benign = _classify_vms(stdout)
         total = len(running) + len(stopped) + len(benign)

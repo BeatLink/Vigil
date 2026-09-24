@@ -333,12 +333,12 @@ class TestStatusRetention:
     def test_prune_keeps_newest_row_per_collector_even_if_old(self, mgr):
         # A plugin whose only status row is older than the window must not lose
         # its current state — latest_status* relies on it always being present.
-        self._insert_aged(400, "stale", "offline")
+        self._insert_aged(400, "stale", "unavailable")
         mgr.prune_status(retention_days=30)
         mgr.flush()
         with db.connection_context():
             rows = [(s.plugin_id, s.state) for s in StatusHistory.select()]
-        assert rows == [("stale", "offline")]
+        assert rows == [("stale", "unavailable")]
 
     def test_prune_zero_disables_and_keeps_all(self, mgr):
         self._insert_aged(400, "a", "online")

@@ -152,13 +152,17 @@ class TestProcessesCollection:
         assert _latest_status() == "online"
         assert result.snapshot == []
 
-    async def test_unparseable_output_sets_failed(self, plugin, run_cycle):
+    async def test_unparseable_output_sets_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, "complete garbage\n!!!\n", ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+    async def test_ssh_failure_sets_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(-1, "", "timeout"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_missing_ps_sets_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(127, "", "sh: ps: not found"))
+        assert _latest_status() == "unavailable"
 
     async def test_no_thresholds_always_online(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, _PS_OUTPUT_HIGH_CPU, ""))

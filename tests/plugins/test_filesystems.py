@@ -110,13 +110,17 @@ class TestFilesystemsCollection:
         assert _latest_status() == "online"
         assert _latest_metric("fs_mnt_my_drive_used_pct") == pytest.approx(10.0)
 
-    async def test_no_filesystems_offline(self, plugin, run_cycle):
+    async def test_no_filesystems_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, _HEADER + "\n", ""))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
-    async def test_df_failure_failed(self, plugin, run_cycle):
+    async def test_df_failure_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(1, "", "df: error"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_unreachable_host_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "not connected"))
+        assert _latest_status() == "unavailable"
 
     async def test_filesystem_count_card(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, _df(

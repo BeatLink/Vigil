@@ -48,9 +48,13 @@ class TestCollection:
         run_cycle(p, lambda c: CmdResult(0, _snaps(intr_delta=1200), ""))
         assert _latest_status() == "failed"
 
-    async def test_unexpected_output_fails(self, plugin, run_cycle):
+    async def test_unexpected_output_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, "cpu 1 2 3\n", ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_a_failed_read_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "cat: /proc/stat: Permission denied"))
+        assert _latest_status() == "unavailable"
 
     def test_it_takes_its_own_proc_stat_sample(self, plugin):
         assert '---SNAP---' in plugin.commands()[0].text

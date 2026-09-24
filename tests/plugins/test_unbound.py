@@ -141,13 +141,18 @@ class TestUnboundCollection:
         assert _latest_metric("resolved_ok") == 1.0
         assert _latest_metric("cache_hit_rate_pct") == pytest.approx(84.0)
 
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+    async def test_ssh_failure_sets_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_garbage_response_sets_failed(self, plugin, run_cycle):
+    async def test_missing_control_tool_sets_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(127, "", "unbound-control: command not found"))
+        assert _latest_status() == "unavailable"
+        assert _latest_metric("queries_total") is None
+
+    async def test_garbage_response_sets_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, "no separator", ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
 
 class TestResolutionFailure:

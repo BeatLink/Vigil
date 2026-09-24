@@ -5,9 +5,9 @@ URL.
 Config: api_url (required, Vigil-reachable), api_key / api_key_command,
 min_domains, api_timeout, write_probe, probe_url. It counts the domains and
 blocked URLs in the response; fewer than min_domains domains is warning (the
-database may be empty or wiped), while an unreachable API, a non-200 reply, a
-malformed response or a write that does not round-trip is failed. A probe
-that could not run at all (agent not connected) is offline, not failed.
+database may be empty or wiped), while a non-200 reply or a write that does
+not round-trip is failed. An unreachable API, a malformed response or a probe
+that could not run at all (agent not connected) is unavailable, not failed.
 
 Reading alone cannot see a database whose every write fails, which is how a
 corrupt index once held this monitor green while nothing could be blocked."""
@@ -148,7 +148,7 @@ class Blockurl(Plugin):
 
         result: HttpResult = results[0]
         if result.error is not None:
-            return CollectResult.failed(
+            return CollectResult.unavailable(
                 f"Failed to query BlockURL API: {result.error}"
             )
         if result.status_code != 200:
@@ -159,7 +159,7 @@ class Blockurl(Plugin):
         try:
             data = _parse_response(result.text)
         except ValueError as e:
-            return CollectResult.failed(str(e))
+            return CollectResult.unavailable(str(e))
 
         domain_count = len(data)
         url_total = sum(
@@ -181,7 +181,7 @@ class Blockurl(Plugin):
             return CollectResult(
                 metrics=metrics,
                 logs=[("Write probe did not run: agent not connected", "WARNING")],
-                status="offline",
+                status="unavailable",
             )
 
         if write_error:

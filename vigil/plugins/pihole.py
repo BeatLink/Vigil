@@ -5,7 +5,8 @@ the session on exit. Config: api_url, api_password / api_password_command,
 block_rate_warning, block_rate_threshold, gravity_max_age, min_queries,
 api_timeout, gravity_timeout. Disabled blocking, an empty gravity list, or a
 block rate under block_rate_threshold (once min_queries is reached) is
-failed; a merely low block rate or a stale gravity list is warning.
+failed; a merely low block rate or a stale gravity list is warning; an API
+that did not answer, or answered with something unparseable, is unavailable.
 Setting both block_rate thresholds to 0 stops the rate being judged at
 all -- it is then charted but sets neither the status nor the card colour."""
 
@@ -237,15 +238,16 @@ class Pihole(Plugin):
         """Turns the summary+blocking curl output into a CollectResult with
         query/gravity/client metrics, one summary log line, and a status where
         disabled blocking, an empty gravity list, or a block rate under the
-        threshold is failed and a low rate or stale gravity is warning."""
+        threshold is failed, a low rate or stale gravity is warning, and an API
+        that did not answer or could not be parsed is unavailable."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Failed to query Pi-hole API: {stderr.strip()}")
+            return CollectResult.unavailable(f"Failed to query Pi-hole API: {stderr.strip()}")
 
         try:
             summary, blocking = _parse_response(stdout)
         except ValueError as e:
-            return CollectResult.failed(str(e))
+            return CollectResult.unavailable(str(e))
 
         metrics = _collect_metrics(summary, blocking)
         gravity_age = _gravity_age_seconds(summary.get('gravity', {}), time.time())

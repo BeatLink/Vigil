@@ -110,10 +110,14 @@ class TestBlockurlCollection:
         run_requests(plugin, _respond(http=_result(domains=[])))
         assert _latest_status() == "warning"
 
-    async def test_http_error_sets_failed(self, plugin, run_requests):
+    async def test_http_error_sets_unavailable(self, plugin, run_requests):
         run_requests(plugin, _respond(http=HttpResult(
             status_code=None, text="", error="connection refused")))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_malformed_response_sets_unavailable(self, plugin, run_requests):
+        run_requests(plugin, _respond(http=HttpResult(status_code=200, text="<html>oops</html>")))
+        assert _latest_status() == "unavailable"
 
     async def test_401_sets_failed(self, plugin, run_requests):
         run_requests(plugin, _respond(http=HttpResult(status_code=401, text="")))
@@ -191,11 +195,11 @@ class TestWriteProbeCollection:
 
 
 class TestProbeUnavailable:
-    async def test_disconnected_agent_is_offline_not_failed(self, plugin, run_requests):
+    async def test_disconnected_agent_is_unavailable_not_failed(self, plugin, run_requests):
         """A Vigil restart races the agent connection; that is not a write failure."""
         probe = _probe(exit_code=-1, stderr="Agent 'heimdall' is not connected")
         run_requests(plugin, _respond(probe=probe))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
     async def test_unrun_probe_records_no_write_metric(self, plugin, run_requests):
         probe = _probe(exit_code=-1, stderr="Agent 'heimdall' is not connected")

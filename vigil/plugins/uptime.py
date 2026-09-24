@@ -21,6 +21,8 @@ _DEFAULT_LAYOUT = [
 
 
 class Uptime(Plugin):
+    AVAILABILITY = True
+
     def requests(self) -> List[Request]:
         return [PingRequest(self.target)]
 

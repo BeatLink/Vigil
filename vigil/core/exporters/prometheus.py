@@ -5,7 +5,7 @@ from vigil.core.contracts import MetricsSource
 
 _INVALID = re.compile(r'[^a-zA-Z0-9_:]')
 
-_STATUS_VALUE = {'online': 1.0, 'warning': 0.5, 'failed': 0.0, 'offline': -1.0}
+_STATUS_VALUE = {'online': 1.0, 'warning': 0.5, 'failed': 0.0, 'unavailable': -1.0, 'offline': -1.0}
 
 
 def _sanitize_name(name: str) -> str:
@@ -23,7 +23,7 @@ def render(db: MetricsSource) -> str:
     """Render the latest metrics and statuses in Prometheus text exposition format."""
     lines = []
 
-    lines.append('# HELP vigil_up Monitor status (1=online, 0.5=warning, 0=failed, -1=offline)')
+    lines.append('# HELP vigil_up Monitor status (1=online, 0.5=warning, 0=failed, -1=unavailable)')
     lines.append('# TYPE vigil_up gauge')
     for plugin_id, state in sorted(db.latest_statuses().items()):
         val = _STATUS_VALUE.get(state, -1.0)

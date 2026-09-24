@@ -71,10 +71,15 @@ class TestContainersCollection:
         run_cycle(p, lambda c: CmdResult(0, "", ""))
         assert _latest_status() == "online"
 
-    async def test_runtime_missing_offline(self, make_plugin, run_cycle):
+    async def test_runtime_missing_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Containers, _cfg())
         run_cycle(p, lambda c: CmdResult(127, "", "bash: docker: command not found"))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
+
+    async def test_unreachable_host_unavailable(self, make_plugin, run_cycle):
+        p = make_plugin(Containers, _cfg())
+        run_cycle(p, lambda c: CmdResult(-1, "", "Agent 'h' is not connected"))
+        assert _latest_status() == "unavailable"
 
     async def test_podman_runtime_used(self, make_plugin, run_cycle):
         p = make_plugin(Containers, _cfg(runtime="podman"))

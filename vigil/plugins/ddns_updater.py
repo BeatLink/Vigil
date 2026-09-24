@@ -5,8 +5,8 @@ record, and on drift GET the provider's update URL, throttled by
 min_interval. Config: domain / domain_file / domain_command, record_type,
 resolver, timeout, min_interval, update_url / update_url_file /
 update_url_command. In sync, or freshly updated, is online; drift with the
-update throttled is warning; a failed or unconfigured update, or no
-determinable public IP, is failed."""
+update throttled is warning; a failed or unconfigured update is failed; no
+determinable public IP is unavailable, since nothing could be compared."""
 
 import subprocess
 import time
@@ -179,7 +179,7 @@ class DdnsUpdater(Plugin):
         public_ip, dns_ip, updated = result['public_ip'], result['dns_ip'], result['updated']
 
         if public_ip is None:
-            return CollectResult.failed("Could not determine public IP (all IP services failed)")
+            return CollectResult.unavailable("Could not determine public IP (all IP services failed)")
 
         settings = {f"ddns:{self.id}:public_ip": public_ip}
         if dns_ip:

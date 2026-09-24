@@ -105,20 +105,25 @@ class TestTraccarCollection:
         _run(plugin, run_requests, [_device(hours_ago=200.0, disabled=True)])
         assert _latest_status() == "warning"
 
-    async def test_auth_failure_sets_failed(self, plugin, run_requests):
+    async def test_auth_failure_sets_unavailable(self, plugin, run_requests):
         run_requests(plugin, lambda r: HttpResult(status_code=401, text=""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_http_error_sets_failed(self, plugin, run_requests):
+    async def test_http_error_sets_unavailable(self, plugin, run_requests):
         run_requests(plugin, lambda r: HttpResult(
             status_code=None, text="", error="connection refused"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_missing_username_sets_failed(self, make_plugin, run_requests):
+    async def test_malformed_payload_sets_unavailable(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(status_code=200, text="<html>not json"))
+        assert _latest_status() == "unavailable"
+        assert _latest_metric("devices_total") is None
+
+    async def test_missing_username_sets_unavailable(self, make_plugin, run_requests):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "username"}
         p = make_plugin(Traccar, cfg)
         run_requests(p, lambda r: HttpResult(status_code=200, text="[]"))
-        assert _latest_status("test-traccar") == "failed"
+        assert _latest_status("test-traccar") == "unavailable"
 
     async def test_never_reported_counts_as_stale(self, plugin, run_requests):
         _run(plugin, run_requests, [{"name": "NoFix", "disabled": False, "lastUpdate": None}])

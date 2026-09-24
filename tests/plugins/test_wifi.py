@@ -75,11 +75,16 @@ class TestCollection:
             0, _make_wireless({"wlan0": (25, -80), "wlan1": (68, -40)}), ""))
         assert result.settings[f"network:{plugin.id}:wifi_interface"] == "wlan1"
 
-    async def test_explicit_interface_missing_fails(self, make_plugin, run_cycle):
+    async def test_explicit_interface_missing_is_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Wifi, dict(CFG, interface='wlan0'))
         run_cycle(p, lambda c: CmdResult(0, _make_wireless({"wlan1": (60, -50)}), ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_no_wireless_interface_fails(self, plugin, run_cycle):
+    async def test_no_wireless_interface_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, WIRELESS_HEADER, ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_unreadable_proc_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "cat: /proc/net/wireless: No such file"))
+        assert _latest_status() == "unavailable"
+        assert _latest_metric("link_quality") is None

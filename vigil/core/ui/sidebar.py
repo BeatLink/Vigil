@@ -94,7 +94,7 @@ def build_tree_nodes(engine: EngineLike, plugins, statuses=None) -> list:
         statuses = engine.db.latest_statuses()
     nodes = []
     for p in plugins:
-        status = statuses.get(p.id, 'offline')
+        status = statuses.get(p.id, 'unavailable')
         node = {
             'id': p.id,
             'label': p.name,

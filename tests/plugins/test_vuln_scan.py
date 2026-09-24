@@ -233,18 +233,23 @@ class TestPorts:
 
 
 class TestFailures:
-    async def test_host_down_is_offline(self, plugin):
+    async def test_host_down_is_unavailable(self, plugin):
         _collect(plugin, _scan(up=False))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
         assert _latest_metric("host_up") == 0
 
-    async def test_nmap_missing_is_offline(self, plugin):
+    async def test_nmap_missing_is_unavailable(self, plugin):
         _collect(plugin, CmdResult(127, "", "sh: nmap: command not found"))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
-    async def test_truncated_output_is_offline(self, plugin):
+    async def test_truncated_output_is_unavailable(self, plugin):
         _collect(plugin, CmdResult(124, '<?xml version="1.0"?><nmaprun><host>', ""))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
+
+    async def test_lost_reply_is_unavailable(self, plugin):
+        _collect(plugin, CmdResult(-1, "", "not connected"))
+        assert _latest_status() == "unavailable"
+        assert plugin._last_scan_color == "unavailable"
 
     async def test_last_scan_card_reads_the_scan_time(self, plugin):
         assert plugin._last_scan_text == "NEVER"

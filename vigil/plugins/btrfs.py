@@ -1,4 +1,6 @@
-"""Btrfs filesystem health and capacity, via btrfs-progs."""
+"""Btrfs filesystem health and capacity, via btrfs-progs. Device errors or
+usage over the threshold is failed; a probe that could not run, missing
+btrfs-progs, or no btrfs filesystem to read is unavailable."""
 
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -141,15 +143,15 @@ class Btrfs(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0 and not stdout.strip():
-            return CollectResult.failed(f"btrfs probe failed: {stderr or stdout}")
+            return CollectResult.unavailable(f"btrfs probe failed: {stderr or stdout}")
         if stdout.startswith('ERROR '):
-            return CollectResult.failed(stdout.strip())
+            return CollectResult.unavailable(stdout.strip())
 
         filesystems = _parse_probe(stdout)
         if self.filesystems:
             filesystems = [fs for fs in filesystems if fs.mountpoint in self.filesystems]
         if not filesystems:
-            return CollectResult(logs=[("No btrfs filesystems found", "WARNING")], status='offline')
+            return CollectResult(logs=[("No btrfs filesystems found", "WARNING")], status='unavailable')
 
         metrics: Dict[str, float] = {}
         logs: List[Tuple[str, str]] = []

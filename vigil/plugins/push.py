@@ -22,6 +22,8 @@ _VALID_PUSH_STATUSES = {'up', 'down'}
 
 
 class Push(Plugin):
+    AVAILABILITY = True
+
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         self.max_age = int(config.get('max_age', self.interval * 2))

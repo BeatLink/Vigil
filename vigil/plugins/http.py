@@ -37,6 +37,8 @@ def _body_mismatch(body: str, expect: Dict[str, Any]) -> bool:
 
 
 class HttpCheck(Plugin):
+    AVAILABILITY = True
+
     SAMPLED = True
 
     def __init__(self, name: str, config: Dict[str, Any]):

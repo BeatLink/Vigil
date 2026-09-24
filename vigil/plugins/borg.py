@@ -5,8 +5,10 @@ later cycles poll to completion. Config: repo, max_age, passphrase /
 passphrase_file / passphrase_command, borg_bin, ssh_key / rsh, require_sudo,
 list_archives, collect_stats, cache_dir, lock_wait / backup_lock_wait, and the
 backup set (source_paths, exclude*, one_file_system, compression,
-archive_prefix). A failed list, an empty repo, or a newest archive older than
-max_age is failed; this monitor has no warning tier."""
+archive_prefix). A borg error, an empty repo, or a newest archive older than
+max_age is failed; an unreachable host, a missing borg binary, a repo the SSH
+user cannot read, or unparseable output is unavailable. This monitor has no
+warning tier."""
 
 import json
 import re
@@ -88,6 +90,12 @@ def _failure_hint(stderr: str) -> Optional[str]:
         return ("Hint: the repo is locked by another borg process — a backup may "
                 "be running.")
     return None
+
+
+def _list_unavailable(exit_code: int, detail: str) -> bool:
+    """True when the listing could not be gathered at all, as opposed to borg reporting a repo problem."""
+    text = detail.lower()
+    return exit_code == -1 or "command not found" in text or "permission denied" in text
 
 
 def _parse_archive_time(value: str) -> int:
@@ -336,7 +344,8 @@ class Borg(Plugin):
             hint = _failure_hint(detail)
             if hint:
                 logs.append((hint, "ERROR"))
-            return CollectResult(logs=logs, status='failed')
+            unavailable = _list_unavailable(ret, detail)
+            return CollectResult(logs=logs, status='unavailable' if unavailable else 'failed')
 
         view = RepoView.from_stdout(stdout)
 
@@ -345,7 +354,7 @@ class Borg(Plugin):
             snippet = (stdout or stderr or "").strip()[:500]
             if snippet:
                 logs.append((f"Raw output was: {snippet}", "ERROR"))
-            return CollectResult(logs=logs, status='failed')
+            return CollectResult(logs=logs, status='unavailable')
 
         logs.extend(self._repo_detail_logs(view))
         metrics = {'archive_count': float(view.raw_count), 'last_backup_epoch': float(view.newest_epoch)}
@@ -628,7 +637,7 @@ class Borg(Plugin):
         """Returns the (text, color) pair for the current-state card."""
         epoch = self._epoch()
         if epoch is None:
-            return 'UNKNOWN', 'offline'
+            return 'UNKNOWN', 'unavailable'
         if int(epoch) == 0:
             return 'NO ARCHIVES', 'failed'
         age = int(time.time()) - int(epoch)

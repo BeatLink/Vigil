@@ -52,6 +52,11 @@ class TestCollection:
         assert _latest_status() == "online"
         assert _latest_metric("temp_c") is None
 
+    async def test_a_failed_read_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "permission denied"))
+        assert _latest_status() == "unavailable"
+        assert _latest_metric("temp_c") is None
+
 
 class TestUiSpec:
     def test_zone_cards_get_their_own_row(self, plugin):

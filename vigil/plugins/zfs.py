@@ -18,7 +18,9 @@ def _sanitize_pool(name: str) -> str:
 
 class Zfs(SignalPlugin):
     """ZFS pool state and capacity from one `zpool list`, reporting a count of
-    degraded pools plus a usage metric per pool and the fullest pool's usage."""
+    degraded pools plus a usage metric per pool and the fullest pool's usage.
+    A zpool that fails to run or lists no pools measured nothing, so it is
+    unavailable; a pool in any unhealthy state is failed."""
 
     def __init__(self, name: str, config: PluginConfig):
         super().__init__(name, config)
@@ -42,7 +44,7 @@ class Zfs(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0 and not stdout.strip():
-            return CollectResult.failed(f"zpool list failed: {stderr or stdout}")
+            return CollectResult.unavailable(f"zpool list failed: {stderr or stdout}")
 
         ok, degraded = 0, 0
         usage: Dict[str, float] = {}
@@ -72,7 +74,7 @@ class Zfs(SignalPlugin):
             ))
 
         if not usage:
-            return CollectResult(logs=[("No ZFS pools found", "WARNING")], status='offline')
+            return CollectResult.unavailable("No ZFS pools found")
 
         metrics = {
             'pools_total': ok + degraded,

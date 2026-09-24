@@ -253,13 +253,17 @@ class TestCollect:
         assert _latest_metric("torrents_errored") == 0
         assert _latest_metric("connected") == 1.0
 
-    async def test_ssh_failure_is_failed(self, plugin, run_cycle):
+    async def test_api_failure_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(1, "", "connection refused"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_unparseable_response_is_failed(self, plugin, run_cycle):
+    async def test_unreachable_host_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "not connected"))
+        assert _latest_status() == "unavailable"
+
+    async def test_unparseable_response_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, "garbage", ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
     async def test_disconnected_is_failed(self, plugin, run_cycle):
         _respond(plugin, run_cycle, transfer=_transfer(connection="disconnected",
@@ -317,8 +321,10 @@ class TestCollect:
         assert _latest_status() == "failed"
 
     async def test_auth_failure_is_reported_distinctly(self, plugin, run_cycle):
-        run_cycle(plugin, lambda c: CmdResult(1, "", f"{_AUTH_FAILED}: Fails."))
-        assert _latest_status() == "failed"
+        result = run_cycle(plugin, lambda c: CmdResult(1, "", f"{_AUTH_FAILED}: Fails."))
+        assert _latest_status() == "unavailable"
+        assert "rejected the configured credentials" in result.logs[0][0]
+        assert result.logs[0][1] == "ERROR"
 
 
 class TestActions:

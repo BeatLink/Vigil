@@ -105,14 +105,19 @@ class TestTriliumCollection:
         _run(plugin, run_requests, hours_ago=100.0)
         assert _latest_status() == "warning"
 
-    async def test_http_error_sets_failed(self, plugin, run_requests):
+    async def test_http_error_sets_unavailable(self, plugin, run_requests):
         run_requests(plugin, lambda r: HttpResult(
             status_code=None, text="", error="connection refused"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_401_sets_failed(self, plugin, run_requests):
+    async def test_401_sets_unavailable(self, plugin, run_requests):
         run_requests(plugin, lambda r: HttpResult(status_code=401, text=""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_malformed_payload_sets_unavailable(self, plugin, run_requests):
+        run_requests(plugin, lambda r: HttpResult(status_code=200, text="{}"))
+        assert _latest_status() == "unavailable"
+        assert _latest_metric("notes_total") is None
 
     async def test_records_note_count(self, plugin, run_requests):
         _run(plugin, run_requests, total_notes=1234)

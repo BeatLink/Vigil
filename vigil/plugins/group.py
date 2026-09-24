@@ -1,7 +1,7 @@
 """A container monitor that aggregates its child monitors. It issues no
 requests of its own: each cycle it re-reads the children's latest statuses
 from the read-only data view and takes the worst as its own, counting a child
-with no status yet as offline. Config: layout (compose individual descendant
+with no status yet as unavailable. Config: layout (compose individual descendant
 widgets into the group's own grid) plus the grid_min_width default and the
 per-child grid_* sizing keys; without a layout it renders one collapsible
 card per child, persisting the expansion state as a setting."""
@@ -61,7 +61,7 @@ class Group(Plugin):
         return CollectResult(status=self._aggregate_status(statuses))
 
     def _aggregate_status(self, statuses: Dict[str, str]) -> str:
-        return Status.worst(statuses.get(child.id, 'offline') for child in self.children)
+        return Status.worst(statuses.get(child.id, 'unavailable') for child in self.children)
 
     def _descendants(self) -> Iterator[Any]:
         """Every monitor under this group, depth-first, so a layout can address a nested group's children."""
@@ -149,9 +149,9 @@ class Group(Plugin):
                 from vigil.core.ui.theme import STATUS_COLORS
                 live = await offload(self.data.latest_statuses)()
                 for child_id, label in status_labels:
-                    state = live.get(child_id, 'offline')
+                    state = live.get(child_id, 'unavailable')
                     label.text = state.upper()
-                    label.style(f'color: {STATUS_COLORS.get(state, STATUS_COLORS["offline"])}')
+                    label.style(f'color: {STATUS_COLORS.get(state, STATUS_COLORS["unavailable"])}')
             on_data_event(_refresh_statuses)
 
         for ref in grid.unclaimed():
@@ -168,9 +168,9 @@ class Group(Plugin):
         from vigil.core.ui.components import info_card
         from vigil.core.ui.theme import STATUS_COLORS
 
-        state = statuses.get(child.id, 'offline')
+        state = statuses.get(child.id, 'unavailable')
         label = info_card(cfg.get('title') or child.name.upper(), state.upper())
-        label.style(f'color: {STATUS_COLORS.get(state, STATUS_COLORS["offline"])}')
+        label.style(f'color: {STATUS_COLORS.get(state, STATUS_COLORS["unavailable"])}')
         return label
 
     # ------------------------------------------------------------------
@@ -195,8 +195,8 @@ class Group(Plugin):
         from vigil.core.ui.theme import STATUS_COLORS
         from vigil.core.ui.components import card
 
-        child_status = statuses.get(child.id, 'offline')
-        child_color = STATUS_COLORS.get(child_status, STATUS_COLORS['offline'])
+        child_status = statuses.get(child.id, 'unavailable')
+        child_color = STATUS_COLORS.get(child_status, STATUS_COLORS['unavailable'])
         is_open = self._expanded.get(child.id, False)
 
         with ui.element('div').style(_child_cell_style(child.config, min_card_width)):

@@ -82,9 +82,9 @@ class TestContinuousMode:
         _run(plugin, [(1, "inactive", ""), (0, "", "")])
         assert _latest_metric("test-nginx", "active") == pytest.approx(0.0)
 
-    async def test_journal_failure_sets_failed(self, plugin):
+    async def test_journal_failure_sets_unavailable(self, plugin):
         _run(plugin, [(0, "active", ""), (-1, "", "journalctl: permission denied")])
-        assert _latest_status("test-nginx") == "failed"
+        assert _latest_status("test-nginx") == "unavailable"
 
     async def test_journal_lines_persisted(self, plugin):
         _run(plugin, [(0, "active", ""), (0, "2024-05-01T12:00:00+0000 host nginx[1]: started", "")])
@@ -155,9 +155,9 @@ class TestOneshotMode:
         _run(plugin, [(0, _oneshot_output("exit-code", "0"), ""), (0, "", "")])
         assert _latest_status("test-upgrade") == "online"
 
-    async def test_ssh_command_failure_sets_failed(self, plugin):
+    async def test_ssh_command_failure_sets_unavailable(self, plugin):
         _run(plugin, [(-1, "", "SSH timeout"), (-1, "", "SSH timeout")])
-        assert _latest_status("test-upgrade") == "failed"
+        assert _latest_status("test-upgrade") == "unavailable"
 
     async def test_last_run_epoch_metric_recorded(self, plugin):
         epoch = int(time.time()) - 100

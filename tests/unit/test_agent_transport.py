@@ -358,17 +358,17 @@ class TestSampleStreamContract:
         assert plugin.subscriptions() == []
         assert plugin.event_driven() is False
 
-    def test_a_failing_sample_parses_as_a_failure(self, make_plugin):
+    def test_a_failing_sample_parses_as_unavailable(self, make_plugin):
         from vigil.plugins.cpu import Cpu
         plugin = make_plugin(Cpu, {})
         result = plugin.parse_event(f'{plugin.id}:sample',
                                     {'exit_code': 1, 'stdout': '', 'stderr': 'boom'}, 0.0)
-        assert result.status == 'failed'
+        assert result.status == 'unavailable'
 
     def test_a_malformed_frame_does_not_raise(self, make_plugin):
         from vigil.plugins.cpu import Cpu
         plugin = make_plugin(Cpu, {})
-        assert plugin.parse_event(f'{plugin.id}:sample', {}, 0.0).status == 'failed'
+        assert plugin.parse_event(f'{plugin.id}:sample', {}, 0.0).status == 'unavailable'
 
     def test_the_sample_stream_bounds_quiet_suppression(self, make_plugin):
         """The agent may skip unchanged frames but must push within five

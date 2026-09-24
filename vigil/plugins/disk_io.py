@@ -1,4 +1,6 @@
-"""Disk read/write throughput, sampled from /proc/diskstats."""
+"""Disk read/write throughput, sampled from /proc/diskstats. It has no
+thresholds; a sample that could not be read, or a device that is not in it,
+is unavailable."""
 
 import shlex
 from typing import Any, Dict, List, Optional, Tuple
@@ -101,13 +103,13 @@ class DiskIo(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Failed to read /proc/diskstats: {stderr}")
+            return CollectResult.unavailable(f"Failed to read /proc/diskstats: {stderr}")
 
         samples, _, resolved = stdout.partition('---DEVICE---')
 
         halves = samples.split('---SNAP---')
         if len(halves) < 2:
-            return CollectResult.failed("Unexpected /proc/diskstats output format")
+            return CollectResult.unavailable("Unexpected /proc/diskstats output format")
 
         s1 = _parse_diskstats(halves[0])
         s2 = _parse_diskstats(halves[1])
@@ -115,14 +117,14 @@ class DiskIo(SignalPlugin):
         if self.device and _is_device_path(self.device):
             device = _resolve_device_path(resolved)
             if not device:
-                return CollectResult.failed(f"Device '{self.device}' is not present")
+                return CollectResult.unavailable(f"Device '{self.device}' is not present")
         else:
             device = self.device or _auto_detect_device(s1, s2)
         if not device:
-            return CollectResult.failed("No usable disk device found")
+            return CollectResult.unavailable("No usable disk device found")
 
         if device not in s1 or device not in s2:
-            return CollectResult.failed(f"Device '{device}' not found in /proc/diskstats")
+            return CollectResult.unavailable(f"Device '{device}' not found in /proc/diskstats")
 
         read_kbps = max(0.0, (s2[device][0] - s1[device][0]) * _SECTOR_BYTES / 1024)
         write_kbps = max(0.0, (s2[device][1] - s1[device][1]) * _SECTOR_BYTES / 1024)

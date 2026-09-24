@@ -3,8 +3,9 @@ the Vigil host, basic-authenticated as a dedicated vigil account. Config:
 api_url (required, Vigil-reachable), username, password / password_command,
 devices (names to watch, default all enabled), stale_warning /
 stale_threshold (hours), api_timeout. A device silent past stale_warning is
-warning; one past stale_threshold, or that never reported, is failed, as are
-transport and auth errors; no matching enabled devices is a warning."""
+warning; one past stale_threshold, or that never reported, is failed; no
+matching enabled devices is a warning. Transport, auth and payload errors
+mean nothing was measured, so they are unavailable."""
 
 import json
 from datetime import datetime, timezone
@@ -40,15 +41,15 @@ def _age_hours(last_update: Optional[str]) -> Optional[float]:
 
 
 def _http_failure(result) -> Optional[CollectResult]:
-    """The failed CollectResult for a transport, auth, or HTTP error, or None when the response is usable."""
+    """The unavailable CollectResult for a transport, auth, or HTTP error, or None when the response is usable."""
     if result.error is not None:
-        return CollectResult.failed(f"Failed to query Traccar API: {result.error}")
+        return CollectResult.unavailable(f"Failed to query Traccar API: {result.error}")
     if result.status_code == 401:
-        return CollectResult.failed(
+        return CollectResult.unavailable(
             "Traccar rejected the configured credentials "
             "(check username / password_command)")
     if result.status_code != 200:
-        return CollectResult.failed(
+        return CollectResult.unavailable(
             f"Traccar API returned HTTP {result.status_code}")
     return None
 
@@ -131,9 +132,9 @@ class Traccar(Plugin):
         where a device past stale_threshold (or never reporting) is failed and
         one past stale_warning is warning."""
         if not self.api_url:
-            return CollectResult.failed("No 'api_url' configured")
+            return CollectResult.unavailable("No 'api_url' configured")
         if not self.username:
-            return CollectResult.failed(
+            return CollectResult.unavailable(
                 "No username configured — set username/password_command "
                 "for the dedicated Traccar vigil account")
 
@@ -145,7 +146,7 @@ class Traccar(Plugin):
         try:
             devices = _parse_response(result.text)
         except ValueError as e:
-            return CollectResult.failed(str(e))
+            return CollectResult.unavailable(str(e))
 
         watched = [device for device in devices if not device.get('disabled')
                    and (self.devices is None or device.get('name') in self.devices)]

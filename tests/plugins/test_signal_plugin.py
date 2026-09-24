@@ -63,8 +63,8 @@ class TestRendering:
 
 
 class TestWorstStatus:
-    def test_offline_ranks_below_warning(self):
-        assert worst_status(['offline', 'warning']) == 'warning'
+    def test_unavailable_ranks_below_warning(self):
+        assert worst_status(['unavailable', 'warning']) == 'warning'
 
     def test_failed_wins(self):
         assert worst_status(['online', 'warning', 'failed']) == 'failed'

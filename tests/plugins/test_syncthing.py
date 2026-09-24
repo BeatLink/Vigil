@@ -144,19 +144,27 @@ class TestSyncthingCollection:
         })
         assert _latest_status() == "failed"
 
-    async def test_http_error_on_config_sets_failed(self, plugin, run_requests):
+    async def test_http_error_on_config_sets_unavailable(self, plugin, run_requests):
         run_requests(plugin, lambda r, _it=iter([
             HttpResult(status_code=None, text="", error="connection refused"),
             _ok(_connections()),
         ]): next(_it))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_bad_api_key_sets_failed(self, plugin, run_requests):
+    async def test_bad_api_key_sets_unavailable(self, plugin, run_requests):
         run_requests(plugin, lambda r, _it=iter([
             HttpResult(status_code=403, text="CSRF"),
             _ok(_connections()),
         ]): next(_it))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_folder_status_error_sets_unavailable(self, plugin, run_requests):
+        run_requests(plugin, lambda r, _it=iter([_ok(_CONFIG), _ok(_connections())]): next(_it))
+        run_requests(plugin, lambda r, _it=iter([
+            _ok(_CONFIG), _ok(_connections()),
+            HttpResult(status_code=None, text="", error="timeout"), _ok(_folder_status()),
+        ]): next(_it))
+        assert _latest_status() == "unavailable"
 
     async def test_first_cycle_discovers_folders(self, plugin, run_requests):
         result = run_requests(plugin, lambda r, _it=iter([

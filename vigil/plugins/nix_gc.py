@@ -3,7 +3,8 @@ this host. One cheap script per cycle reads the store filesystem and path
 count, every profile's generation links, the `nix-gc` unit and timer state,
 and the last collection's own summary line from the journal — so a collection
 that stopped running, failed, or was never scheduled reads as a failure rather
-than as a slowly filling disk. The last run's epoch and yield are carried
+than as a slowly filling disk. An unreadable store, a probe that returned
+nothing, or no record of any run at all is unavailable. The last run's epoch and yield are carried
 forward as metric metadata, so a journal that has since rotated past it does
 not erase what was already seen. The action launches a detached
 `nix-collect-garbage` on the target, the same collection the timer runs, and
@@ -239,18 +240,17 @@ class NixGc(Plugin):
             return self._parse_poll(job, results[0])
 
         if not results:
-            return CollectResult.failed('No probe result for this cycle', status='offline')
+            return CollectResult.unavailable('No probe result for this cycle')
 
         probe = results[0]
         if probe.exit_code != 0 and not probe.stdout.strip():
-            return CollectResult.failed(
-                f"Could not read the Nix store: {(probe.stderr or probe.stdout).strip()[:200]}",
-                status='offline')
+            return CollectResult.unavailable(
+                f"Could not read the Nix store: {(probe.stderr or probe.stdout).strip()[:200]}")
 
         fields = _parse_probe(probe.stdout)
         if not fields.get('df'):
-            return CollectResult.failed(
-                f"{self.store} is unreadable — is Nix installed on this host?", status='offline')
+            return CollectResult.unavailable(
+                f"{self.store} is unreadable — is Nix installed on this host?")
         return self._assemble(fields, self._collection_state(fields))
 
     def _collection_state(self, fields: Dict[str, Any]) -> Dict[str, Any]:
@@ -406,7 +406,7 @@ class NixGc(Plugin):
 
         epoch = state.get('epoch')
         if not epoch:
-            acc.escalate('offline')
+            acc.escalate('unavailable')
             logs.append((f"Could not tell when {self.unit} last ran — no record in its journal "
                          'and no timestamp on the unit', 'WARNING'))
         else:
@@ -548,7 +548,7 @@ class NixGc(Plugin):
         state = self._state()
         epoch = state.get('epoch')
         if not epoch:
-            return 'UNKNOWN', 'offline'
+            return 'UNKNOWN', 'unavailable'
         age = int(time.time()) - int(epoch)
         if not state.get('succeeded', True):
             return format_age(age), 'failed'

@@ -55,6 +55,11 @@ class TestExitCodeMode:
         run_cycle(p, lambda c: CmdResult(0, "", ""))
         assert _latest_status("test-cmd") == "failed"
 
+    async def test_unreachable_host_is_unavailable(self, make_plugin, run_cycle):
+        p = make_plugin(CommandPlugin, _cfg(command="true"))
+        run_cycle(p, lambda c: CmdResult(-1, "", "Agent 'h' is not connected"))
+        assert _latest_status("test-cmd") == "unavailable"
+
 
 class TestPatternMode:
     async def test_value_below_warning_online(self, make_plugin, run_cycle):

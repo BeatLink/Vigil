@@ -1,4 +1,6 @@
-"""Kernel OOM kills, counted from /proc/vmstat and followed in the journal."""
+"""Kernel OOM kills, counted from /proc/vmstat and followed in the journal.
+A new kill is failed (warning when is_warning); an unreadable /proc/vmstat or
+a kernel without the counter is unavailable."""
 
 from typing import Any, Dict, List, Optional
 
@@ -130,17 +132,17 @@ class Oom(SignalPlugin):
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         """Turns the /proc/vmstat dump into a CollectResult carrying the total and
-        delta kill counts, where new kills report failed (warning when is_warning)
-        and the warning lingers for alert_for collections afterwards."""
+        delta kill counts, where new kills report failed (warning when is_warning),
+        the warning lingers for alert_for collections afterwards, and a dump that
+        could not be read or lacks the counter is unavailable."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Failed to read /proc/vmstat: {stderr}")
+            return CollectResult.unavailable(f"Failed to read /proc/vmstat: {stderr}")
 
         total = _extract_counter(stdout, 'oom_kill')
         if total is None:
-            return CollectResult.failed(
-                "No 'oom_kill' counter in /proc/vmstat (kernel too old?)",
-                level="WARNING", status='offline')
+            return CollectResult.unavailable(
+                "No 'oom_kill' counter in /proc/vmstat (kernel too old?)")
 
         metrics = {'oom_kills_total': float(total)}
         previous, self._last_total = self._last_total, total

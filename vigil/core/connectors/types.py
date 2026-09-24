@@ -24,13 +24,20 @@ class Status(str, Enum):
     """Canonical monitor status. A str subclass, so comparisons against stored
     strings, STATUS_COLORS lookups and JSON serialisation all keep working.
 
-    'offline' ranks below 'warning': a monitor that cannot measure is less
-    alarming than one measuring a bad number."""
+    'unavailable' ranks below 'warning': a monitor that cannot measure is less
+    alarming than one measuring a bad number. It is what any monitor reports
+    when its host is unreachable or its data could not be gathered; only an
+    availability monitor (Plugin.AVAILABILITY) calls an unreachable host failed."""
 
     ONLINE = 'online'
-    OFFLINE = 'offline'
+    UNAVAILABLE = 'unavailable'
     WARNING = 'warning'
     FAILED = 'failed'
+
+    @classmethod
+    def _missing_(cls, value):
+        # 'offline' is what this status was called before; stored history still carries it.
+        return cls.UNAVAILABLE if value == 'offline' else None
 
     # str() and f-strings must yield the bare value, not 'Status.ONLINE'.
     __str__ = str.__str__
@@ -47,21 +54,21 @@ class Status(str, Enum):
     @classmethod
     def worst(cls, statuses: Iterable[str]) -> "Status":
         """The most severe of the given statuses, defaulting to online; an
-        unrecognised value ranks as offline."""
+        unrecognised value ranks as unavailable."""
         worst = cls.ONLINE
         for value in statuses:
             try:
                 candidate = cls(value)
             except ValueError:
-                candidate = cls.OFFLINE
+                candidate = cls.UNAVAILABLE
             if candidate.severity > worst.severity:
                 worst = candidate
         return worst
 
 
-_SEVERITY = {Status.ONLINE: 0, Status.OFFLINE: 1, Status.WARNING: 2, Status.FAILED: 3}
+_SEVERITY = {Status.ONLINE: 0, Status.UNAVAILABLE: 1, Status.WARNING: 2, Status.FAILED: 3}
 
-_LOG_LEVEL = {Status.ONLINE: 'INFO', Status.OFFLINE: 'WARNING',
+_LOG_LEVEL = {Status.ONLINE: 'INFO', Status.UNAVAILABLE: 'WARNING',
               Status.WARNING: 'WARNING', Status.FAILED: 'ERROR'}
 
 
@@ -172,6 +179,11 @@ class CollectResult:
     def failed(message: str, level: str = "ERROR", status: str = "failed") -> "CollectResult":
         return CollectResult(logs=[(message, level)], status=status)
 
+    @staticmethod
+    def unavailable(message: str, level: str = "WARNING") -> "CollectResult":
+        """The host could not be reached or the data could not be gathered, so nothing was measured."""
+        return CollectResult(logs=[(message, level)], status=str(Status.UNAVAILABLE))
+
 
 # Plugin.plan_action()'s return type. VigilEngine.dispatch_action
 # discriminates this union with isinstance, in this order: CollectResult
@@ -193,3 +205,16 @@ ActionOutcome = Union[bool, CollectResult]
 # the applied CollectResult's .metadata dict when one was applied (e.g.
 # carrying 'content' for read-style dialog actions), else None.
 DispatchResult = Tuple[bool, Optional[Dict[str, str]]]
+
+
+def unreachable(result: Any) -> bool:
+    """Whether a connector result says the transport failed before anything was measured."""
+    if isinstance(result, CmdResult):
+        return result.exit_code == -1
+    if isinstance(result, HttpResult):
+        return result.status_code is None
+    if isinstance(result, DnsResult):
+        return result.kind in ('timeout', 'dns_error')
+    if isinstance(result, PingResult):
+        return result.exception is not None
+    return False

@@ -1,4 +1,6 @@
-"""TCP connection counts by state, read from /proc/net/tcp."""
+"""TCP connection counts by state, read from /proc/net/tcp. The total is
+ranked against warning/threshold; a table that could not be read is
+unavailable."""
 
 from collections import Counter
 
@@ -62,7 +64,7 @@ class Connections(SignalPlugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Failed to read /proc/net/tcp: {stderr}")
+            return CollectResult.unavailable(f"Failed to read /proc/net/tcp: {stderr}")
 
         counts = _parse_states(stdout)
         total = sum(counts.values())

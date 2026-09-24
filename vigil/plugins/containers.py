@@ -4,7 +4,7 @@ container. Config: runtime (docker by default), expect_running,
 stopped_warning. Any container named in expect_running that is not running
 makes the status failed; other stopped containers are warning when
 stopped_warning is on, while created/paused ones count as benign. A missing
-runtime binary reports offline rather than failed."""
+runtime binary or an unreachable host reports unavailable rather than failed."""
 
 from typing import Dict, Any, List, Optional, Union
 
@@ -77,13 +77,14 @@ class Containers(Plugin):
         """Turns the `<runtime> ps` output into a CollectResult with total/running/
         stopped counts and a status where a missing expected container is failed,
         other stopped containers are warning (when stopped_warning), and a missing
-        runtime binary is offline."""
+        runtime binary or an unreachable host is unavailable."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
 
         combined = f"{stdout}\n{stderr}".lower()
         if ret != 0 and ('command not found' in combined or 'not found' in combined):
-            return CollectResult.failed(f"{self.runtime} not installed on target",
-                                        level="WARNING", status='offline')
+            return CollectResult.unavailable(f"{self.runtime} not installed on target")
+        if ret == -1:
+            return CollectResult.unavailable(f"'{self.runtime} ps' did not run: {stderr}")
         if ret != 0:
             return CollectResult.failed(f"'{self.runtime} ps' failed: {stderr}")
 

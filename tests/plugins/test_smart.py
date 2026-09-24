@@ -48,17 +48,21 @@ class TestCollection:
         assert _latest_metric("disks_ok") == 1
         assert _latest_metric("disks_failed") == 2
 
-    async def test_no_disks_sets_offline(self, plugin, run_cycle):
+    async def test_no_disks_sets_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, "")
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
     async def test_malformed_lines_skipped(self, plugin, run_cycle):
         _run(plugin, run_cycle, "PASS /dev/sda\nsome random noise\nFAIL /dev/sdb")
         assert _latest_metric("disks_total") == 2
 
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+    async def test_ssh_failure_sets_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, "", code=-1, stderr="SSH timeout")
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_missing_smartctl_sets_unavailable(self, plugin, run_cycle):
+        _run(plugin, run_cycle, "ERROR smartctl not found", code=1)
+        assert _latest_status() == "unavailable"
 
 
 class TestBlindChecksAreNotHealthy:
@@ -69,7 +73,7 @@ class TestBlindChecksAreNotHealthy:
     def test_a_privilege_error_is_not_a_passing_disk(self, plugin):
         result = plugin.parse([CmdResult(
             0, "UNKNOWN /dev/sda sudo: must be owned by uid 0 and have the setuid bit set", "")])
-        assert result.status == 'failed'
+        assert result.status == 'unavailable'
         assert result.metrics['disks_ok'] == 0
 
     def test_a_healthy_disk_still_passes(self, plugin):
@@ -77,8 +81,12 @@ class TestBlindChecksAreNotHealthy:
         assert result.status == 'online'
         assert result.metrics['disks_ok'] == 2
 
-    def test_one_unreadable_disk_fails_the_monitor(self, plugin):
+    def test_one_unreadable_disk_makes_the_monitor_unavailable(self, plugin):
         result = plugin.parse([CmdResult(0, "PASS /dev/sda\nUNKNOWN /dev/sdb Permission denied", "")])
+        assert result.status == 'unavailable'
+
+    def test_a_failing_disk_outranks_an_unreadable_one(self, plugin):
+        result = plugin.parse([CmdResult(0, "FAIL /dev/sda\nUNKNOWN /dev/sdb Permission denied", "")])
         assert result.status == 'failed'
 
     def test_the_script_classifies_by_positive_assertion(self):
@@ -98,4 +106,4 @@ class TestNonPhysicalDevices:
         assert result.metrics['disks_total'] == 1
 
     def test_skips_alone_look_like_no_disks(self, plugin):
-        assert plugin.parse([CmdResult(0, "SKIP /dev/zram0\nSKIP /dev/zd0", "")]).status == 'offline'
+        assert plugin.parse([CmdResult(0, "SKIP /dev/zram0\nSKIP /dev/zd0", "")]).status == 'unavailable'

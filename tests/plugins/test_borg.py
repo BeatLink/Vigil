@@ -146,9 +146,21 @@ class TestFailures:
         _collect(plugin, run_cycle, CmdResult(2, "", "Repository is locked"))
         assert _latest_status("test-borg") == "failed"
 
-    async def test_unparseable_output_is_failed(self, plugin, run_cycle):
+    async def test_unparseable_output_is_unavailable(self, plugin, run_cycle):
         _collect(plugin, run_cycle, CmdResult(0, "not json", ""))
-        assert _latest_status("test-borg") == "failed"
+        assert _latest_status("test-borg") == "unavailable"
+
+    async def test_unreachable_host_is_unavailable(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, CmdResult(-1, "", "Agent 'h' is not connected"))
+        assert _latest_status("test-borg") == "unavailable"
+
+    async def test_missing_borg_binary_is_unavailable(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, CmdResult(1, "", "sudo: borg: command not found"))
+        assert _latest_status("test-borg") == "unavailable"
+
+    async def test_unreadable_repo_is_unavailable(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, CmdResult(2, "", "Permission denied: '/srv/repo/config'"))
+        assert _latest_status("test-borg") == "unavailable"
 
     async def test_missing_repo_config_is_failed(self, make_plugin, run_cycle):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "repo"}

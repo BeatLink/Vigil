@@ -73,6 +73,10 @@ class TestCollection:
         run_cycle(p, lambda c: CmdResult(0, _make_tcp(["01", "01", "01", "01"]), ""))
         assert _latest_status() == "failed"
 
+    async def test_unreadable_table_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(-1, "", "Agent 'h' is not connected"))
+        assert _latest_status() == "unavailable"
+
     async def test_zero_connections_records_zero(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, _make_tcp([]), ""))
         assert _latest_metric("conn_total") == pytest.approx(0.0)

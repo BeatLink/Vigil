@@ -7,7 +7,9 @@ the newest per-feed fetch time, which is the one signal that proves the
 updater is running (FreshRSS fills Fever's last_refreshed_on_time with the
 *oldest* feed's fetch, which one paused feed would keep permanently stale).
 A stale refresh cycle or aging feeds are warning; any feed older than
-feed_stale_threshold is failed, as are transport, HTTP, and auth errors."""
+feed_stale_threshold is failed, as are HTTP and auth errors. A missing
+configuration, a transport error, or an unreadable response is unavailable,
+since no feed was measured."""
 
 import hashlib
 import json
@@ -36,7 +38,7 @@ def _parse_response(stdout: str) -> Dict[str, Any]:
     if not isinstance(data, dict) or 'auth' not in data:
         raise ValueError(f"response missing 'auth': {stdout[:200]!r}")
     if data.get('auth') != 1:
-        raise ValueError(
+        raise PermissionError(
             "Fever API rejected the credentials (check username / api_password_command)")
     return data
 
@@ -137,22 +139,24 @@ class Freshrss(Plugin):
         where any feed past feed_stale_threshold is failed and a stale refresh
         cycle or aging feeds are warning."""
         if not self.api_url:
-            return CollectResult.failed("No 'api_url' configured")
+            return CollectResult.unavailable("No 'api_url' configured")
         if not self.username:
-            return CollectResult.failed(
+            return CollectResult.unavailable(
                 "No username configured — set username/api_password_command")
 
         result: HttpResult = results[0]
         if result.error is not None:
-            return CollectResult.failed(f"Failed to query Fever API: {result.error}")
+            return CollectResult.unavailable(f"Failed to query Fever API: {result.error}")
         if result.status_code != 200:
             return CollectResult.failed(
                 f"Fever API returned HTTP {result.status_code}")
 
         try:
             data = _parse_response(result.text)
-        except ValueError as e:
+        except PermissionError as e:
             return CollectResult.failed(str(e))
+        except ValueError as e:
+            return CollectResult.unavailable(str(e))
 
         feeds: List[Dict[str, Any]] = data.get('feeds', [])
         now = time.time()

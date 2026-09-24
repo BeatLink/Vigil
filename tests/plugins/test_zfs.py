@@ -83,17 +83,22 @@ class TestCollection:
         p = make_plugin(Zfs, dict(CFG, pools=['tank', 'backup']))
         assert "name,health,capacity tank backup" in p.commands()[0].text
 
-    async def test_no_pools_sets_offline(self, plugin, run_cycle):
+    async def test_no_pools_sets_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, "")
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
     async def test_malformed_lines_skipped(self, plugin, run_cycle):
         _run(plugin, run_cycle, "pool1\tONLINE\t10%\njust_one_word\npool2\tONLINE\t20%\n")
         assert _latest_metric("pools_total") == 2
 
-    async def test_ssh_failure_sets_failed(self, plugin, run_cycle):
+    async def test_ssh_failure_sets_unavailable(self, plugin, run_cycle):
         _run(plugin, run_cycle, "", code=-1, stderr="timeout")
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_missing_zpool_sets_unavailable(self, plugin, run_cycle):
+        _run(plugin, run_cycle, "", code=127, stderr="zpool: command not found")
+        assert _latest_status() == "unavailable"
+        assert _latest_metric("pools_total") is None
 
 
 class TestUiSpec:

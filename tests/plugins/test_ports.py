@@ -72,14 +72,19 @@ class TestPortsCollection:
         assert _latest_status() == "failed"
         assert _latest_metric("test-ports", "api_up") == pytest.approx(0.0)
 
-    async def test_no_checks_offline(self, make_plugin, run_cycle):
+    async def test_no_checks_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Ports, {**BASE_CFG, "checks": []})
         run_cycle(p)
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
 
-    async def test_ssh_failure_fails(self, plugin, run_cycle):
+    async def test_ssh_failure_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(-1, "", "err"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_probe_that_never_ran_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(127, "", "sh: curl: not found"))
+        assert _latest_status() == "unavailable"
+        assert _latest_metric("test-ports", "api_up") is None
 
     async def test_auto_labels_unnamed_check(self, make_plugin):
         p = make_plugin(Ports, {

@@ -4,7 +4,8 @@ live dig probe against the resolver itself. Config: control_cmd, query_host,
 query_port, query_domain, query_timeout, servfail_warning /
 servfail_threshold (percent), min_queries. A failed probe lookup or a
 SERVFAIL rate at servfail_threshold is failed; a rate at servfail_warning is
-warning, with rates only judged once min_queries have been answered."""
+warning, with rates only judged once min_queries have been answered. A script
+that exits non-zero or prints unparseable output is unavailable."""
 
 import shlex
 from typing import Any, Dict, List, Tuple
@@ -130,12 +131,12 @@ class Unbound(Plugin):
         and a rate at the warning level is warning."""
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Failed to query Unbound: {stderr.strip()}")
+            return CollectResult.unavailable(f"Failed to query Unbound: {stderr.strip()}")
 
         try:
             stats_raw, query_output = _split_response(stdout)
         except ValueError as e:
-            return CollectResult.failed(str(e))
+            return CollectResult.unavailable(str(e))
 
         stats = _parse_stats(stats_raw)
         resolved = _resolved_ok(query_output)

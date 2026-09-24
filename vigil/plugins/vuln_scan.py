@@ -7,6 +7,8 @@ a definite `VULNERABLE` state fails the monitor, a `LIKELY VULNERABLE` one
 warns, and a `vulners` version match is graded by its CVSS score against
 `warning_cvss` / `threshold_cvss`. Open ports and their detected services are
 kept alongside so a new exposure is visible even when no script objects to it.
+A host that does not answer discovery, a scan that overruns `timeout`, or a
+scanning host without nmap measured nothing and is unavailable.
 Config: scan_host, ports, scripts, script_args, service_detection,
 discovery_ports, nmap_args, warning_cvss, threshold_cvss, likely_status,
 max_findings, require_sudo, nmap_bin, timeout. The monitor is labelled with
@@ -170,18 +172,18 @@ class VulnScan(Plugin):
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         if not results:
-            return CollectResult.failed('No scan result for this cycle', status='offline')
+            return CollectResult.unavailable('No scan result for this cycle')
         result = results[0]
         stdout = result.stdout or ''
         if '<nmaprun' not in stdout:
             reason = (result.stderr or stdout).strip()[:200] or f'exit {result.exit_code}'
-            return CollectResult.failed(f"nmap did not run: {reason}", status='offline')
+            return CollectResult.unavailable(f"nmap did not run: {reason}")
         try:
             root = ET.fromstring(stdout)
         except ET.ParseError:
-            return CollectResult.failed(
+            return CollectResult.unavailable(
                 f"The scan of {self.scan_host} did not finish within "
-                f"{format_duration(int(self.timeout))}", status='offline')
+                f"{format_duration(int(self.timeout))}")
 
         host = root.find('host')
         status = host.find('status') if host is not None else None
@@ -192,7 +194,7 @@ class VulnScan(Plugin):
                 metrics={'host_up': 0.0},
                 logs=[(f"{self.scan_host} did not answer on ports {probe}; nothing scanned",
                        'WARNING')],
-                status='offline')
+                status=str(Status.UNAVAILABLE))
 
         return self._assemble(root, host)
 
@@ -352,7 +354,7 @@ class VulnScan(Plugin):
     def _last_scan_pair(self) -> Tuple[str, Optional[str]]:
         epoch = self._metric('last_scan_epoch')
         if not epoch:
-            return 'NEVER', 'offline'
+            return 'NEVER', 'unavailable'
         age = int(time.time()) - int(epoch)
         # A second interval passing without a fresh scan means the sweeps have stopped landing.
         return format_age(age), 'warning' if age > 2 * self.interval else 'online'

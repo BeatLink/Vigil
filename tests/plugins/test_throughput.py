@@ -104,22 +104,27 @@ class TestCollection:
         ), ""))
         assert _latest_metric("rx_kbps") == pytest.approx(0.5)
 
-    async def test_missing_explicit_interface_fails(self, make_plugin, run_cycle):
+    async def test_missing_explicit_interface_is_unavailable(self, make_plugin, run_cycle):
         p = make_plugin(Throughput, dict(CFG, interface='eth0'))
         run_cycle(p, lambda c: CmdResult(
             0, _two_snapshots({"wlan0": (0, 0)}, {"wlan0": (1024, 0)}), ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
     async def test_counter_reset_clamped_to_zero(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(
             0, _two_snapshots({"eth0": (5000, 0)}, {"eth0": (100, 0)}), ""))
         assert _latest_metric("rx_kbps") == pytest.approx(0.0)
 
-    async def test_malformed_output_fails(self, plugin, run_cycle):
+    async def test_malformed_output_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, "garbage output", ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
 
-    async def test_no_usable_interface_fails(self, plugin, run_cycle):
+    async def test_unreadable_proc_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "cat: /proc/net/dev: Permission denied"))
+        assert _latest_status() == "unavailable"
+        assert _latest_metric("rx_kbps") is None
+
+    async def test_no_usable_interface_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, _two_snapshots(
             {"lo": (0, 0), "veth0": (0, 0)}, {"lo": (0, 0), "veth0": (0, 0)}), ""))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"

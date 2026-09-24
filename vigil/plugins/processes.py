@@ -3,8 +3,8 @@ agent-backed hosts — shown as a table with per-row kill actions (SIGTERM or
 SIGKILL). Config: max_processes, require_sudo, cpu_warning,
 cpu_threshold. When both CPU bounds are set, the busiest process's CPU share
 ranks against cpu_warning/cpu_threshold for warning/failed; otherwise the
-monitor only reports, and only a failed or unparseable collection is
-failed."""
+monitor only reports. A failed or unparseable collection measured nothing
+and is unavailable."""
 
 from typing import Dict, Any, List, Optional, Union
 
@@ -79,13 +79,13 @@ class Processes(Plugin):
     def parse(self, results: List[CmdResult]) -> CollectResult:
         ret, stdout, stderr = results[0].exit_code, results[0].stdout, results[0].stderr
         if ret != 0:
-            return CollectResult.failed(f"Collection failed: {stderr}")
+            return CollectResult.unavailable(f"Collection failed: {stderr}")
 
         processes = _parse_ps_output(stdout)
 
         has_data_rows = len(stdout.strip().splitlines()) > 1
         if not processes and has_data_rows:
-            return CollectResult.failed(f"Could not parse ps output: {stdout!r}")
+            return CollectResult.unavailable(f"Could not parse ps output: {stdout!r}")
 
         process_count = len(processes)
         top_cpu = processes[0]['cpu'] if processes else 0.0

@@ -51,6 +51,10 @@ class TestCollection:
         run_cycle(plugin, lambda c: CmdResult(0, _meminfo(400_000), ""))
         assert _latest_status() == "failed"
 
-    async def test_a_failed_command_fails_the_monitor(self, plugin, run_cycle):
+    async def test_a_failed_command_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(1, "", "boom"))
-        assert _latest_status() == "failed"
+        assert _latest_status() == "unavailable"
+
+    async def test_incomplete_output_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(0, "MemTotal:  100 kB\n", ""))
+        assert _latest_status() == "unavailable"

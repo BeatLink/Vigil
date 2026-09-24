@@ -508,7 +508,7 @@ class DatabaseManager:
 
     def latest_status(self, plugin_id: str) -> str:
         record = self.store.statuses.get(plugin_id)
-        return record.state if record else "offline"
+        return record.state if record else "unavailable"
 
     def latest_status_time(self, plugin_id: str):
         record = self.store.statuses.get(plugin_id)

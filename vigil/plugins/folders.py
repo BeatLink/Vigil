@@ -4,7 +4,8 @@ keeps the poll, since only single-command plugins form a sample stream).
 Config: folders (list of {path, warning, threshold} with limits in GB) and
 timeout for each du. A folder at or above its own warning or threshold makes
 the status warning or failed; a du timeout, failure, or unparseable output
-fails the whole monitor."""
+means that folder went unmeasured, which reads as unavailable unless another
+folder measured worse."""
 
 from typing import Dict, Any, List
 from vigil.plugins.base.plugin_base import Plugin
@@ -63,7 +64,7 @@ class Folders(Plugin):
 
     def parse(self, results: List[CmdResult]) -> CollectResult:
         if not self.folders:
-            return CollectResult.failed("No folders configured", level="WARNING", status='offline')
+            return CollectResult.unavailable("No folders configured")
 
         folders = self._valid_folders()
 
@@ -106,7 +107,9 @@ class Folders(Plugin):
 
         metrics['worst_folder_gb'] = worst_gb
 
-        status = 'failed' if any_error else worst_level
+        status = worst_level
+        if any_error and Status('unavailable').severity > Status(worst_level).severity:
+            status = 'unavailable'
         return CollectResult(metrics=metrics, logs=logs, status=status)
 
     def _item_color(self, item: Dict[str, Any]) -> str:

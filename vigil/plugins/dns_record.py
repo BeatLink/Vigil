@@ -49,6 +49,8 @@ def _failed_lookup(kind: str, error: Optional[str], domain: str, record_type: st
 
 
 class DnsRecord(Plugin):
+    AVAILABILITY = True
+
     def __init__(self, name: str, config: Dict[str, Any]):
         super().__init__(name, config)
         self.domain = config.get('domain')

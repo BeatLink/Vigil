@@ -4,7 +4,7 @@ Vigil-reachable), token / token_command (the ETAPI token), stale_warning
 (hours), api_timeout. Note counts are recorded as metrics and the age of the
 last note modification drives status: older than stale_warning, or missing
 from the response, is warning; an unreachable API, a non-200 reply, or a
-malformed payload (usually a bad token) is failed."""
+malformed payload (usually a bad token) measured nothing, so it is unavailable."""
 
 import json
 from datetime import datetime, timezone
@@ -101,22 +101,22 @@ class Trilium(Plugin):
         """Turns the single ETAPI metrics HTTP result into a CollectResult with
         note counts and last-modified age, one summary log line, and a status
         that is warning when no note changed within stale_warning hours (or the
-        timestamp is missing) and failed on transport or payload errors."""
+        timestamp is missing) and unavailable on transport or payload errors."""
         if not results:
-            return CollectResult.failed("No 'api_url' configured")
+            return CollectResult.unavailable("No 'api_url' configured")
 
         result: HttpResult = results[0]
         if result.error is not None:
-            return CollectResult.failed(f"Failed to query Trilium ETAPI: {result.error}")
+            return CollectResult.unavailable(f"Failed to query Trilium ETAPI: {result.error}")
         if result.status_code != 200:
-            return CollectResult.failed(
+            return CollectResult.unavailable(
                 f"Trilium ETAPI returned HTTP {result.status_code} "
                 f"(check the ETAPI token)")
 
         try:
             data = _parse_response(result.text)
         except ValueError as e:
-            return CollectResult.failed(str(e))
+            return CollectResult.unavailable(str(e))
 
         stats = data.get('statistics', {})
         db = data.get('database', {})

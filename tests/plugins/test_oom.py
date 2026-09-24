@@ -60,9 +60,13 @@ class TestCollection:
         run_cycle(p, lambda c: CmdResult(0, _vmstat(1), ""))
         assert _latest_status() == "online"
 
-    async def test_missing_counter_is_offline(self, plugin, run_cycle):
+    async def test_missing_counter_is_unavailable(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, _vmstat(include=False), ""))
-        assert _latest_status() == "offline"
+        assert _latest_status() == "unavailable"
+
+    async def test_unreadable_vmstat_is_unavailable(self, plugin, run_cycle):
+        run_cycle(plugin, lambda c: CmdResult(1, "", "cat: /proc/vmstat: Permission denied"))
+        assert _latest_status() == "unavailable"
 
 
 class TestPushedEvents:
