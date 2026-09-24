@@ -1,11 +1,13 @@
 """A container monitor that aggregates its child monitors. It issues no
 requests of its own: each cycle it re-reads the children's latest statuses
 from the read-only data view and takes the worst as its own, counting a child
-with no status yet as unavailable. Config: layout (compose individual descendant
+with no status yet as unavailable. A poll of the group from the dashboard
+polls every descendant first, then folds their fresh statuses. Config: layout (compose individual descendant
 widgets into the group's own grid) plus the grid_min_width default and the
 per-child grid_* sizing keys; without a layout it renders one collapsible
 card per child, persisting the expansion state as a setting."""
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -62,6 +64,15 @@ class Group(Plugin):
 
     def _aggregate_status(self, statuses: Dict[str, str]) -> str:
         return Status.worst(statuses.get(child.id, 'unavailable') for child in self.children)
+
+    async def run_cycle(self) -> bool:
+        """A poll of the group polls every descendant first, so the aggregate folds fresh child statuses."""
+        outcomes = await asyncio.gather(*(child.run_cycle() for child in self.children),
+                                        return_exceptions=True)
+        for child, outcome in zip(self.children, outcomes):
+            if isinstance(outcome, BaseException):
+                logging.error(f"{child.name}: poll from group {self.name!r} failed: {outcome}")
+        return await super().run_cycle()
 
     def _descendants(self) -> Iterator[Any]:
         """Every monitor under this group, depth-first, so a layout can address a nested group's children."""

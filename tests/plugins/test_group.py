@@ -128,3 +128,65 @@ class TestOnCollect:
 
     async def test_on_action_always_false(self, group):
         assert group.plan_action("restart") is None
+
+
+class TestPollNow:
+    async def test_polling_a_group_polls_its_children_first(self, group):
+        order = []
+
+        async def child_cycle(name):
+            order.append(name)
+            return True
+
+        for name in ("a", "b"):
+            child = MagicMock()
+            child.name = name
+            child.run_cycle = lambda name=name: child_cycle(name)
+            group.children.append(child)
+        group.engine = MagicMock()
+
+        async def group_cycle(plugin):
+            order.append("group")
+            return True
+        group.engine.run_cycle_now = group_cycle
+
+        assert await group.run_cycle() is True
+        assert order[-1] == "group" and sorted(order[:-1]) == ["a", "b"]
+
+    async def test_a_nested_group_polls_its_own_children(self, make_plugin):
+        outer = make_plugin(Group, GROUP_CFG)
+        inner = make_plugin(Group, {**GROUP_CFG, "id": "inner", "name": "inner"})
+        polled = []
+
+        async def leaf_cycle():
+            polled.append("leaf")
+            return True
+        leaf = MagicMock()
+        leaf.name = "leaf"
+        leaf.run_cycle = leaf_cycle
+        inner.children = [leaf]
+        outer.children = [inner]
+
+        async def cycle(plugin):
+            polled.append(plugin.id)
+            return True
+        outer.engine = inner.engine = MagicMock()
+        outer.engine.run_cycle_now = cycle
+
+        await outer.run_cycle()
+        assert polled == ["leaf", "inner", "test-group"]
+
+    async def test_a_child_that_raises_does_not_stop_the_group(self, group):
+        async def broken():
+            raise RuntimeError("boom")
+        child = MagicMock()
+        child.name = "broken"
+        child.run_cycle = broken
+        group.children.append(child)
+        group.engine = MagicMock()
+
+        async def cycle(plugin):
+            return True
+        group.engine.run_cycle_now = cycle
+
+        assert await group.run_cycle() is True

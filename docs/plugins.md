@@ -1222,7 +1222,7 @@ A logical container for other monitors. Aggregates the worst-case status of all 
 | `layout`        | Rows of widget references. Present ⇒ composite layout; absent ⇒ collapsible cards.               |
 | `grid_min_width`| Card mode only: minimum width of a child card before it wraps (default: `"320px"`)               |
 
-Groups can be nested to arbitrary depth.
+Groups can be nested to arbitrary depth. **Poll Now** on a group polls every descendant first, then re-aggregates from their fresh statuses.
 
 #### Card mode (default)
 
