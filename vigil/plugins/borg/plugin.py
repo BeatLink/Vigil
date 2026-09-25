@@ -399,7 +399,8 @@ class Borg(Plugin):
         ], persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)
         path = shlex.quote(self.canary_path)
         # A canary is normally world-readable, and sudo rules that allow only borg would refuse `sudo cat`.
-        live = f"cat {path} 2>/dev/null || sudo -n cat {path}" if self.require_sudo else f"cat {path}"
+        # Braced so the sequence's output redirect covers both reads, not just the fallback.
+        live = f"{{ cat {path} 2>/dev/null || sudo -n cat {path}; }}" if self.require_sudo else f"cat {path}"
         return [('canary', extract), ('canary_live', live)]
 
     def _fold_canary(self, by_name: Dict[str, CmdResult], metrics: Dict[str, float],

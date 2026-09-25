@@ -894,15 +894,19 @@ class TestRestoreCanary:
 
     async def test_the_live_canary_is_read_without_sudo_first(self, make_plugin, run_cycle, tmp_path):
         import subprocess
+        from vigil.plugins.borg.shell import _split_poll
         canary = tmp_path / ".vigil-canary"
-        canary.write_text("token\n")
+        canary.write_text("token")
         p = make_plugin(Borg, {**CANARY_CFG, "canary_path": str(canary), "require_sudo": True})
         _cycle_with(p, run_cycle)
         live = dict(p._poll_plan())['canary_live']
-        # No sudo is available here, so this only succeeds if the plain read comes first.
-        out = subprocess.run(["sh", "-c", live], capture_output=True, text=True, env={"PATH": "/run/current-system/sw/bin:/usr/bin:/bin"})
-        assert out.returncode == 0 and out.stdout == "token\n"
-        assert live.startswith("cat ") and "|| sudo -n cat" in live
+        # Run inside the real framed sequence, whose output redirect must capture the plain read; no sudo is on PATH here.
+        script = p._sequence_command([live])
+        out = subprocess.run(["sh", "-c", script], capture_output=True, text=True,
+                             env={"PATH": "/run/current-system/sw/bin:/usr/bin:/bin"})
+        result = _split_poll(CmdResult(out.returncode, out.stdout, out.stderr), 1)[0]
+        assert result.exit_code == 0 and result.stdout == "token"
+        assert "|| sudo -n cat" in live
 
     async def test_matching_canary_passes(self, make_plugin, run_cycle):
         p = make_plugin(Borg, CANARY_CFG)
