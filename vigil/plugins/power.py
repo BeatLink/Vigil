@@ -72,7 +72,8 @@ def _primary_battery(batteries: List[Dict[str, str]], name: Optional[str]) -> Op
 
 def _plugged_in(supplies: List[Dict[str, str]], battery: Dict[str, str]) -> bool:
     """Whether any charger or USB input is live, or the battery says it is being charged."""
-    if any(s.get('TYPE') != 'Battery' and s.get('ONLINE') == '1' for s in supplies):
+    # An accessory battery's own state is the only sign of its charger, since the host's inputs may be fed by that very battery.
+    if battery.get('SCOPE') != 'Device' and any(s.get('TYPE') != 'Battery' and s.get('ONLINE') == '1' for s in supplies):
         return True
     return battery.get('STATUS') in ('Charging', 'Full', 'Not charging')
 
@@ -139,7 +140,7 @@ class Power(SignalPlugin):
             metrics['charge_pct'] = charge
         if capacity is not None:
             metrics['capacity_health_pct'] = capacity
-        for b in batteries:
+        for b in ([battery] if self.battery else batteries):
             pct = _charge_pct(b)
             if pct is not None:
                 metrics[f"battery_{_sanitize(b.get('NAME', ''))}_charge_pct"] = pct

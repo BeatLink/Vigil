@@ -148,3 +148,23 @@ class TestCards:
         assert plugin._charge_color(8.0) == "online"
         run_cycle(plugin, lambda c: CmdResult(0, _unplugged(LAPTOP), ""))
         assert plugin._charge_color(8.0) == "failed"
+
+
+@pytest.mark.asyncio
+class TestNamedBattery:
+    async def test_a_named_battery_gets_its_own_page(self, make_plugin, run_cycle):
+        p = make_plugin(Power, dict(CFG, battery="ip5xxx-battery"))
+        run_cycle(p, lambda c: CmdResult(0, PHONE, ""))
+        assert _latest_metric("charge_pct") == pytest.approx(27.0)
+        assert _latest_metric("battery_ip5xxx_battery_charge_pct") == pytest.approx(27.0)
+        assert _latest_metric("battery_axp20x_battery_charge_pct") is None
+
+    async def test_an_accessory_battery_ignores_the_inputs_it_feeds(self, make_plugin, run_cycle):
+        p = make_plugin(Power, dict(CFG, battery="ip5xxx-battery"))
+        fed = PHONE.replace("POWER_SUPPLY_ONLINE=0", "POWER_SUPPLY_ONLINE=1")
+        run_cycle(p, lambda c: CmdResult(0, fed, ""))
+        assert _latest_metric("plugged_in") == 0.0
+        run_cycle(p, lambda c: CmdResult(0, fed.replace(
+            "STATUS=Discharging\nPOWER_SUPPLY_HEALTH=Good\nPOWER_SUPPLY_CAPACITY=27",
+            "STATUS=Charging\nPOWER_SUPPLY_HEALTH=Good\nPOWER_SUPPLY_CAPACITY=27"), ""))
+        assert _latest_metric("plugged_in") == 1.0

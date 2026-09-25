@@ -1046,7 +1046,7 @@ Battery charge, whether the device is on external power, and how worn the batter
 
 | Option               | Description                                                  |
 |----------------------|--------------------------------------------------------------|
-| `battery`            | Supply name to report on, e.g. `BAT0` (default: the first system battery) |
+| `battery`            | Supply name to report on, e.g. `BAT0` (default: the first system battery). Naming one gives that battery a page of its own: only its chip is shown, and an accessory battery counts as plugged in only when it says it is charging |
 | `charge_warning`     | Charge at or below which, on battery, the status is `warning` (default: `20`) |
 | `charge_threshold`   | Charge at or below which, on battery, the status is `failed` (default: `10`)  |
 | `capacity_warning`   | Capacity left at or below which the status is `warning` (default: `60`) |
