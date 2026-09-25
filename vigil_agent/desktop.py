@@ -65,6 +65,11 @@ class Notifier:
 
     def __init__(self) -> None:
         self._shown: Dict[str, _Shown] = {}
+        # Frames for one key are handled in the order they arrived, or a dismiss can overtake the notification it closes.
+        self._locks: Dict[str, asyncio.Lock] = {}
+
+    def _lock(self, key: Optional[str]) -> asyncio.Lock:
+        return self._locks.setdefault(key or '', asyncio.Lock())
 
     async def show(self, frame: Dict[str, Any]) -> None:
         """Show the notification a NOTIFY frame describes; open its link if it is clicked."""
@@ -75,27 +80,12 @@ class Notifier:
         icon = str(frame['icon']) if frame.get('icon') else None
         key = str(frame['key']) if frame.get('key') else None
 
-        replace_id = None
-        previous = self._shown.pop(key, None) if key else None
-        if previous is not None:
-            replace_id = previous.id
-            if previous.task is not None:
-                previous.task.cancel()
-
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *command(title, body, urgency, url, icon, replace_id),
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-        except OSError as e:
-            logging.error(f"could not show a desktop notification (is notify-send installed?): {e}")
+        async with self._lock(key):
+            started = await self._start(title, body, urgency, url, icon, key)
+        if started is None:
             return
-
-        mine: Optional[_Shown] = None
+        proc, mine = started
         try:
-            first = await asyncio.wait_for(proc.stdout.readline(), timeout=ID_SECONDS)
-            if key and first.strip().isdigit():
-                mine = self._shown[key] = _Shown(int(first), asyncio.current_task() if url else None)
             rest, err = await asyncio.wait_for(proc.communicate(), timeout=WAIT_SECONDS)
         except asyncio.TimeoutError:
             proc.kill()
@@ -115,9 +105,39 @@ class Notifier:
         if url and rest.decode(errors='replace').strip() == 'default':
             await _open(str(url))
 
+    async def _start(self, title: str, body: str, urgency: str, url: Optional[str],
+                     icon: Optional[str], key: Optional[str]):
+        """Show the notification and record its id under the key, replacing the key's previous one."""
+        replace_id = None
+        previous = self._shown.pop(key, None) if key else None
+        if previous is not None:
+            replace_id = previous.id
+            if previous.task is not None:
+                previous.task.cancel()
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *command(title, body, urgency, url, icon, replace_id),
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+        except OSError as e:
+            logging.error(f"could not show a desktop notification (is notify-send installed?): {e}")
+            return None
+        mine: Optional[_Shown] = None
+        try:
+            first = await asyncio.wait_for(proc.stdout.readline(), timeout=ID_SECONDS)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return None
+        if key and first.strip().isdigit():
+            mine = self._shown[key] = _Shown(int(first), asyncio.current_task() if url else None)
+        return proc, mine
+
     async def dismiss(self, frame: Dict[str, Any]) -> None:
         """Close the notification a key has on screen, if any."""
-        shown = self._shown.pop(str(frame.get('key') or ''), None)
+        key = str(frame.get('key') or '')
+        async with self._lock(key):
+            shown = self._shown.pop(key, None)
         if shown is None:
             return
         try:

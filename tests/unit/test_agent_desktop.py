@@ -57,6 +57,8 @@ class FakeNotifySend:
             self.finish(b'')
 
     async def readline(self):
+        for _ in range(3):  # a real notify-send takes a moment to report the id
+            await asyncio.sleep(0)
         return f"{self.id}\n".encode()
 
     def finish(self, rest):
@@ -75,7 +77,7 @@ class FakeNotifySend:
 
 
 async def _settle():
-    for _ in range(5):
+    for _ in range(10):
         await asyncio.sleep(0)
 
 
@@ -149,6 +151,20 @@ class TestKeys:
         await notifier.dismiss({'key': 'nas'})
         await second
         assert fake.calls[2] == desktop.close_command(101)
+
+    async def test_a_dismiss_right_after_a_replacement_still_closes_it(self, monkeypatch):
+        fake = FakeDesktop(monkeypatch)
+        notifier = desktop.Notifier()
+        first = asyncio.create_task(notifier.show(self.FAILED))
+        await _settle()
+        # Each frame becomes its own task, in arrival order, as the agent's client does.
+        replacement = asyncio.create_task(notifier.show({**self.FAILED, 'title': '1 failed'}))
+        dismissal = asyncio.create_task(notifier.dismiss({'key': 'nas'}))
+        await dismissal
+        await asyncio.wait_for(replacement, timeout=2)  # left open, the replacement would wait forever
+        assert first.cancelled()
+        assert fake.calls[-1] == desktop.close_command(101)
+        assert fake.open == {}
 
     async def test_dismissing_an_unknown_key_does_nothing(self, monkeypatch):
         fake = FakeDesktop(monkeypatch)
