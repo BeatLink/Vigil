@@ -1,4 +1,5 @@
 """Loads and validates config.yaml into the typed VigilConfig tree."""
+import difflib
 import yaml
 import logging
 from pathlib import Path
@@ -9,6 +10,58 @@ from vigil.core.settings.config_schema import (
     ThemeSettings, VigilConfig,
 )
 from vigil.core.state import BufferSizes
+
+# Which shape each top-level section must have, so a section written as the wrong
+# kind of YAML is named at startup rather than raising inside whoever reads it.
+_SECTION_SHAPES: Dict[str, type] = {
+    'agents': list,
+    'plugins': list,
+    'alerting': list,
+    'control': list,
+    'database': dict,
+    'theme': dict,
+    'exporters': dict,
+    'logging': dict,
+    'memory': dict,
+    'ssh_defaults': dict,
+    'auth': dict,
+}
+
+
+def _warn_on_structure(data: Dict[str, Any], path: Path) -> None:
+    """Log one actionable warning per structural mistake in config.yaml.
+
+    Nothing here rejects a file or changes what loads: a section Vigil does not
+    know is ignored either way, and this only says so. Everything below the
+    top level stays each consumer's own business."""
+    for key, value in data.items():
+        expected = _SECTION_SHAPES.get(key)
+        if expected is None:
+            near = difflib.get_close_matches(str(key), _SECTION_SHAPES, n=1)
+            hint = f" — did you mean '{near[0]}'?" if near else ""
+            logging.warning(f"{path}: unknown top-level section '{key}', ignored{hint}")
+        elif not isinstance(value, expected):
+            wanted = 'a list' if expected is list else 'a mapping'
+            logging.warning(
+                f"{path}: section '{key}' should be {wanted}, "
+                f"got {type(value).__name__} — it will be ignored or fail when read"
+            )
+
+    for section in ('plugins', 'agents'):
+        entries = data.get(section)
+        if not isinstance(entries, list):
+            continue
+        required = 'type' if section == 'plugins' else 'id'
+        for position, entry in enumerate(entries, start=1):
+            if not isinstance(entry, dict):
+                logging.warning(
+                    f"{path}: {section} entry {position} should be a mapping, "
+                    f"got {type(entry).__name__}"
+                )
+            elif not entry.get(required):
+                label = entry.get('name') or f"entry {position}"
+                logging.warning(f"{path}: {section} {label} has no '{required}' and cannot load")
+
 
 class ConfigFileManager:
     def __init__(self, config_path: str):
@@ -23,7 +76,10 @@ class ConfigFileManager:
         try:
             with open(self.path, 'r') as f:
                 data = yaml.safe_load(f)
-                return data if isinstance(data, dict) else {}
+                if not isinstance(data, dict):
+                    return {}
+                _warn_on_structure(data, self.path)
+                return data
         except yaml.YAMLError as e:
             logging.error(f"Failed to parse YAML configuration at {self.path}: {e}")
             return {}

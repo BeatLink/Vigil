@@ -144,6 +144,13 @@ dict-returning reads), and `core/connectors/types.py` (the
 `plan_action`/`dispatch_action` discriminated union the engine walks with
 `isinstance`).
 
+**Config is checked at the top level only.** `ConfigFileManager._load` warns once
+per structural mistake — an unknown top-level section (with the nearest known name
+as a hint), a section written as the wrong kind of YAML, a plugin with no `type` or
+an agent with no `id` — so a typo'd section is named at startup instead of silently
+doing nothing. It never rejects a file: everything still loads as written, and a
+plugin's own keys stay that plugin's business, defaulted through `.get()`.
+
 ## Polling loop
 
 Each monitor runs on its own `interval`, treated as a *period*: the loop

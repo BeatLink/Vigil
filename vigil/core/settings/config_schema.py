@@ -2,10 +2,13 @@
 properties. Every field is optional (total=False): config.yaml has no
 required top-level section (an empty file loads as {}, per
 ConfigFileManager._load), and each consumer already defaults missing keys
-via .get(). These types document the shape a present key must have — YAML
-itself is never validated against them; a malformed config.yaml still
-degrades the same way it always has (per-field try/except with a logged
-fallback, or a KeyError deep in whichever module reads the bad key).
+via .get(). These types document the shape a present key must have; nothing
+checks YAML against them at load. What the loader does check is structural
+only — ConfigFileManager warns about an unknown top-level section, a section
+written as the wrong kind of YAML, and a plugin or agent entry missing the key
+that identifies it. Anything finer degrades as it always has: a per-field
+try/except with a logged fallback, or a KeyError inside whichever module reads
+the bad key.
 """
 
 from typing import Any, Dict, List, TypedDict

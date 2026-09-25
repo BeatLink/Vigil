@@ -35,6 +35,49 @@ class TestConfigFileLoading:
         assert cfg.data == {}
 
 
+class TestStructureWarnings:
+    def test_a_known_config_warns_about_nothing(self, write_yaml, caplog):
+        path = write_yaml({"database": {"path": "my.db"},
+                           "plugins": [{"name": "cpu", "type": "cpu"}],
+                           "agents": [{"id": "host", "token": "t"}]})
+        with caplog.at_level("WARNING"):
+            ConfigFileManager(path)
+        assert caplog.records == []
+
+    def test_an_unknown_section_is_named_with_the_nearest_match(self, write_yaml, caplog):
+        path = write_yaml({"plugin": [{"type": "cpu"}]})
+        with caplog.at_level("WARNING"):
+            cfg = ConfigFileManager(path)
+        assert "unknown top-level section 'plugin'" in caplog.text
+        assert "did you mean 'plugins'?" in caplog.text
+        # The warning is advice, not rejection — the section still loads as written.
+        assert "plugin" in cfg.data
+
+    def test_a_section_of_the_wrong_shape_is_reported(self, write_yaml, caplog):
+        path = write_yaml({"plugins": {"name": "cpu"}})
+        with caplog.at_level("WARNING"):
+            ConfigFileManager(path)
+        assert "section 'plugins' should be a list" in caplog.text
+
+    def test_a_plugin_without_a_type_is_reported_by_name(self, write_yaml, caplog):
+        path = write_yaml({"plugins": [{"name": "my-cpu"}]})
+        with caplog.at_level("WARNING"):
+            ConfigFileManager(path)
+        assert "plugins my-cpu has no 'type'" in caplog.text
+
+    def test_an_agent_without_an_id_is_reported_by_position(self, write_yaml, caplog):
+        path = write_yaml({"agents": [{"token": "t"}]})
+        with caplog.at_level("WARNING"):
+            ConfigFileManager(path)
+        assert "agents entry 1 has no 'id'" in caplog.text
+
+    def test_a_plugin_entry_that_is_not_a_mapping_is_reported(self, write_yaml, caplog):
+        path = write_yaml({"plugins": ["cpu"]})
+        with caplog.at_level("WARNING"):
+            ConfigFileManager(path)
+        assert "plugins entry 1 should be a mapping" in caplog.text
+
+
 class TestDatabaseSettings:
     def test_returns_configured_path(self, write_yaml):
         path = write_yaml({"database": {"path": "/data/vigil.db"}})
