@@ -332,9 +332,16 @@ exit persists the tail of the batch.
 latest status per collector, the recent tail of each metric series, recent
 events and log lines, all snapshots and settings, and recent/unfinished jobs.
 Each history stream loads only as deep as its buffer, so startup cost is
-bounded by `memory:` rather than by how large the database has grown. A
+bounded by `memory:` rather than by how large the database has grown. Each
+monitor, series and log target is found by stepping along its index one key at
+a time (`_distinct_keys`), since `SELECT DISTINCT` reads the whole index. A
 failure here is logged, not fatal — the store starts empty and collectors
 refill it.
+
+Hydration runs in `engine.run()`, off the event loop, after the web server is
+already up. Until it finishes `engine.ready` is false: `StartingUpMiddleware`
+(`core/ui/startup.py`) answers every request with 503, agent events are
+dropped, and agents that connected early are collected once it is ready.
 
 **Reads still run through `offload()`** in the UI (`core/ui/components.py`),
 which is now cheap insurance rather than a necessity: a store read is a dict
@@ -343,26 +350,33 @@ that `read_fn` is pure with no NiceGUI element access. Element updates
 (`.rows = …`, `.update()`) are not thread-safe and must be applied after
 awaiting, back on the loop.
 
-**Indexing.** `Metric` carries a composite index
-`(plugin_id, metric_name, timestamp)`. No live read uses it; it serves
-hydration (which loads the recent tail of each series in timestamp order) and
-the retention prune. Fresh DBs get it from `create_tables`; existing DBs get it
-from `_migrate`, which also drops the single-column indexes no query ever used
+**Indexing.** `Metric` carries one series index, `metric_series_tail` on
+`(plugin_id, metric_name, timestamp, value, target)`. It holds every column
+hydration loads for a series' tail, so the tail is read from the index alone:
+a series' rows are scattered through the table in write order, and reading
+them there was one random page read per row. Only the newest row's `metadata`
+is fetched from the table, since nothing reads an older one. The index is
+built by `ensure_series_index()` at the start of hydration rather than in
+`_migrate`, so its one-off build on a large database runs behind the starting
+page; it replaces the narrower `(plugin_id, metric_name, timestamp)` index.
+`_migrate` also drops the single-column indexes no query ever used
 (`metric_target`, `metric_metric_name`, `logline_source`, most of `job`'s) —
 each was pure write amplification on the hottest tables.
 
 **Naming.** Every table spells the collector id `plugin_id`. Legacy DBs
 arrive with per-table variants (`metric.collector`, `event.source_id`,
 `statushistory.collector_id`, `logline.source`); `_migrate_renames` converges
-them before `create_tables`, since the model-declared metric index already
-references `plugin_id`.
+them before `create_tables`, since model-declared indexes such as
+`statushistory.plugin_id` already reference it.
 
 **Retention.** Metrics and a status row are written on every poll of every
 plugin, so both tables grow unbounded without pruning. Alongside the prunes,
 `logging.metric_downsample_days` (default off) thins metrics older than the
 window to one row per series per hour — hydration only ever loads a series'
 recent tail, so old full-resolution rows serve nothing, and thinning them
-stretches how far back a chart can reach for the same disk footprint. `prune_metrics` /
+stretches how far back a chart can reach for the same disk footprint. It thins
+one day per writer job, each queueing the next, and remembers how far it got,
+so a first pass over weeks of rows never stalls the writes queued behind it. `prune_metrics` /
 `prune_status` (metric-retention window) run alongside `prune_logs` /
 `prune_jobs` (log-retention window) on the periodic prune loop; `prune_status`
 always keeps the newest row per collector so a plugin's current state is never

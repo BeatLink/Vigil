@@ -171,6 +171,10 @@ def flush_writes(timeout: Optional[float] = None):
     _writer.flush(timeout)
 
 
+# The metric index hydration reads each series' newest rows from without touching the table.
+_SERIES_INDEX = "metric_series_tail"
+
+
 def _distinct_keys(model, *columns: str):
     """Yields each distinct value of an indexed, non-null column prefix by stepping along the index one key at a time.
 
@@ -199,6 +203,9 @@ class DatabaseManager:
     ):
         self.db_path = db_path
         self.store = store or StateStore(buffers)
+        # How far downsampling has thinned, and whether a pass is still working through its days.
+        self._thinned_through: Optional[datetime] = None
+        self._thinning = False
         _writer.batch_window = write_batch_seconds
         self._connect_and_init()
         # The engine hydrates later, off the event loop, so the dashboard can answer while a large database loads.
@@ -222,9 +229,7 @@ class DatabaseManager:
                 },
             )
             db.connect()
-            # Renames must precede create_tables: on a legacy DB, the
-            # model-declared metric index references plugin_id, which does
-            # not exist until its column is renamed.
+            # Renames must precede create_tables: on a legacy DB, model-declared indexes reference plugin_id, which does not exist until its column is renamed.
             self._migrate_renames()
             db.create_tables(ALL_MODELS)
             self._migrate()
@@ -289,11 +294,28 @@ class DatabaseManager:
             ("statushistory_plugin_id",
              "CREATE INDEX IF NOT EXISTS statushistory_plugin_id "
              "ON statushistory (plugin_id)"),
-            ("metric_plugin_id_metric_name_timestamp",
-             "CREATE INDEX IF NOT EXISTS metric_plugin_id_metric_name_timestamp "
-             "ON metric (plugin_id, metric_name, timestamp)"),
         ):
             db.execute_sql(ddl)
+
+    def ensure_series_index(self) -> None:
+        """Builds the metric index hydration reads each series' tail from, replacing the narrower one it covers.
+
+        Built here rather than in _migrate, so the one-off build on a large
+        database runs while the dashboard already shows its starting page."""
+        with _reader():
+            exists = db.execute_sql(
+                "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?", (_SERIES_INDEX,)
+            ).fetchone()
+            if exists:
+                return
+            logging.info("Building the metric series index; this runs once and can take minutes")
+            started = time.monotonic()
+            db.execute_sql(
+                f"CREATE INDEX IF NOT EXISTS {_SERIES_INDEX} "
+                "ON metric (plugin_id, metric_name, timestamp, value, target)"
+            )
+            db.execute_sql("DROP INDEX IF EXISTS metric_plugin_id_metric_name_timestamp")
+            logging.info(f"Built the metric series index in {time.monotonic() - started:.1f}s")
 
     # ------------------------------------------------------------------
     # Startup hydration — the only read path from SQLite
@@ -306,6 +328,7 @@ class DatabaseManager:
         cost is bounded by the configured buffer sizes rather than by how large
         the database has grown."""
         try:
+            self.ensure_series_index()
             with _reader():
                 self._hydrate_statuses()
                 self._hydrate_metrics()
@@ -337,25 +360,28 @@ class DatabaseManager:
     def _hydrate_metrics(self) -> None:
         depth = self.store.buffers.metric_history
         for plugin_id, metric_name in _distinct_keys(Metric, "plugin_id", "metric_name"):
-            rows = (
-                Metric.select()
-                .where(
-                    (Metric.plugin_id == plugin_id)
-                    & (Metric.metric_name == metric_name)
-                )
+            series = (Metric.plugin_id == plugin_id) & (Metric.metric_name == metric_name)
+            # These columns are all in the series index, so the tail is read from it alone.
+            rows = list(
+                Metric.select(Metric.timestamp, Metric.value, Metric.target)
+                .where(series)
                 .order_by(Metric.timestamp.desc())
                 .limit(depth)
             )
+            if not rows:
+                continue
+            # Only a series' newest metadata is ever read, and fetching it costs one table lookup.
+            newest = Metric.select(Metric.metadata).where(series).order_by(Metric.timestamp.desc()).first()
             self.store.load_metrics(
                 MetricRecord(
                     target=row.target,
-                    plugin_id=row.plugin_id,
-                    metric_name=row.metric_name,
+                    plugin_id=plugin_id,
+                    metric_name=metric_name,
                     value=row.value,
-                    metadata=row.metadata,
+                    metadata=newest.metadata if row is rows[0] else None,
                     timestamp=row.timestamp,
                 )
-                for row in reversed(list(rows))
+                for row in reversed(rows)
             )
 
     def _hydrate_events(self) -> None:
@@ -675,25 +701,51 @@ class DatabaseManager:
         """Thin metrics older than the window to one row per series per hour.
         Charts and hydration only ever read a series' recent tail, so old
         full-resolution rows serve nothing; thinning them stretches how far
-        back a chart can reach for the same disk footprint."""
-        if older_than_days is None or older_than_days <= 0:
+        back a chart can reach for the same disk footprint.
+
+        Works one day per writer job, each queueing the next, so a first pass
+        over weeks of rows never holds the writer long enough to stall the
+        writes behind it. Days already thinned are remembered and skipped."""
+        if older_than_days is None or older_than_days <= 0 or self._thinning:
             return
-        cutoff = (datetime.now() - timedelta(days=older_than_days)).isoformat(sep=" ")
+        cutoff = (datetime.now() - timedelta(days=older_than_days)).replace(minute=0, second=0, microsecond=0)
+        self._thinning = True
+        deleted = [0]
 
-        def _do_downsample():
-            cursor = db.execute_sql(
-                "DELETE FROM metric WHERE timestamp < ? AND id NOT IN ("
-                "SELECT MIN(id) FROM metric WHERE timestamp < ? "
-                "GROUP BY plugin_id, metric_name, strftime('%Y%m%d%H', timestamp))",
-                (cutoff, cutoff),
-            )
-            if cursor.rowcount:
-                logging.info(
-                    f"Downsampled {cursor.rowcount} metric row(s) older than "
-                    f"{older_than_days}d to one per hour"
+        def _finish():
+            self._thinning = False
+            if deleted[0]:
+                logging.info(f"Downsampled {deleted[0]} metric row(s) older than {older_than_days}d to one per hour")
+
+        def _thin_from(start: Optional[datetime]):
+            try:
+                if start is None:
+                    oldest = db.execute_sql("SELECT min(timestamp) FROM metric").fetchone()[0]
+                    if oldest is None:
+                        return _finish()
+                    start = datetime.fromisoformat(str(oldest)).replace(hour=0, minute=0, second=0, microsecond=0)
+                if start >= cutoff:
+                    return _finish()
+                end = min(start + timedelta(days=1), cutoff)
+                lo, hi = start.isoformat(sep=" "), end.isoformat(sep=" ")
+                cursor = db.execute_sql(
+                    "DELETE FROM metric WHERE timestamp >= ? AND timestamp < ? AND id NOT IN ("
+                    "SELECT MIN(id) FROM metric WHERE timestamp >= ? AND timestamp < ? "
+                    "GROUP BY plugin_id, metric_name, strftime('%Y%m%d%H', timestamp))",
+                    (lo, hi, lo, hi),
                 )
+                deleted[0] += max(cursor.rowcount, 0)
+                self._thinned_through = end
+            except Exception:
+                self._thinning = False
+                raise
+            if end < cutoff:
+                _writer.submit(lambda: _thin_from(end))
+            else:
+                _finish()
 
-        _writer.submit(_do_downsample)
+        start = self._thinned_through
+        _writer.submit(lambda: _thin_from(start))
 
     def prune_status(self, retention_days: int) -> int:
         """The newest row per plugin is kept regardless of age so a restart

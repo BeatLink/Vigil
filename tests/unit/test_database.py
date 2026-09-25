@@ -28,30 +28,46 @@ class TestDatabaseManagerInit:
             assert LogLine.table_exists()
             assert PluginSnapshot.table_exists()
 
-    def test_fresh_db_has_single_composite_metric_index(self, mgr):
+    def test_fresh_db_has_only_the_series_index_on_metric_columns(self, mgr):
         with db.connection_context():
             names = [i.name for i in db.get_indexes('metric')]
-        assert names.count('metric_plugin_id_metric_name_timestamp') == 1
+        assert names.count('metric_series_tail') == 1
+        assert 'metric_plugin_id_metric_name_timestamp' not in names
 
-    def test_migration_adds_composite_index_to_existing_db(self, tmp_path):
+    def test_hydration_replaces_the_narrow_index_with_the_series_index(self, tmp_path):
         import sqlite3
         path = str(tmp_path / "legacy.db")
-        # A pre-index metric table, as created before the composite index existed.
+        # A metric table carrying the narrower index hydration used before.
         con = sqlite3.connect(path)
         con.execute("CREATE TABLE metric (id INTEGER PRIMARY KEY, timestamp DATETIME, "
                     "target VARCHAR, plugin_id VARCHAR, metric_name VARCHAR, "
                     "value REAL, metadata TEXT)")
+        con.execute("CREATE INDEX metric_plugin_id_metric_name_timestamp "
+                    "ON metric (plugin_id, metric_name, timestamp)")
         con.commit()
         con.close()
 
         if not db.is_closed():
             db.close()
-        DatabaseManager(path)  # runs _migrate()
+        manager = DatabaseManager(path, hydrate=False)
         with db.connection_context():
-            names = [i.name for i in db.get_indexes('metric')]
+            before = [i.name for i in db.get_indexes('metric')]
+        manager.hydrate()
+        with db.connection_context():
+            after = [i.name for i in db.get_indexes('metric')]
         if not db.is_closed():
             db.close()
-        assert 'metric_plugin_id_metric_name_timestamp' in names
+        assert 'metric_series_tail' not in before
+        assert 'metric_series_tail' in after
+        assert 'metric_plugin_id_metric_name_timestamp' not in after
+
+    def test_a_series_tail_is_read_from_the_index_alone(self, mgr):
+        with db.connection_context():
+            plan = db.execute_sql(
+                "EXPLAIN QUERY PLAN SELECT timestamp, value, target FROM metric "
+                "WHERE plugin_id = 'a' AND metric_name = 'b' ORDER BY timestamp DESC LIMIT 300"
+            ).fetchall()
+        assert any('COVERING INDEX metric_series_tail' in row[-1] for row in plan)
 
     def test_migration_renames_legacy_collector_columns(self, tmp_path):
         import sqlite3
@@ -311,6 +327,85 @@ class TestMetricRetention:
         mgr.flush()
         with db.connection_context():
             assert Metric.select().count() == 1
+
+
+class TestDownsampling:
+    @staticmethod
+    def _insert_at(when: datetime, name: str = "usage", value: float = 1.0):
+        with db.connection_context():
+            Metric.create(timestamp=when, target="h", plugin_id="c", metric_name=name, value=value)
+
+    @staticmethod
+    def _rows():
+        with db.connection_context():
+            return [(m.metric_name, m.timestamp, m.value) for m in Metric.select().order_by(Metric.id)]
+
+    def test_keeps_the_first_row_of_each_hour_past_the_window(self, mgr):
+        hour = (datetime.now() - timedelta(days=10)).replace(minute=0, second=0, microsecond=0)
+        for minute, value in ((5, 1.0), (20, 2.0), (40, 3.0)):
+            self._insert_at(hour + timedelta(minutes=minute), value=value)
+        self._insert_at(hour + timedelta(hours=1, minutes=5), value=4.0)
+        mgr.downsample_metrics(7)
+        mgr.flush()
+        assert [value for _, _, value in self._rows()] == [1.0, 4.0]
+
+    def test_rows_inside_the_window_are_untouched(self, mgr):
+        recent = datetime.now() - timedelta(days=2)
+        for minute in range(3):
+            self._insert_at(recent + timedelta(minutes=minute))
+        mgr.downsample_metrics(7)
+        mgr.flush()
+        assert len(self._rows()) == 3
+
+    def test_each_series_keeps_its_own_row_per_hour(self, mgr):
+        hour = (datetime.now() - timedelta(days=9)).replace(minute=0, second=0, microsecond=0)
+        for name in ("usage", "load"):
+            for minute in (1, 2):
+                self._insert_at(hour + timedelta(minutes=minute), name=name)
+        mgr.downsample_metrics(7)
+        mgr.flush()
+        assert sorted(name for name, _, _ in self._rows()) == ["load", "usage"]
+
+    def test_a_span_of_many_days_is_thinned_day_by_day(self, mgr):
+        start = (datetime.now() - timedelta(days=20)).replace(minute=0, second=0, microsecond=0)
+        for day in range(12):
+            for minute in (1, 2, 3):
+                self._insert_at(start + timedelta(days=day, minutes=minute))
+        mgr.downsample_metrics(7)
+        mgr.flush()
+        assert len(self._rows()) == 12
+
+    def test_the_background_writer_works_through_every_day(self, mgr, monkeypatch):
+        from vigil.core.database.database import _writer
+        start = (datetime.now() - timedelta(days=15)).replace(minute=0, second=0, microsecond=0)
+        for day in range(6):
+            for minute in (1, 2):
+                self._insert_at(start + timedelta(days=day, minutes=minute))
+        monkeypatch.setattr(_writer, 'synchronous', False)
+        monkeypatch.setattr(_writer, 'batch_window', 0.01)
+        _writer.start()
+        mgr.downsample_metrics(7)
+        _writer.flush()
+        assert len(self._rows()) == 6 and mgr._thinning is False
+
+    def test_a_later_pass_starts_where_the_last_one_stopped(self, mgr):
+        old = datetime.now() - timedelta(days=12)
+        self._insert_at(old)
+        mgr.downsample_metrics(7)
+        mgr.flush()
+        through = mgr._thinned_through
+        assert through is not None and through > old
+        mgr.downsample_metrics(7)
+        mgr.flush()
+        assert mgr._thinned_through >= through and mgr._thinning is False
+
+    def test_zero_disables_it(self, mgr):
+        old = datetime.now() - timedelta(days=30)
+        for minute in (1, 2):
+            self._insert_at(old + timedelta(minutes=minute))
+        mgr.downsample_metrics(0)
+        mgr.flush()
+        assert len(self._rows()) == 2
 
 
 class TestStatusRetention:
@@ -575,6 +670,13 @@ class TestHydration:
         mgr.flush()
         with db.connection_context():
             assert list(_distinct_keys(Metric, "plugin_id", "metric_name")) == [("a", "z"), ("b", "x"), ("b", "y")]
+
+    def test_only_the_newest_point_of_a_series_carries_metadata(self, mgr):
+        mgr.insert_metric("h", "borg", "archive_list", 1.0, metadata='{"old": 1}')
+        mgr.insert_metric("h", "borg", "archive_list", 2.0, metadata='{"new": 1}')
+        m2 = self._restart(mgr)
+        assert m2.latest_metric("borg", "archive_list").metadata == '{"new": 1}'
+        assert [m.metadata for m in m2.metric_history("borg", "archive_list")] == [None, '{"new": 1}']
 
     def test_distinct_keys_of_an_empty_table_is_empty(self, mgr):
         from vigil.core.database.database import _distinct_keys

@@ -33,14 +33,7 @@ class Metric(BaseModel):
     value = DoubleField()
     metadata = TextField(null=True)
 
-    class Meta:
-        # No live read path queries this table — the UI reads metrics from the
-        # in-memory store. The index serves startup hydration, which loads the
-        # recent tail of each (plugin_id, metric_name) series ordered by
-        # timestamp, and the retention prune, which deletes by timestamp.
-        # Without it hydration scans the whole Metric table once per series.
-        # See database._migrate() for the same index on existing DBs.
-        indexes = ((("plugin_id", "metric_name", "timestamp"), False),)
+    # Its series index is built by DatabaseManager.ensure_series_index(), not declared here, so its one-off build on a large database never blocks startup.
 
 
 class Event(BaseModel):
