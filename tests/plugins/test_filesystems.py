@@ -224,6 +224,28 @@ class TestReadOnlyDetection:
         assert _latest_status() == "online"
         assert _latest_metric("readonly_count") == pytest.approx(0.0)
 
+    async def test_excluded_mounts_and_their_children_are_skipped(self, make_plugin, run_cycle):
+        p = make_plugin(Filesystems, dict(BASE_CFG, exclude_mounts=["/var/lib/waydroid/rootfs/"]))
+        run_cycle(p, lambda c: CmdResult(0, _combined(
+            _df(("/", 100, 10, 10), ("/var/lib/waydroid/rootfs", 100, 99, 99),
+                ("/var/lib/waydroid/rootfs/vendor", 100, 99, 99), ("/var/lib/waydroid/rootfs2", 100, 20, 20)),
+            _df_inodes(("/", 5), ("/var/lib/waydroid/rootfs", 5), ("/var/lib/waydroid/rootfs/vendor", 5),
+                       ("/var/lib/waydroid/rootfs2", 5)),
+            _mounts(("/", "rw"), ("/var/lib/waydroid/rootfs", "ro"), ("/var/lib/waydroid/rootfs/vendor", "ro"),
+                    ("/var/lib/waydroid/rootfs2", "rw")),
+        ), ""))
+        assert _latest_status() == "online"
+        assert _latest_metric("readonly_count") == pytest.approx(0.0)
+        assert _latest_metric("fs_var_lib_waydroid_rootfs2_used_pct") == pytest.approx(20.0)
+        assert _latest_metric("fs_var_lib_waydroid_rootfs_used_pct") is None
+
+    async def test_excluding_everything_is_unavailable(self, make_plugin, run_cycle):
+        p = make_plugin(Filesystems, dict(BASE_CFG, exclude_mounts=["/"]))
+        run_cycle(p, lambda c: CmdResult(0, _combined(
+            _df(("/", 100, 10, 10), ("/data", 100, 20, 20)),
+        ), ""))
+        assert _latest_status() == "unavailable"
+
     async def test_all_rw_stays_online(self, plugin, run_cycle):
         run_cycle(plugin, lambda c: CmdResult(0, _combined(
             _df(("/", 100, 10, 10)),

@@ -1216,6 +1216,7 @@ Auto-discovers and monitors **every** mounted filesystem on the target over SSH 
 |--------------|--------------------------------------------------------------|
 | `warning`    | Usage % that triggers warning (default: `80`)               |
 | `threshold`  | Usage % that triggers failed (default: `90`)                |
+| `exclude_mounts` | Mountpoints to leave out, along with everything mounted beneath them — for images that are read-only or full by design |
 | `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
 
 **Metrics**: `worst_used_pct`; `fs_<mount>_used_pct`, `fs_<mount>_size_gb` per filesystem

@@ -1,7 +1,8 @@
 """Space, inodes, and read-only state of every real filesystem on the target,
 from one combined df/proc-mounts command over SSH — sampled locally by the
 agent on agent-backed hosts. Config: warning / threshold (space percent),
-inode_warning / inode_threshold, readonly_is_failure. The worst filesystem
+inode_warning / inode_threshold, readonly_is_failure, exclude_mounts (mountpoints
+left out along with everything mounted beneath them). The worst filesystem
 sets the status: space or inode use past the warning level is warning and
 past the threshold is failed, while a read-only mount is failed (warning when
 readonly_is_failure is off) because the kernel may have remounted it after an
@@ -143,6 +144,11 @@ class Filesystems(Plugin):
         self.inode_warning   = int(config.get('inode_warning',   85))
         self.inode_threshold = int(config.get('inode_threshold', 95))
         self.readonly_is_failure = bool(config.get('readonly_is_failure', True))
+        self.exclude_mounts = [m.rstrip('/') or '/' for m in config.get('exclude_mounts', [])]
+
+    def _excluded(self, mountpoint: str) -> bool:
+        """True when the mountpoint is an excluded one or sits beneath one."""
+        return any(mountpoint == m or mountpoint.startswith(m.rstrip('/') + '/') for m in self.exclude_mounts)
 
     def _inode_level_for(self, pct: float) -> str:
         if pct >= self.inode_threshold:
@@ -174,7 +180,7 @@ class Filesystems(Plugin):
         sections = stdout.split(_SNAP)
         inode_pct = _parse_inodes(sections[1]) if len(sections) > 1 else {}
         readonly  = _parse_readonly(sections[2]) if len(sections) > 2 else {}
-        filesystems = _parse_space(sections[0])
+        filesystems = [fs for fs in _parse_space(sections[0]) if not self._excluded(fs[0])]
 
         if not filesystems:
             return CollectResult.unavailable("No real filesystems found")
