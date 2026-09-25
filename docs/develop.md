@@ -729,6 +729,13 @@ a persistent WebSocket is cheap, and buys per-signal status, per-signal history,
 and cells a group layout can address individually
 (`"ragnarok-cpu.cpu_chart"`).
 
+The same holds for things a user names and acts on one at a time. `systemd_service`,
+`service_list`, `containers`, `vms` and `processes` look alike (list items, show state, offer
+per-item actions) but stay separate: each named unit wants its own status line and restart
+button, and systemd, podman, libvirt and `/proc` share no code a merged plugin could reuse.
+Each application plugin (`pihole`, `borg`, `frigate`, …) is likewise its own monitor; a
+"backup" or "media" grouping is a `group` in config, not a plugin.
+
 ## Testing
 
 `pytest` (via `nix develop` — there is no bare `python3` on the target dev

@@ -69,7 +69,7 @@ vigil_agent/                 # The daemon that runs on a monitored host
 └── watchers.py              # Event sources (journal / path / sample)
 ```
 
-See [DEVELOP.md](DEVELOP.md) for the architectural rationale — the pure-plugin contract, the collection lifecycle, the SQLite writer/reader model, and the declarative UI spec.
+See [docs/develop.md](docs/develop.md) for the architectural rationale — the pure-plugin contract, the collection lifecycle, the SQLite writer/reader model, and the declarative UI spec.
 
 ### Technical Stack
 
@@ -217,7 +217,7 @@ nix run . -- --config config.yaml
 - [Integrations](docs/integrations.md) — the events feed, REST API, Prometheus endpoint, and InfluxDB export
 - [Theme tokens](docs/theme.md) — per-token color overrides for the Halon theme
 - [Roadmap](docs/roadmap.md) — what's done and what's planned
-- [DEVELOP.md](DEVELOP.md) — architectural rationale and development notes
+- [docs/develop.md](docs/develop.md) — architectural rationale and development notes
 
 ---
 

@@ -1,5 +1,5 @@
 """TypedDict shapes for a plugin's UI_SPEC property, interpreted by
-spec.generic_render(). See DEVELOP.md's "Declarative UI spec" section for
+spec.generic_render(). See docs/develop.md's "Declarative UI spec" section for
 why this exists as data rather than hand-written render_ui() calls.
 
 Every field is optional at the TypedDict level (total=False) because

@@ -3,7 +3,7 @@
 Types that belong to a single subsystem live with that subsystem (e.g.
 CollectResult in connectors/types.py). This module holds only the
 contracts that cross subsystem boundaries and would otherwise be
-duck-typed identically in multiple places — see DEVELOP.md's "Interface
+duck-typed identically in multiple places — see docs/develop.md's "Interface
 contracts" section for the rationale behind each one.
 """
 

@@ -421,7 +421,7 @@ Drift is a comparison of two store paths — `readlink -f /run/current-system` a
 
 Two cadences share one monitor. Every `interval` it runs one cheap script (`readlink`, `stat`, `nixos-version`) and re-checks drift against the last evaluation, so a completed switch clears the flag on the next cycle. Every `eval_interval` it additionally runs `nix eval` and `nix flake metadata` — the expensive half. The last evaluation is stored with the monitor, so a Vigil restart resumes that schedule instead of re-evaluating. A failed evaluation is not held for the whole `eval_interval`: it is retried after `retry_interval`, so a fixed flake or a restored network clears the error promptly. A poll from the dashboard always runs the full evaluation. When the running closure changes between evaluations — a deploy landed — the monitor re-evaluates before judging drift, so a system that is *newer* than the stored target is not reported as out of date.
 
-Both actions launch a **detached** job on the target, polled to completion by this monitor's own cycle (see [Job control](../DEVELOP.md#job-control)), so a `nixos-rebuild switch` survives a dropped SSH connection and a Vigil restart. Keep `interval` at a few minutes if you want a running job's output to advance at that rate.
+Both actions launch a **detached** job on the target, polled to completion by this monitor's own cycle (see [Job control](develop.md#job-control)), so a `nixos-rebuild switch` survives a dropped SSH connection and a Vigil restart. Keep `interval` at a few minutes if you want a running job's output to advance at that rate.
 
 | Option | Description |
 |--------|-------------|
@@ -486,7 +486,7 @@ The last collection's epoch, outcome and yield are stored with the monitor, so a
 
 Profiles are discovered rather than configured: every symlink under `/nix/var/nix/profiles/` and `/nix/var/nix/profiles/per-user/*/` whose target is its own generation link. Their generation counts and the age of the oldest generation still on disk are what a `--delete-older-than` collection is supposed to be bounding, so they are the direct evidence that it is working.
 
-The action launches a **detached** `nix-collect-garbage` on the target, polled to completion by this monitor's own cycle (see [Job control](../DEVELOP.md#job-control)), so a collection that runs for an hour survives a dropped connection and a Vigil restart.
+The action launches a **detached** `nix-collect-garbage` on the target, polled to completion by this monitor's own cycle (see [Job control](develop.md#job-control)), so a collection that runs for an hour survives a dropped connection and a Vigil restart.
 
 | Option | Description |
 |--------|-------------|
@@ -1075,7 +1075,7 @@ Each cycle lists the newest archives (`borg list --json`) and, with `collect_sta
 
 **Restoring** always extracts into a new folder under `restore_dir`, named after the archive and the time, and never over live files. It runs as a detached job, listed under Jobs with its progress. The archive table's restore button does the same for a path you type.
 
-**Maintenance.** Check, Compact and Prune run as detached jobs, one job at a time per monitor (see [Job control](../DEVELOP.md#job-control)). Prune applies the `keep_*` policy for real, so use Prune Preview first to see what it would drop. Compact is what actually frees the space afterwards (borg 1.2 or later). An archive row can show what changed since the previous archive (`borg diff`), or delete the archive. **Prune, delete and Break Lock are off unless `allow_delete: true`**, and each one asks for confirmation.
+**Maintenance.** Check, Compact and Prune run as detached jobs, one job at a time per monitor (see [Job control](develop.md#job-control)). Prune applies the `keep_*` policy for real, so use Prune Preview first to see what it would drop. Compact is what actually frees the space afterwards (borg 1.2 or later). An archive row can show what changed since the previous archive (`borg diff`), or delete the archive. **Prune, delete and Break Lock are off unless `allow_delete: true`**, and each one asks for confirmation.
 
 **Purging excluded files.** New exclude patterns only keep files out of new archives. Purge Excluded rewrites the existing archives with `borg recreate` so they drop whatever the backup set's `exclude*` options now leave out, then compacts to free the space. It first deletes any `<archive>.recreate` left by an interrupted run, since borg refuses to start while one exists. Purge Preview is a dry run that lists the top-most path of each dropped tree, archive by archive. Both run as detached jobs and hold the repository lock for their whole run, and on a large remote repository that can take hours. Running the purge again with the same patterns rewrites every archive again, so it is a button, not a schedule. **Both are off unless `allow_purge: true`.**
 

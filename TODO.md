@@ -71,7 +71,12 @@ and the page assembly.
 - [ ] **Filesystem monitors** — whether [filesystems.py](vigil/plugins/filesystems.py),
       `disk_space` and `folders` should stay three plugins is open. `disk_space` and `folders`
       exist so a named path gets its *own* status and alert, which is the same argument the
-      per-signal split rests on.
+      per-signal split rests on. If they stay, the duplication belongs in a shared `df`/`du`
+      parser, not a merged plugin.
+- [ ] **DNS monitors** — [dns_record.py](vigil/plugins/dns_record.py) checks a record resolves and
+      [ddns_updater.py](vigil/plugins/ddns_updater.py) keeps one current, and the updater already
+      resolves the record it is about to update. Open whether they should share that lookup or
+      merge. `unbound` and `pihole` stay out either way: they are resolver products with their own stats.
 
 ### 1c. Control actions
 
@@ -194,7 +199,7 @@ Highest leverage, in order:
 ## 4. Architecture — one deferred item
 
 Not a gap against either project; a structural option Vigil has deliberately not taken. The
-current design is documented in [DEVELOP.md](DEVELOP.md) under **Single process, one event loop**.
+current design is documented in [docs/develop.md](docs/develop.md) under **Single process, one event loop**.
 
 ### Split the collector and the web UI into two processes
 
@@ -211,7 +216,7 @@ Worth doing when one of these becomes true:
 
 - Rendering latency is visibly delaying collection, or the reverse, under real load.
 - You want more than one collector process, which also means more than one SQLite writer (see
-  **SQLite** in DEVELOP.md — a single writer thread is currently an invariant).
+  **SQLite** in docs/develop.md — a single writer thread is currently an invariant).
 - You want the UI to survive a collector restart, or to restart either half independently.
 
 The shape it would take: a collector process owning the scheduler, the connectors and all writes,
