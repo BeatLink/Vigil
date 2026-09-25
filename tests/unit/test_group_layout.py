@@ -5,6 +5,17 @@ from vigil.plugins.group import Group, spec_with_titles
 from vigil.plugins.uptime import Uptime
 
 
+@pytest.fixture(autouse=True)
+def client_slot(monkeypatch):
+    """A fresh client to build into, since a real-client test earlier in the run leaves a deleted one on the slot stack and stops NiceGUI from making one up."""
+    from nicegui import Client
+    from nicegui.page import page
+    from nicegui.slot import Slot
+    monkeypatch.setattr(Slot, 'stacks', {})
+    with Client(page('/')) as client:
+        yield client
+
+
 @pytest.fixture
 def no_scheduler(monkeypatch):
     """Render without the change-bus scheduler, which needs a live client and loop."""
