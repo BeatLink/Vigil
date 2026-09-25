@@ -10,7 +10,8 @@ Gap analysis of Vigil's 45 plugins against two adjacent Linux projects, 2026-08-
   with the handful of transferable ideas separated from the non-goals.
 
 Items already on the [roadmap](docs/roadmap.md) are cross-referenced rather than repeated.
-Nothing here is committed work — this is the candidate list.
+Nothing here is committed work — this is the candidate list. §4 is not from either project:
+it is the one architectural change Vigil has deliberately deferred.
 
 ---
 
@@ -188,3 +189,34 @@ Highest leverage, in order:
    can do and Vigil's central, agentless position makes natural.
 4. MQTT/HA export (§1d) — already on the roadmap; delivers LNXlink's entire integration value
    without adopting its architecture.
+
+---
+
+## 4. Architecture — one deferred item
+
+Not a gap against either project; a structural option Vigil has deliberately not taken. The
+current design is documented in [DEVELOP.md](DEVELOP.md) under **Single process, one event loop**.
+
+### Split the collector and the web UI into two processes
+
+Collection and the dashboard share one process and one asyncio event loop, so CPU-bound UI
+rendering, poll dispatch, exporters and job streaming all contend for it. A burst of client
+re-renders can delay a poll, and there is no isolation between the two.
+
+Two things that once made this pressing have already been removed: SSH is native async and no
+longer occupies threads, and the UI reads the in-memory state store rather than querying SQLite.
+What remains is loop contention, which only bites at a scale Vigil has not reached — one host and
+33 monitors spend their time waiting on IO, not competing for the loop.
+
+Worth doing when one of these becomes true:
+
+- Rendering latency is visibly delaying collection, or the reverse, under real load.
+- You want more than one collector process, which also means more than one SQLite writer (see
+  **SQLite** in DEVELOP.md — a single writer thread is currently an invariant).
+- You want the UI to survive a collector restart, or to restart either half independently.
+
+The shape it would take: a collector process owning the scheduler, the connectors and all writes,
+a web process serving a read-only UI and the REST API, and the database plus a lightweight notify
+channel between them. The database is already the source of truth, so the seam exists; the work is
+that the state store is in-process memory today and would have to be fed to the web side over that
+channel instead of shared directly.
