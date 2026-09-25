@@ -11,7 +11,8 @@ import time
 from typing import Any, Dict, List, Mapping, Optional, Set
 from urllib.parse import quote
 
-from vigil.core.notifications.channels import Channel, Message, build_channels
+from vigil.core.notifications.channels import Channel, DesktopChannel, Message
+from vigil.core.notifications.http import NtfyChannel, WebhookChannel
 from vigil.core.notifications.rules import PROBLEM, RECOVERED, Alert, Tracker, resolve_rules
 from vigil.core.state import changes
 from vigil.core.state.changes import CHANGES
@@ -19,6 +20,29 @@ from vigil.plugins.base.plugin_helpers import format_duration
 
 RETRY_DELAYS = (5, 30)
 """Seconds to wait before each retry of a failed delivery."""
+
+
+CHANNEL_TYPES = {cls.TYPE: cls for cls in (DesktopChannel, WebhookChannel, NtfyChannel)}
+
+
+def build_channels(entries: List[Dict[str, Any]], agents: Any) -> Dict[str, Channel]:
+    """The configured channels by id. A bad entry is logged and skipped."""
+    channels: Dict[str, Channel] = {}
+    for entry in entries or []:
+        channel_id = str(entry.get('id') or entry.get('type') or '')
+        if not channel_id or channel_id in channels:
+            logging.error(f"notifications: channel needs a unique `id`, skipping {entry!r}")
+            continue
+        channel_type = CHANNEL_TYPES.get(entry.get('type'))
+        if channel_type is None:
+            logging.error(f"notifications: channel {channel_id!r} has unknown type {entry.get('type')!r}")
+            continue
+        # A broken channel must not stop the others from working.
+        try:
+            channels[channel_id] = channel_type(channel_id, entry, agents)
+        except ValueError as e:
+            logging.error(f"notifications: channel {channel_id!r} disabled: {e}")
+    return channels
 
 
 def monitor_url(base_url: Optional[str], monitor_id: str) -> Optional[str]:
@@ -100,10 +124,10 @@ class NotificationEngine:
         else:
             title = f"{name} is {alert.status}" if alert.kind == PROBLEM else f"{name} is still {alert.status}"
             detail = self._reason(plugin_id, name)
-        target = getattr(plugin, 'target', '')
+        target = getattr(plugin, 'target', '') or ''
         body = "\n".join(line for line in (detail, f"Host: {target}" if target else "") if line)
         return Message(title, body, alert.status, alert.kind, plugin_id,
-                       monitor_url(self.base_url, plugin_id))
+                       monitor_url(self.base_url, plugin_id), name, target, now)
 
     def _reason(self, plugin_id: str, name: str) -> str:
         """The monitor's latest event, which says why its status changed."""
@@ -119,7 +143,7 @@ class NotificationEngine:
             raise KeyError(channel_id)
         await channel.send(Message(
             "Vigil test notification", f"Sent through the {channel_id!r} channel.",
-            "online", "test", url=self.base_url,
+            "online", "test", url=self.base_url, timestamp=time.time(),
         ))
 
     async def _deliver(self, channel: Channel, message: Message) -> None:

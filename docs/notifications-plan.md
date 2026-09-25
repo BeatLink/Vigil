@@ -72,8 +72,9 @@ of one per monitor.
 1. **Done:** the engine, rules, config, the `desktop` channel with icon and urgency settings, the
    notify-only agent, monitor links, the NixOS user service, and
    `POST /api/notifications/<channel>/test`.
-2. **Generic channels:** webhook (JSON body with an optional template), ntfy, smtp, and Apprise
-   as the optional extra `vigil[apprise]`. Secrets can be given as `*_file`, the same as `auth`.
+2. **Generic channels:** webhook and ntfy are done: a JSON body or a payload template for the
+   webhook, and a tap link, priority and tags for ntfy. Every secret can be given as `*_file`.
+   Still to do: smtp, and Apprise as the optional extra `vigil[apprise]`.
 3. **More providers and UI:** telegram, discord, slack, gotify, pushover, matrix, home-assistant
    and signal built in. A "Send test" button per channel and a mute switch per monitor in the
    dashboard.

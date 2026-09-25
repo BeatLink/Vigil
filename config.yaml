@@ -100,6 +100,12 @@ theme:
 #       agent: laptop-desktop
 #       icon: vigil                 # or an icon theme name, or an image path on that computer
 #       urgency: {failed: critical, recovered: low}
+#     - id: phone
+#       type: ntfy                  # phone notifications through ntfy.sh or your own server
+#       topic_file: "/run/secrets/ntfy_topic"
+#     - id: home-assistant
+#       type: webhook               # JSON to any URL; `payload:` sends a template instead
+#       url_file: "/run/secrets/ha_vigil_webhook_url"
 #   defaults:                       # every monitor's rule; a monitor's `notify:` overrides it
 #     on: [failed]                  # failed, warning, unavailable
 #     after: 1                      # problem cycles in a row before notifying

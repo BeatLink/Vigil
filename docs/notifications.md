@@ -4,8 +4,8 @@ Vigil sends a notification when a monitor's status changes in a way you care abo
 failing, it is still failing, or it recovers. Notifications go to **channels**. Each monitor
 follows a **rule** that sets which channels it uses and which changes count.
 
-Only one channel type exists so far: `desktop`. More are planned; see
-[notifications-plan.md](notifications-plan.md).
+Three channel types exist: [`desktop`](#desktop-notifications), [`webhook`](#webhook) and
+[`ntfy`](#ntfy). More are planned; see [notifications-plan.md](notifications-plan.md).
 
 ## Config
 
@@ -134,6 +134,80 @@ services.vigil-agent = {
 This works with or without `services.vigil-agent.enable`. A newly added user service does not
 start in a session that is already running. Start it with
 `systemctl --user start vigil-agent-desktop`, or log in again.
+
+## Webhook
+
+A `webhook` channel sends each notification to a URL. It suits Home Assistant, n8n, chat apps
+that accept incoming webhooks, and your own scripts.
+
+```yaml
+channels:
+  - id: home-assistant
+    type: webhook
+    url_file: /run/secrets/ha_vigil_webhook_url   # or `url:` inline
+    method: POST                                  # POST (default), PUT or PATCH
+    headers: {X-Source: vigil}
+    bearer_token_file: /run/secrets/hook_token    # or `bearer_token:`; sent as "Authorization: Bearer ..."
+```
+
+With no `payload`, the request body is this JSON:
+
+```json
+{
+  "title": "NAS is failed",
+  "body": "Pool tank is DEGRADED\nHost: nas.lan",
+  "status": "failed",
+  "kind": "problem",
+  "monitor": {"id": "nas-zfs", "name": "NAS", "host": "nas.lan"},
+  "url": "https://vigil.lan/monitor/nas-zfs",
+  "timestamp": "2026-09-24T22:10:00-05:00"
+}
+```
+
+`kind` is `problem`, `reminder`, `recovered` or `test`.
+
+Set `payload` to send something else. A mapping or list is sent as JSON, and a string is sent as
+plain text. `{name}` placeholders in any string are filled in, and values are escaped
+correctly in JSON:
+
+```yaml
+    payload:
+      text: "{title} on {host}: {url}"
+```
+
+The placeholders are `{title}`, `{body}`, `{status}`, `{kind}`, `{monitor_id}`, `{monitor_name}`,
+`{host}`, `{url}` and `{timestamp}`. Any other `{...}` is left as it is.
+
+## ntfy
+
+An `ntfy` channel publishes to an [ntfy](https://ntfy.sh) topic, so notifications reach your
+phone. Tapping one opens the monitor's page.
+
+```yaml
+channels:
+  - id: phone
+    type: ntfy
+    url: https://ntfy.sh          # the default; or your own server
+    topic_file: /run/secrets/ntfy_topic   # or `topic:`
+    token_file: /run/secrets/ntfy_token   # optional access token, or `token:`
+    # username: vigil             # or a user and `password` / `password_file`
+    priority: {failed: urgent}
+    tags: {failed: "rotating_light,server"}
+```
+
+On the public ntfy.sh server anyone who knows a topic's name can read it, so choose a name that
+is hard to guess, and keep it in `topic_file`.
+
+`priority` is `min`, `low`, `default`, `high`, `max`/`urgent`, or 1 to 5. `tags` is a list or a
+comma-separated string. ntfy shows tags that name an emoji as that emoji. Like the desktop
+settings, either one can be one value or set per status:
+
+| Status        | Default priority | Default tags       |
+|---------------|------------------|--------------------|
+| `failed`      | `high`           | `rotating_light`   |
+| `warning`     | `default`        | `warning`          |
+| `unavailable` | `default`        | `grey_question`    |
+| `recovered`   | `low`            | `white_check_mark` |
 
 ## Checking a channel
 

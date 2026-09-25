@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from vigil.core.connectors.agent_connector import AgentConnection, AgentRegistry
-from vigil.core.notifications import NotificationEngine, monitor_url
-from vigil.core.notifications.channels import DesktopChannel, Message, build_channels
+from vigil.core.notifications import NotificationEngine, build_channels, monitor_url
+from vigil.core.notifications.channels import DesktopChannel, Message
 from vigil.core.notifications.rules import (
     PROBLEM, RECOVERED, REMINDER, Alert, Rule, Tracker, resolve_rules,
 )
@@ -144,6 +144,8 @@ class TestEngine:
         assert message.title == 'Nas is failed'
         assert message.body == 'Pool tank is DEGRADED\nHost: host.lan'
         assert message.url == 'https://vigil.lan/monitor/nas'
+        assert (message.monitor_name, message.host) == ('Nas', 'host.lan')
+        assert message.timestamp > 0
         assert message.key == 'failed'
 
         db_manager.insert_status('nas', 'online')
@@ -244,3 +246,39 @@ class TestDesktopChannel:
             {'id': 'desk', 'type': 'desktop', 'agent': 'desktop'},
         ], registry)
         assert list(channels) == ['desk']
+
+
+class TestTestEndpoint:
+    def _client(self, send_test):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from vigil.core.ui.api import register_api
+
+        notifications = SimpleNamespace(channels={'desk': object()}, send_test=send_test)
+        engine = SimpleNamespace(plugins=[], db=SimpleNamespace(), notifications=notifications)
+        app = FastAPI()
+        register_api(app, engine)
+        return TestClient(app)
+
+    def test_sends_through_the_named_channel(self):
+        sent = []
+
+        async def send_test(channel_id):
+            sent.append(channel_id)
+
+        response = self._client(send_test).post('/api/notifications/desk/test')
+        assert (response.status_code, response.json(), sent) == (200, {'sent': True}, ['desk'])
+
+    def test_a_failed_delivery_is_reported(self):
+        async def send_test(channel_id):
+            raise ConnectionError('agent is not connected')
+
+        response = self._client(send_test).post('/api/notifications/desk/test')
+        assert response.status_code == 502
+        assert response.json() == {'sent': False, 'error': 'agent is not connected'}
+
+    def test_an_unknown_channel_is_not_found(self):
+        async def send_test(channel_id):
+            raise AssertionError('should not send')
+
+        assert self._client(send_test).post('/api/notifications/nope/test').status_code == 404
