@@ -194,6 +194,7 @@ class TestCollectOnConnect:
         theirs.id = 'other-plugin'
 
         engine = object.__new__(VigilEngine)
+        engine.ready = True
         engine.plugins = [mine, theirs]
         engine._tasks = set()
         engine._exec_contexts = {

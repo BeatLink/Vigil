@@ -102,16 +102,16 @@ class VigilEngine:
             self.db_path = db_path_override
         else:
             self.db_path = self.config_loader.database_settings.get('path', 'vigil.db')
+        # False until load_state() has restored the store; nothing may write to it before then.
+        self.ready = False
+        self._early_agents: Set[str] = set()
         try:
             self.db = VigilDatabase(
                 self.db_path,
                 write_batch_seconds=self.config_loader.write_batch_seconds,
                 buffers=self.config_loader.buffer_sizes,
+                hydrate=False,
             )
-            self.db.insert_event("INFO", "Vigil Engine initialized.", "vigil_core")
-            orphaned = self.db.reconcile_orphaned_jobs()
-            if orphaned:
-                logging.warning(f"Marked {orphaned} orphaned job(s) as failed after restart")
         except OperationalError as e:
             logging.critical(f"Failed to initialize database: {e}. Exiting.")
             sys.exit(1)
@@ -190,6 +190,9 @@ class VigilEngine:
         The plugin's parse_event() is pure and the write is the same batched
         db.apply_result the polling cycle uses, so an event costs one parse and
         one buffered write with no IO of its own."""
+        # The agent pushes again on its next interval, so dropping this loses nothing that hydration would not then overwrite.
+        if not self.ready:
+            return
         plugin = self._event_targets.get(stream_id)
         if plugin is None:
             logging.debug(f"agent {agent_id!r}: event for unknown stream {stream_id!r}")
@@ -220,7 +223,11 @@ class VigilEngine:
         real fault.
 
         Runs on the agent's socket task, so each cycle is a separate task
-        rather than blocking the handshake."""
+        rather than blocking the handshake. An agent that connects while the
+        store is still loading is collected once it has loaded."""
+        if not self.ready:
+            self._early_agents.add(agent_id)
+            return
         monitors = [p for p in self._flatten(self.plugins)
                     if getattr(self._exec_context_for(p), 'conn', None) is not None
                     and getattr(self._exec_context_for(p).conn, 'agent_id', None) == agent_id]
@@ -495,7 +502,23 @@ class VigilEngine:
         self.db.flush()
         logging.info("Vigil Engine shut down cleanly.")
 
+    def load_state(self) -> None:
+        """Restores the store from the database and records the restart; blocking, so run() calls it off the event loop."""
+        started = time.monotonic()
+        self.db.hydrate()
+        self.db.insert_event("INFO", "Vigil Engine initialized.", "vigil_core")
+        orphaned = self.db.reconcile_orphaned_jobs()
+        if orphaned:
+            logging.warning(f"Marked {orphaned} orphaned job(s) as failed after restart")
+        logging.info(f"Saved state loaded in {time.monotonic() - started:.1f}s")
+
     async def run(self):
+        if not self.ready:
+            await asyncio.get_running_loop().run_in_executor(None, self.load_state)
+            self.ready = True
+            for agent_id in sorted(self._early_agents):
+                self._on_agent_connected(agent_id)
+            self._early_agents.clear()
         logging.info("Vigil Engine started...")
 
         self.db.insert_event("INFO", "Vigil Engine started polling loop.", "vigil_core")

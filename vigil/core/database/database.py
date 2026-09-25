@@ -171,6 +171,23 @@ def flush_writes(timeout: Optional[float] = None):
     _writer.flush(timeout)
 
 
+def _distinct_keys(model, *columns: str):
+    """Yields each distinct value of an indexed, non-null column prefix by stepping along the index one key at a time.
+
+    SELECT DISTINCT reads every row of the index, which is minutes on a
+    multi-gigabyte database; each step here is one index seek, so the cost
+    follows the number of keys rather than the number of rows."""
+    table = model._meta.table_name
+    cols = ", ".join(columns)
+    first = f"SELECT {cols} FROM {table} ORDER BY {cols} LIMIT 1"
+    after = (f"SELECT {cols} FROM {table} WHERE ({cols}) > ({', '.join('?' for _ in columns)}) "
+             f"ORDER BY {cols} LIMIT 1")
+    row = db.execute_sql(first).fetchone()
+    while row is not None:
+        yield tuple(row)
+        row = db.execute_sql(after, tuple(row)).fetchone()
+
+
 class DatabaseManager:
     def __init__(
         self,
@@ -178,12 +195,15 @@ class DatabaseManager:
         write_batch_seconds: float = 1.0,
         buffers: Optional[BufferSizes] = None,
         store: Optional[StateStore] = None,
+        hydrate: bool = True,
     ):
         self.db_path = db_path
         self.store = store or StateStore(buffers)
         _writer.batch_window = write_batch_seconds
         self._connect_and_init()
-        self.hydrate()
+        # The engine hydrates later, off the event loop, so the dashboard can answer while a large database loads.
+        if hydrate:
+            self.hydrate()
 
     def _connect_and_init(self):
         try:
@@ -301,30 +321,27 @@ class DatabaseManager:
             logging.error(f"Failed to hydrate state from {self.db_path}: {e}")
 
     def _hydrate_statuses(self) -> None:
-        newest = StatusHistory.select(fn.MAX(StatusHistory.id).alias("max_id")).group_by(
-            StatusHistory.plugin_id
-        )
-        rows = StatusHistory.select().where(StatusHistory.id.in_(newest))
-        self.store.statuses.update(
-            {
-                row.plugin_id: StatusRecord(
-                    plugin_id=row.plugin_id,
-                    state=str(Status.of(row.state)), # history written under an old status name reads as its current one
-                    timestamp=row.timestamp,
-                )
-                for row in rows
-            }
-        )
+        for (plugin_id,) in _distinct_keys(StatusHistory, "plugin_id"):
+            row = (
+                StatusHistory.select()
+                .where(StatusHistory.plugin_id == plugin_id)
+                .order_by(StatusHistory.id.desc())
+                .first()
+            )
+            self.store.statuses[plugin_id] = StatusRecord(
+                plugin_id=row.plugin_id,
+                state=str(Status.of(row.state)), # history written under an old status name reads as its current one
+                timestamp=row.timestamp,
+            )
 
     def _hydrate_metrics(self) -> None:
         depth = self.store.buffers.metric_history
-        series_keys = Metric.select(Metric.plugin_id, Metric.metric_name).distinct()
-        for key in series_keys:
+        for plugin_id, metric_name in _distinct_keys(Metric, "plugin_id", "metric_name"):
             rows = (
                 Metric.select()
                 .where(
-                    (Metric.plugin_id == key.plugin_id)
-                    & (Metric.metric_name == key.metric_name)
+                    (Metric.plugin_id == plugin_id)
+                    & (Metric.metric_name == metric_name)
                 )
                 .order_by(Metric.timestamp.desc())
                 .limit(depth)
@@ -360,11 +377,10 @@ class DatabaseManager:
 
     def _hydrate_log_lines(self) -> None:
         depth = self.store.buffers.log_history
-        targets = LogLine.select(LogLine.target).distinct()
-        for entry in targets:
+        for (target,) in _distinct_keys(LogLine, "target"):
             rows = (
                 LogLine.select()
-                .where(LogLine.target == entry.target)
+                .where(LogLine.target == target)
                 .order_by(LogLine.timestamp.desc())
                 .limit(depth)
             )

@@ -233,6 +233,7 @@ class TestEventRouting:
         engine._collection_streams = {s.id for s in plugin.subscriptions()
                                       if s.kind == 'sample'}
         engine._last_collected = {}
+        engine.ready = True
         return engine
 
     def test_an_event_is_parsed_and_persisted(self, make_plugin, db_manager):

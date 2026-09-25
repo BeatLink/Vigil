@@ -552,6 +552,35 @@ class TestHydration:
         # The newest points are the ones kept, and still oldest-to-newest.
         assert [m.value for m in history] == [45.0, 46.0, 47.0, 48.0, 49.0]
 
+    def test_every_series_is_restored_when_keys_interleave(self, mgr):
+        pairs = [("cpu", "usage"), ("cpu", "load"), ("cpu-2", "usage"), ("a b", "x'y"), ("disk", "usage")]
+        for plugin_id, name in pairs:
+            mgr.insert_metric("h", plugin_id, name, 1.0)
+            mgr.insert_metric("h", plugin_id, name, 2.0)
+        m2 = self._restart(mgr)
+        for plugin_id, name in pairs:
+            assert [m.value for m in m2.metric_history(plugin_id, name)] == [1.0, 2.0]
+
+    def test_log_lines_of_every_target_are_restored(self, mgr):
+        for target in ("h1", "h2", "h10"):
+            mgr.insert_log_line(target, "p", "INFO", f"from {target}", log_time="t1")
+        m2 = self._restart(mgr)
+        for target in ("h1", "h2", "h10"):
+            assert [line["message"] for line in m2.log_lines(target, limit=0)] == [f"from {target}"]
+
+    def test_distinct_keys_steps_through_each_key_once_in_order(self, mgr):
+        from vigil.core.database.database import _distinct_keys
+        for plugin_id, name in [("b", "y"), ("a", "z"), ("b", "x"), ("a", "z"), ("b", "y")]:
+            mgr.insert_metric("h", plugin_id, name, 1.0)
+        mgr.flush()
+        with db.connection_context():
+            assert list(_distinct_keys(Metric, "plugin_id", "metric_name")) == [("a", "z"), ("b", "x"), ("b", "y")]
+
+    def test_distinct_keys_of_an_empty_table_is_empty(self, mgr):
+        from vigil.core.database.database import _distinct_keys
+        with db.connection_context():
+            assert list(_distinct_keys(StatusHistory, "plugin_id")) == []
+
 
 class TestReconcileOrphanedJobs:
     def test_pidless_job_is_failed_and_persisted(self, mgr):

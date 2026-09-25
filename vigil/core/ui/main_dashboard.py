@@ -162,6 +162,9 @@ def init_gui(engine: EngineLike, port: int = 8080):
     app.add_static_file(local_file=_ICON, url_path='/icon.svg')
 
     auth_config = _register_endpoints(engine)
+    # Added last so it runs first: a starting server answers before asking anyone to log in.
+    from vigil.core.ui.startup import StartingUpMiddleware
+    app.add_middleware(StartingUpMiddleware, engine=engine)
 
     @ui.page('/')
     def index_page():

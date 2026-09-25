@@ -80,6 +80,9 @@ class EngineLike(Protocol):
     def db(self) -> Any: ...
 
     @property
+    def ready(self) -> bool: ...
+
+    @property
     def plugins(self) -> List[Any]: ...
 
     @property
