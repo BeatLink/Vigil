@@ -75,9 +75,9 @@ of one per monitor.
 2. **Generic channels:** webhook and ntfy are done: a JSON body or a payload template for the
    webhook, and a tap link, priority and tags for ntfy. Every secret can be given as `*_file`.
    Still to do: smtp, and Apprise as the optional extra `vigil[apprise]`.
-3. **More providers and UI:** telegram, discord, slack, gotify, pushover, matrix, home-assistant
-   and signal built in. A "Send test" button per channel and a mute switch per monitor in the
-   dashboard.
+3. **More providers and UI:** the dashboard part is done: a mute switch on each monitor's page,
+   and a header dialog that tests channels and lists mutes. Still to do: telegram, discord,
+   slack, gotify, pushover, matrix, home-assistant and signal built in.
 4. **On-call and flapping:** pagerduty and opsgenie, using the monitor id as the alert id so a
    recovery closes the alert. Grouping alerts that fire close together into one message.
    Maintenance windows.

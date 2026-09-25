@@ -21,6 +21,9 @@ from vigil.plugins.base.plugin_helpers import format_duration
 RETRY_DELAYS = (5, 30)
 """Seconds to wait before each retry of a failed delivery."""
 
+MUTE_SETTING = "notifications.muted:{}"
+"""The setting that mutes one monitor, and everything beneath it when it is a group."""
+
 
 CHANNEL_TYPES = {cls.TYPE: cls for cls in (DesktopChannel, WebhookChannel, NtfyChannel)}
 
@@ -62,6 +65,8 @@ class NotificationEngine:
         self.channels: Dict[str, Channel] = build_channels(settings.get('channels') or [], agents)
         self._defaults = settings.get('defaults') or {}
         self._monitors: Dict[str, Any] = {}
+        self._parents: Dict[str, str] = {}
+        self._announced: Set[str] = set()
         self._tracker = Tracker({})
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._unsubscribe = None
@@ -76,12 +81,15 @@ class NotificationEngine:
         stack = list(roots)
         while stack:
             plugin = stack.pop()
+            for child in plugin.children:
+                self._parents[child.id] = plugin.id
             stack.extend(plugin.children)
             self._monitors[plugin.id] = plugin
 
         now = time.time()
         for plugin_id, record in self._db.store.statuses.items():
             self._tracker.seed(plugin_id, record.state, record.timestamp.timestamp(), now)
+        self._announced = {pid for pid in rules if self._tracker.alerting(pid)}
 
         self._loop = asyncio.get_running_loop()
         self._unsubscribe = CHANGES.subscribe(self._on_change)
@@ -106,10 +114,43 @@ class NotificationEngine:
         except RuntimeError:
             pass  # The loop has closed during shutdown.
 
+    def monitor_name(self, plugin_id: str) -> str:
+        """A monitor's display name, falling back to its id."""
+        return getattr(self._monitors.get(plugin_id), 'name', plugin_id)
+
+    def muted_by(self, plugin_id: str) -> Optional[str]:
+        """The monitor or group whose mute silences this monitor, or None."""
+        current: Optional[str] = plugin_id
+        while current is not None:
+            if self._db.get_setting(MUTE_SETTING.format(current)) == "1":
+                return current
+            current = self._parents.get(current)
+        return None
+
+    def set_muted(self, plugin_id: str, muted: bool) -> None:
+        """Mute or unmute one monitor, or a group and everything beneath it."""
+        self._db.set_setting(MUTE_SETTING.format(plugin_id), "1" if muted else "0")
+
+    def muted_monitors(self) -> List[Any]:
+        """The monitors and groups muted directly, in no particular order."""
+        return [plugin for plugin_id, plugin in self._monitors.items()
+                if self._db.get_setting(MUTE_SETTING.format(plugin_id)) == "1"]
+
     def _observe(self, plugin_id: str, status: str, now: float) -> None:
         alert = self._tracker.observe(plugin_id, status, now)
         if alert is None:
             return
+        muted = self.muted_by(plugin_id) is not None
+        if alert.kind == RECOVERED:
+            announced = plugin_id in self._announced
+            self._announced.discard(plugin_id)
+            # A recovery is only news if its problem was announced.
+            if muted or not announced:
+                return
+        elif muted:
+            return
+        else:
+            self._announced.add(plugin_id)
         message = self.message(plugin_id, alert, now)
         for channel_id in self._tracker.rules[plugin_id].channels:
             self._spawn(self._deliver(self.channels[channel_id], message))

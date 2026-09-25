@@ -136,6 +136,11 @@ class Tracker:
             state.alerting, state.status = True, _status(status)
             state.problem_cycles, state.since, state.last_sent = rule.after, since, now
 
+    def alerting(self, plugin_id: str) -> bool:
+        """Whether the monitor currently has a problem its rule counts."""
+        state = self._states.get(plugin_id)
+        return bool(state and state.alerting)
+
     def observe(self, plugin_id: str, status: str, now: float) -> Optional[Alert]:
         """Record one status write; return the notification it triggers, if any."""
         rule = self.rules.get(plugin_id)

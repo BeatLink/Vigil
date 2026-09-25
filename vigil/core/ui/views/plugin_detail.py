@@ -5,6 +5,7 @@ from typing import Any, Callable
 from nicegui import ui
 from vigil.core.contracts import EngineLike
 from ..components import action_button
+from .notifications import render_mute_button
 
 
 def render_plugin_detail(engine: EngineLike, switch_view: Callable, plugin: Any):
@@ -15,19 +16,20 @@ def render_plugin_detail(engine: EngineLike, switch_view: Callable, plugin: Any)
             ui.label(plugin.name).classes('halon-title-page break-words')
         actions_row = ui.row().classes('gap-2 items-center').style('flex-wrap: wrap;')
 
-    asyncio.create_task(_render_actions(plugin, actions_row))
+    asyncio.create_task(_render_actions(engine, plugin, actions_row))
 
     plugin.render_ui()
 
 
-async def _render_actions(plugin: Any, actions_row: Any):
-    """Renders the Poll Now button plus the plugin's declared action buttons."""
+async def _render_actions(engine: EngineLike, plugin: Any, actions_row: Any):
+    """Renders the Poll Now button, the mute switch and the plugin's declared action buttons."""
     with actions_row:
         async def poll_now():
             await plugin.run_cycle()
             ui.notify(f'{plugin.name} polled', type='positive')
         # The one filled button on the view; everything else is a bordered ghost so the accent keeps meaning "the action".
         action_button('Poll Now', on_click=poll_now, icon='refresh', weight='filled')
+        render_mute_button(engine, plugin)
 
         info = await plugin.present()
         for action in info.get('actions', []):

@@ -175,6 +175,52 @@ class TestEngine:
         messages = [e.message for e in db_manager.store.plugin_events(plugin_id='nas')]
         assert any("Could not notify 'desk'" in m for m in messages)
 
+    def _titles(self, engine):
+        return [m.title for m in engine.channels['desk'].sent]
+
+    async def _set(self, db_manager, *statuses):
+        for status in statuses:
+            db_manager.insert_status('nas', status)
+            await _drain()
+
+    async def test_a_muted_monitor_sends_nothing(self, engine, db_manager):
+        engine.start([_plugin('nas')])
+        engine.set_muted('nas', True)
+        await self._set(db_manager, 'failed', 'online')
+        assert self._titles(engine) == []
+
+    async def test_unmuting_mid_problem_sends_no_recovery_for_an_unannounced_failure(
+            self, engine, db_manager):
+        engine.start([_plugin('nas')])
+        engine.set_muted('nas', True)
+        await self._set(db_manager, 'failed')
+        engine.set_muted('nas', False)
+        await self._set(db_manager, 'online', 'failed')
+        assert self._titles(engine) == ['Nas is failed']
+
+    async def test_muting_after_the_failure_also_silences_its_recovery(self, engine, db_manager):
+        engine.start([_plugin('nas')])
+        await self._set(db_manager, 'failed')
+        engine.set_muted('nas', True)
+        await self._set(db_manager, 'online')
+        assert self._titles(engine) == ['Nas is failed']
+
+    async def test_muting_a_group_mutes_everything_in_it(self, engine, db_manager):
+        group = _plugin('storage', [_plugin('nas')], type_='group')
+        engine.start([group])
+        engine.set_muted('storage', True)
+        assert engine.muted_by('nas') == 'storage'
+        await self._set(db_manager, 'failed')
+        assert self._titles(engine) == []
+        assert [p.id for p in engine.muted_monitors()] == ['storage']
+
+    async def test_a_problem_held_before_restart_still_announces_its_recovery(
+            self, engine, db_manager):
+        db_manager.insert_status('nas', 'failed')
+        engine.start([_plugin('nas')])
+        await self._set(db_manager, 'online')
+        assert self._titles(engine) == ['Nas recovered']
+
     async def test_without_channels_nothing_is_watched(self, db_manager):
         eng = NotificationEngine(db_manager, {}, AgentRegistry())
         eng.start([_plugin('nas')])

@@ -10,6 +10,7 @@ from . import theme
 from .auth import LOGOUT_PATH, AuthConfig
 from .sidebar import render_sidebar
 from .views import render_overview, render_events, render_plugin_detail
+from .views.notifications import open_notifications_dialog
 
 _ICON = Path(__file__).parent / 'static' / 'icon.svg'
 
@@ -93,14 +94,19 @@ def _render_account_menu(auth_config: AuthConfig):
             ui.menu_item('Sign out', on_click=lambda: ui.navigate.to(LOGOUT_PATH))
 
 
-def _render_header(left_drawer_toggle: Callable, auth_config: Optional[AuthConfig]):
-    """Renders the top bar with the drawer toggle, the Vigil brand and the account menu."""
+def _render_header(engine: EngineLike, left_drawer_toggle: Callable,
+                   auth_config: Optional[AuthConfig]):
+    """Renders the top bar: drawer toggle, brand, notifications and the account menu."""
     with ui.header().classes('items-center gap-2'):
         ui.button(on_click=left_drawer_toggle, icon='menu', color=None).props('flat dense round')
         ui.image('/icon.svg').style('width: 18px; height: 18px;')
         ui.label('Vigil').classes('halon-brand')
+        ui.space()
+        if engine.notifications.channels:
+            with ui.button(on_click=lambda: open_notifications_dialog(engine), icon='notifications',
+                           color=None).props('flat dense round'):
+                ui.tooltip('Notifications')
         if auth_config is not None:
-            ui.space()
             _render_account_menu(auth_config)
 
 
@@ -123,7 +129,7 @@ def _render_index(engine: EngineLike, auth_config: Optional[AuthConfig] = None,
 
     _navigation_state['switch_func'] = switch_view
 
-    _render_header(lambda: left_drawer.toggle(), auth_config)
+    _render_header(engine, lambda: left_drawer.toggle(), auth_config)
     left_drawer, sync_nav = render_sidebar(engine, switch_view)
     state.sync_nav = lambda: sync_nav(state.current_view)
 

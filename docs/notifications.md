@@ -64,6 +64,17 @@ notification instead of one per monitor.
 If Vigil restarts while a monitor has a problem, it is not announced again. Its recovery still
 is.
 
+## Muting
+
+The **Mute** button on a monitor's page stops its notifications until you unmute it, for example
+during maintenance. Muting a group mutes everything in it, and each monitor in the group says
+which group muted it. The bell icon in the dashboard's header lists everything that is muted,
+with a button to unmute each one.
+
+A mute is saved, so it survives a restart. A failure that happens while a monitor is muted is not
+announced, and neither is its recovery, even if you unmute first. Unmuting while a monitor is
+still failing does not send a notification.
+
 ## Monitor links
 
 Every monitor has its own dashboard address, `/monitor/<id>`, and the events feed is at
@@ -210,6 +221,9 @@ settings, either one can be one value or set per status:
 | `recovered`   | `low`            | `white_check_mark` |
 
 ## Checking a channel
+
+The bell icon in the dashboard's header lists every channel with a **Send test** button. From a
+script, use the API:
 
 ```bash
 curl -X POST -u admin https://vigil.lan/api/notifications/laptop/test
