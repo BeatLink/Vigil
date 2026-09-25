@@ -158,12 +158,12 @@ class Btrfs(SignalPlugin):
             metrics[f'fs_errors_{fs.key}'] = float(fs.error_count)
             metrics[f'fs_unallocated_{fs.key}'] = float(fs.unallocated)
 
-            detail = (f"{fs.usage_pct:.0f}% used of {format_bytes(fs.size / _GIB)} "
+            detail = (f"{fs.usage_pct:.0f}% used of {format_bytes(fs.size, 'B')} "
                       f"(warn {self.warning:g}% / fail {self.threshold:g}%)")
             if fs.error_count:
                 detail += f", device errors: {fs.error_summary}"
             elif fs.unallocated < self.unallocated_warning:
-                detail += (f", only {format_bytes(fs.unallocated / _GIB)} unallocated — "
+                detail += (f", only {format_bytes(fs.unallocated, 'B')} unallocated — "
                            f"btrfs cannot make a new chunk and writes may fail with ENOSPC")
             logs.append((f"{fs.mountpoint}: {detail}", Status(level).log_level))
 

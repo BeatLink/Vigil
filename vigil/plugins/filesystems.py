@@ -99,7 +99,7 @@ def _assess_filesystems(filesystems: List[tuple], inode_pct: Dict[str, float],
         acc.escalate(level)
         if level != 'online':
             logs.append((
-                f"{mountpoint}: {used_pct:.0f}% used ({format_bytes(size_bytes / (1024**3))})",
+                f"{mountpoint}: {used_pct:.0f}% used ({format_bytes(size_bytes, 'B')})",
                 Status(level).log_level,
             ))
 

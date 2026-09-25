@@ -67,6 +67,15 @@ class TestFormatGb:
     def test_above_1024gb_shows_tb(self):
         assert format_bytes(2048.0) == "2.0 TB"
 
+    def test_a_unit_hint_reads_the_value_in_that_unit(self):
+        assert format_bytes(2 * 1024 ** 3, 'B') == "2.0 GB"
+        assert format_bytes(512, 'MB') == "512 MB"
+        assert format_bytes(2, 'TB') == "2.0 TB"
+
+    def test_an_unknown_unit_is_rejected(self):
+        with pytest.raises(ValueError):
+            format_bytes(1.0, 'furlongs')
+
 
 class TestDiskSpaceCollection:
     async def test_below_threshold_sets_online(self, plugin, run_cycle):

@@ -338,8 +338,8 @@ class NixGc(Plugin):
                 acc.escalate('warning')
             logs.append((
                 f"{self.store} is {used_pct:.1f}% full "
-                f"({format_bytes(used / 1024 ** 3)} of {format_bytes(size / 1024 ** 3)}, "
-                f"{format_bytes(avail / 1024 ** 3)} free)",
+                f"({format_bytes(used, 'B')} of {format_bytes(size, 'B')}, "
+                f"{format_bytes(avail, 'B')} free)",
                 'WARNING' if used_pct >= self.warning else 'INFO'))
 
         for key, metric in (('paths', 'store_paths'), ('roots', 'gc_roots')):
@@ -411,7 +411,7 @@ class NixGc(Plugin):
             if stale:
                 acc.escalate(self.stale_status)
             yielded = state.get('freed_bytes')
-            detail = (f", freeing {format_bytes(yielded / 1024 ** 3)} "
+            detail = (f", freeing {format_bytes(yielded, 'B')} "
                       f"across {state.get('deleted') or 0:,} paths" if yielded is not None else '')
             logs.append((
                 f"Last collected {format_age(age)}{detail}" + (
@@ -580,7 +580,7 @@ class NixGc(Plugin):
         freed = state.get('freed_bytes')
         if freed is None:
             return '--'
-        return f"{format_bytes(freed / 1024 ** 3)} · {state.get('deleted') or 0:,} paths"
+        return f"{format_bytes(freed, 'B')} · {state.get('deleted') or 0:,} paths"
 
     @property
     def _profile_rows(self) -> List[Dict[str, str]]:

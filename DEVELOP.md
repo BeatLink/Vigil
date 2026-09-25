@@ -637,7 +637,15 @@ Format/color/predicate functions are referenced by name from module registries
 `ENABLED_PREDICATES`) — the shared vocabulary every plugin can use — or passed
 as the callable itself for a one-off transform (`spec.resolve()` accepts
 either). Name-keyed entries keep the shared parts of a spec serializable; a
-plugin-local method needs no registration ceremony.
+plugin-local method needs no registration ceremony. A plugin registers a name of
+its own only to publish a rule other plugins may reuse, never to hand one to its
+own spec — a card's own thresholds go in the spec as
+`'color': {'warning': self.warning, 'threshold': self.threshold}`.
+
+`core/ui/spec.py`'s module docstring is the author-facing reference for all of
+this: every top-level `UI_SPEC` key, every card/repeat/table/dialog field, and a
+table of each shared formatter and color rule with an example of what it renders.
+Read it rather than the renderer when writing a new spec.
 
 `core/ui/layout.py` lets `config.yaml` override a plugin's default widget
 arrangement two ways: replacing the row structure entirely, or per-widget
@@ -676,7 +684,10 @@ otherwise always the transport's, so labels match what was collected.
 helpers (`parse_duration`, `format_duration`, `format_bytes`, `level_for`), split
 out so they're reusable without dragging in the rest of `plugin_base.py`.
 `parse_duration` accepts plain numbers or strings like `'1w'`, `'7d'`,
-`'2h30m'`, `'30s'`, including compound forms like `'1d12h'`.
+`'2h30m'`, `'30s'`, including compound forms like `'1d12h'`. `format_bytes` reads
+its value in GB by default and takes a unit for the rest — `format_bytes(n, 'B')`
+for a raw byte count — so a caller never divides before formatting, and it is the
+only byte formatter: the `bytes_gb` UI formatter is a thin wrapper on it.
 
 `plugins/base/signal_plugin.py` holds what the single-signal monitors (`cpu`,
 `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`,
