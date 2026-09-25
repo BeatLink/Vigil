@@ -1180,6 +1180,7 @@ class Borg(Plugin):
                 'run_action_id': 'run_backup', 'run_label': 'Run Backup', 'run_icon': 'play_arrow',
                 'cancel_label': 'Cancel', 'cancel_icon': 'stop',
                 'enabled_if': lambda p: bool(p.source_paths),
+                'disabled_text': 'Run Backup needs source_paths — the other jobs still run from here',
                 'history_limit': 10,
             },
             'events': {'title': 'EVENTS', 'limit': 100, 'full_height': True},

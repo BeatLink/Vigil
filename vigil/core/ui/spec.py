@@ -64,8 +64,9 @@ dialogs         ``{dialog_name: dialog spec}`` — opened by kind ``'dialog'`` b
                 row actions; see "Dialog specs".
 job_panel       ``{'widget' (default 'jobs'), 'title', 'run_label', 'run_icon',
                 'cancel_label', 'cancel_icon', 'enabled_if' (ENABLED_PREDICATES),
-                'run_action_id', 'history_limit'}`` — a run/cancel panel with history for
-                one long-running job.
+                'disabled_text', 'run_action_id', 'history_limit'}`` — a run/cancel panel
+                with history for one long-running job; ``disabled_text`` replaces the
+                default notice shown while ``enabled_if`` is false.
 
 ``generic_render(context='inline')`` renders the same spec inside another page with the
 host card hidden; a group plugin passes ``layout=`` a view onto its own grid instead.

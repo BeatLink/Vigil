@@ -636,7 +636,7 @@ def render_job_panel(plugin, spec: dict):
                 progress_label.text = (job or {}).get('progress') or 'Starting...'
                 color = STATUS_COLORS['online']
             elif not enabled:
-                progress_label.text = 'Not available — check monitor configuration'
+                progress_label.text = spec.get('disabled_text', 'Not available — check monitor configuration')
                 color = STATUS_COLORS['unavailable']
             else:
                 progress_label.text = ''

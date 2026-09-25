@@ -149,6 +149,7 @@ class JobPanelSpec(TypedDict, total=False):
     cancel_label: str
     cancel_icon: str
     enabled_if: str                # ENABLED_PREDICATES key
+    disabled_text: str             # shown while enabled_if is false; default names the config
     run_action_id: str
     history_limit: int
 

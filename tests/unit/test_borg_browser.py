@@ -135,3 +135,17 @@ class TestBrowser:
         user.find('Cancel').click()
         await asyncio.sleep(0.05)
         assert not any(call[0] == 'restore_archive' for call in plugin.calls)
+
+
+class TestJobPanel:
+    async def test_without_source_paths_it_says_the_other_jobs_still_run(self, user: User, plugin, monkeypatch):
+        monkeypatch.setattr('vigil.core.ui.model.schedule_callback', lambda callback, run_now=True: callback())
+
+        @ui.page('/jobs')
+        def _page():
+            from vigil.core.ui.components import render_job_panel
+            render_job_panel(plugin, plugin.UI_SPEC['job_panel'])
+
+        await user.open('/jobs')
+        await user.should_see('Run Backup needs source_paths')
+        await user.should_not_see('Not available')
