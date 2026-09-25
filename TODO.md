@@ -19,9 +19,8 @@ it is the one architectural change Vigil has deliberately deferred.
 
 ### 1a. New monitor types
 
-- [ ] **Battery / UPS** — LNXlink `battery` tracks level and charging state for every connected
-      battery. Vigil has no equivalent. Relevant for laptop-as-server nodes and, via `upower`/`apcupsd`/
-      `nut`, for UPS monitoring — arguably the single most requested homelab monitor Vigil lacks.
+- [ ] **Battery** — LNXlink `battery` tracks level and charging state for every connected
+      battery. Vigil has no equivalent. Relevant for laptop-as-server nodes.
       SSH-collectable from `/sys/class/power_supply/*`.
 - [ ] **Pending package updates** — LNXlink `sys_updates` counts available packages and flags
       security updates. Vigil can approximate this with a `command` plugin, but a first-class type
@@ -184,7 +183,7 @@ Device-sync features with no server-monitoring analogue: `clipboard`, `contacts`
 Highest leverage, in order:
 
 1. Config hot-reload (§1d) — removes the restart-to-reconfigure penalty that every other item makes worse.
-2. Battery/UPS monitor (§1a) — the clearest missing monitor type, confirmed by both projects.
+2. Battery monitor (§1a) — the clearest missing monitor type, confirmed by both projects.
 3. Host power actions + Wake-on-LAN (§1c) — WoL in particular is something neither comparison project
    can do and Vigil's central, agentless position makes natural.
 4. MQTT/HA export (§1d) — already on the roadmap; delivers LNXlink's entire integration value
