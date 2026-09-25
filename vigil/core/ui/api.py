@@ -39,6 +39,19 @@ def register_api(app: Any, engine: EngineLike) -> None:
     def health():
         return JSONResponse({'status': 'ok'})
 
+    @app.get('/api/summary')
+    def summary():
+        """Counts of leaf monitors by status, for a dashboard tile that cannot aggregate a list itself."""
+        statuses = db.latest_statuses()
+        counts = {'online': 0, 'warning': 0, 'failed': 0, 'offline': 0, 'unavailable': 0}
+        for p in _flatten(engine.plugins):
+            if p.children:
+                continue
+            state = statuses.get(p.id, 'unavailable')
+            counts[state] = counts.get(state, 0) + 1
+        total = sum(counts.values())
+        return JSONResponse({'total': total, **counts, 'unhealthy': total - counts['online']})
+
     @app.get('/api/monitors')
     def monitors():
         return JSONResponse(_monitor_summary(db.latest_statuses()))
