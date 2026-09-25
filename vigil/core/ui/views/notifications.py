@@ -14,6 +14,10 @@ def render_mute_button(engine: EngineLike, plugin: Any) -> None:
     if not notifications.channels:
         return
 
+    window = notifications.maintenance_for(plugin.id)
+    if window is not None:
+        action_button(f'In maintenance: {window}', icon='construction').props('disable')
+
     @ui.refreshable
     def button() -> None:
         muter = notifications.muted_by(plugin.id)
@@ -73,6 +77,17 @@ def open_notifications_dialog(engine: EngineLike) -> None:
                     ui.label(channel.TYPE).classes('halon-caption')
                 action_button('Send test', on_click=lambda c=channel_id: send_test(c),
                               icon='send', weight='flat').mark(f'test-{channel_id}')
+        if notifications.windows:
+            ui.separator().classes('my-2')
+            ui.label('Maintenance').classes('halon-label')
+            active = notifications.active_windows()
+            for window in notifications.windows:
+                with ui.row().classes('w-full items-center justify-between gap-2'):
+                    with ui.column().classes('gap-0'):
+                        ui.label(window.name)
+                        ui.label(window.describe()).classes('halon-caption')
+                    if window in active:
+                        ui.label('Active now').classes('halon-caption')
         ui.separator().classes('my-2')
         ui.label('Muted').classes('halon-label')
         muted_list()

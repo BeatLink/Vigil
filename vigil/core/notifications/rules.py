@@ -160,6 +160,13 @@ class Tracker:
         state = self._states.get(plugin_id)
         return bool(state and state.alerting)
 
+    def problem(self, plugin_id: str) -> Optional[Alert]:
+        """The problem a monitor has now, as an announcement, or None."""
+        state = self._states.get(plugin_id)
+        if not (state and state.alerting):
+            return None
+        return Alert(PROBLEM, state.status.value, state.since)
+
     def flapping(self, plugin_id: str) -> bool:
         """Whether the monitor is flapping, with its notifications held until it settles."""
         state = self._states.get(plugin_id)

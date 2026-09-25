@@ -8,12 +8,14 @@ a reminder while it lasts, or its recovery. See docs/notifications.md.
 import asyncio
 import logging
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Mapping, Optional, Set
 from urllib.parse import quote
 
 from vigil.core.notifications.channels import Channel, DesktopChannel, Message, digest
 from vigil.core.notifications.http import NtfyChannel, WebhookChannel
 from vigil.core.notifications.mail import AppriseChannel, SmtpChannel
+from vigil.core.notifications.maintenance import Window, parse_windows
 from vigil.core.notifications.rules import (
     FLAPPING, PROBLEM, RECOVERED, SETTLED, Alert, Tracker, resolve_rules,
 )
@@ -69,6 +71,8 @@ class NotificationEngine:
         self.channels: Dict[str, Channel] = build_channels(settings.get('channels') or [], agents)
         self._defaults = settings.get('defaults') or {}
         self.group_window = parse_duration(settings.get('group_window', 0) or 0)
+        self.windows: List[Window] = parse_windows(settings.get('maintenance') or [])
+        self._held: Set[str] = set()
         self._pending: Dict[str, List[Message]] = {}
         self._monitors: Dict[str, Any] = {}
         self._parents: Dict[str, str] = {}
@@ -133,6 +137,28 @@ class NotificationEngine:
             current = self._parents.get(current)
         return None
 
+    def _lineage(self, plugin_id: str) -> List[str]:
+        """A monitor's id followed by the ids of the groups it sits in."""
+        ids, current = [], plugin_id
+        while current is not None:
+            ids.append(current)
+            current = self._parents.get(current)
+        return ids
+
+    def maintenance_for(self, plugin_id: str, now: Optional[datetime] = None) -> Optional[str]:
+        """The name of the maintenance window covering this monitor right now, or None."""
+        now = now or datetime.now()
+        lineage = self._lineage(plugin_id)
+        for window in self.windows:
+            if window.covers(lineage) and window.active(now):
+                return window.name
+        return None
+
+    def active_windows(self, now: Optional[datetime] = None) -> List[Window]:
+        """The maintenance windows in effect right now."""
+        now = now or datetime.now()
+        return [w for w in self.windows if w.active(now)]
+
     def set_muted(self, plugin_id: str, muted: bool) -> None:
         """Mute or unmute one monitor, or a group and everything beneath it."""
         self._db.set_setting(MUTE_SETTING.format(plugin_id), "1" if muted else "0")
@@ -144,9 +170,17 @@ class NotificationEngine:
 
     def _observe(self, plugin_id: str, status: str, now: float) -> None:
         alert = self._tracker.observe(plugin_id, status, now)
+        in_maintenance = self.maintenance_for(plugin_id, datetime.fromtimestamp(now)) is not None
+        if alert is None and plugin_id in self._held and not in_maintenance:
+            # A problem held back by a maintenance window is announced once the window is over.
+            self._held.discard(plugin_id)
+            if plugin_id not in self._announced and self.muted_by(plugin_id) is None:
+                alert = self._tracker.problem(plugin_id)
         if alert is None:
             return
-        muted = self.muted_by(plugin_id) is not None
+        if in_maintenance and alert.kind != RECOVERED:
+            self._held.add(plugin_id)
+        muted = self.muted_by(plugin_id) is not None or in_maintenance
         channels = [self.channels[c] for c in self._tracker.rules[plugin_id].channels]
         if alert.kind == RECOVERED:
             announced = plugin_id in self._announced

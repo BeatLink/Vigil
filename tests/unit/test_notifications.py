@@ -296,6 +296,43 @@ class TestEngine:
         await self._set(db_manager, 'online')
         assert self._titles(engine) == ['Nas recovered']
 
+    def _window_now(self, engine, **extra):
+        from datetime import datetime, timedelta
+        from vigil.core.notifications.maintenance import window
+        now = datetime.now()
+        engine.windows = [window({'name': 'Upgrades', 'start': (now - timedelta(hours=1)).isoformat(),
+                                  'end': (now + timedelta(hours=1)).isoformat(), **extra})]
+
+    async def test_a_problem_during_maintenance_is_announced_when_it_ends(self, engine, db_manager):
+        engine.start([_plugin('nas')])
+        self._window_now(engine)
+        assert engine.maintenance_for('nas') == 'Upgrades'
+        await self._set(db_manager, 'failed', 'failed')
+        assert self._titles(engine) == []
+        engine.windows = []
+        await self._set(db_manager, 'failed')
+        assert self._titles(engine) == ['Nas is failed']
+        await self._set(db_manager, 'online')
+        assert self._titles(engine) == ['Nas is failed', 'Nas recovered']
+
+    async def test_a_problem_that_ends_inside_the_window_is_never_sent(self, engine, db_manager):
+        engine.start([_plugin('nas')])
+        self._window_now(engine)
+        await self._set(db_manager, 'failed', 'online')
+        engine.windows = []
+        await self._set(db_manager, 'online')
+        assert self._titles(engine) == []
+
+    async def test_a_window_on_a_group_covers_its_monitors_only(self, engine, db_manager):
+        engine.start([_plugin('storage', [_plugin('nas')], type_='group'), _plugin('web')])
+        self._window_now(engine, monitors=['storage'])
+        assert engine.maintenance_for('nas') == 'Upgrades'
+        assert engine.maintenance_for('web') is None
+        db_manager.insert_status('nas', 'failed')
+        db_manager.insert_status('web', 'failed')
+        await _drain()
+        assert self._titles(engine) == ['Web is failed']
+
     async def test_flapping_and_settling_messages(self, engine, db_manager):
         from vigil.core.notifications.rules import Rule
         engine.start([_plugin('nas')])

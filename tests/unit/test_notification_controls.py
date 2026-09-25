@@ -88,6 +88,32 @@ class TestMuteButton:
         await user.should_not_see('Mute')
 
 
+class TestMaintenance:
+    def _window(self, notifications, **extra):
+        from datetime import datetime, timedelta
+        from vigil.core.notifications.maintenance import window
+        now = datetime.now()
+        notifications.windows = [window({'name': 'Upgrades', 'start': (now - timedelta(hours=1)).isoformat(),
+                                         'end': (now + timedelta(hours=1)).isoformat(), **extra}),
+                                 window({'name': 'Nightly', 'from': '03:00', 'to': '03:01',
+                                         'days': ['mon'], 'monitors': ['nobody']})]
+
+    async def test_a_monitor_page_says_it_is_in_maintenance(self, user: User, notifications, pages):
+        await _started(notifications)
+        self._window(notifications)
+        await user.open('/nas')
+        await user.should_see('In maintenance: Upgrades')
+        await user.should_see('Mute')
+
+    async def test_the_dialog_lists_windows_and_which_are_active(self, user: User, notifications, pages):
+        await _started(notifications)
+        self._window(notifications)
+        await user.open('/dialog')
+        await user.should_see('Upgrades')
+        await user.should_see('Mon 03:00-03:01')
+        assert len(user.find('Active now').elements) == 1
+
+
 class TestDialog:
     async def test_lists_channels_and_sends_a_test(self, user: User, notifications, pages):
         await _started(notifications)

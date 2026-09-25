@@ -111,6 +111,33 @@ A mute is saved, so it survives a restart. A failure that happens while a monito
 announced, and neither is its recovery, even if you unmute first. Unmuting while a monitor is
 still failing does not send a notification.
 
+## Maintenance windows
+
+A maintenance window holds back problem notifications for chosen monitors at planned times, such
+as nightly upgrades or a one-off migration. Times are the Vigil server's local time.
+
+```yaml
+notifications:
+  maintenance:
+    - name: Nightly upgrades
+      monitors: [heimdall-host]      # monitor or group ids; leave out to cover every monitor
+      days: [sun]                    # weekday names; leave out for every day
+      from: "03:00"
+      to: "05:00"                    # may run past midnight, and then belongs to the day it started
+    - name: NAS migration
+      start: 2026-10-01T09:00        # a one-off window
+      end: 2026-10-01T17:00
+```
+
+During a window, covered monitors send no problem notifications, and a group id covers everything
+in the group. Unlike a mute, a window does not hide what it leaves behind: a problem that began
+during the window and is still there when it ends is announced then. A problem that clears inside
+the window is never sent. A notification already on screen from before the window still clears
+when its monitor recovers.
+
+A monitor's page says when a window covers it, and the bell dialog lists every window with the
+ones in effect marked.
+
 ## Monitor links
 
 Every monitor has its own dashboard address, `/monitor/<id>`, and the events feed is at

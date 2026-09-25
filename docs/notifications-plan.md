@@ -80,4 +80,4 @@ of one per monitor.
    slack, gotify, pushover, matrix, home-assistant and signal built in.
 4. **On-call and flapping:** flapping detection and grouping are done. Still to do: pagerduty and
    opsgenie, using the monitor id as the alert id so a recovery closes the alert. Maintenance
-   windows are next.
+   windows are done.
