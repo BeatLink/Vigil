@@ -345,11 +345,12 @@ def render_buttons(plugin, button_specs: list):
                     if s.get('kind') == 'dialog':
                         await open_dialog_impl(plugin, s['dialog'])
                         return
-                    success, _ = await plugin.run_action(s['id'])
+                    if s.get('confirm') and not await confirmed(_substitute(s['confirm'], None, plugin)):
+                        return
+                    success, content = await plugin.run_action(s['id'])
                     if s.get('notify', True):
-                        label = s.get('label', s['id'])
                         ui.notify(
-                            f'{label} {"succeeded" if success else "failed"}',
+                            _outcome_notice(s.get('label', s['id']), success, content),
                             type='positive' if success else 'negative',
                         )
 
@@ -359,6 +360,23 @@ def render_buttons(plugin, button_specs: list):
                 danger=spec.get('color') in ('negative', 'danger'),
                 on_click=lambda e, c=_click: asyncio.create_task(c(e)),
             )
+
+
+async def confirmed(text: str) -> bool:
+    """Asks the user to confirm `text` and resolves True only on an explicit yes."""
+    with ui.dialog() as dialog, card('w-full'):
+        ui.label(text).classes('mb-4').style('white-space: pre-wrap;')
+        with ui.row().classes('justify-end gap-2'):
+            action_button('Cancel', on_click=lambda: dialog.submit(False), icon=None, weight='flat')
+            action_button('Confirm', on_click=lambda: dialog.submit(True), icon=None, weight='filled', danger=True)
+    return bool(await dialog)
+
+
+def _outcome_notice(label: str, success: bool, content: str) -> str:
+    """What to tell the user after an action: its own short message when it gave one, else whether it worked."""
+    if content and len(content) <= 200:
+        return content
+    return f'{label} {"succeeded" if success else "failed"}'
 
 
 def _substitute(template: str, row: Optional[dict], plugin) -> str:
@@ -515,13 +533,15 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
         if action.get('kind') == 'dialog':
             await open_dialog_impl(plugin, action['dialog'], row=row)
             return
+        if action.get('confirm') and not await confirmed(_substitute(action['confirm'], row, plugin)):
+            return
         params = {kwarg: row.get(field) for kwarg, field in action.get('params', {}).items()}
         action_id = action.get('action_id', action['id'])
-        success, _ = await plugin.run_action(action_id, **params)
+        success, content = await plugin.run_action(action_id, **params)
         if action.get('notify', True):
             label = action.get('tooltip', action_id).replace('_', ' ').title()
             ui.notify(
-                f'{label} {"succeeded" if success else "failed"}',
+                _outcome_notice(label, success, content),
                 type='positive' if success else 'negative',
             )
 

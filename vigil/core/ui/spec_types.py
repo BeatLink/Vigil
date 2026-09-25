@@ -91,6 +91,7 @@ class RowActionSpec(TypedDict, total=False):
     action_id: str                 # defaults to `id` when omitted
     params: Dict[str, str]         # kwarg name -> row field name
     notify: bool                   # default True
+    confirm: str                   # asks the user first; {row[field]} and {plugin.attr} substituted
 
 
 class TableSpec(TypedDict, total=False):
@@ -116,6 +117,7 @@ class ButtonSpec(TypedDict, total=False):
     kind: str                      # 'dialog' routes to `dialog`; anything else dispatches run_action(id)
     dialog: str
     notify: bool                   # default True
+    confirm: str                   # asks the user first; {plugin.attr} substituted
 
 
 class DialogSpec(TypedDict, total=False):

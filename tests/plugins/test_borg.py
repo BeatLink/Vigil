@@ -1036,24 +1036,86 @@ class TestPrunePreview:
         assert "locked" in outcome.metadata['content']
 
 
+LISTING = "\n".join([
+    "d\t0\t2026-09-20T10:00:00.000000\tStorage/System/etc",
+    "-\t2048\t2026-09-20T10:01:00.000000\tStorage/System/notes.txt",
+    "d\t\t\tStorage/System/var",
+])
+
+
+def _run_filter(member: str, lines: str, tmp_path) -> str:
+    """Runs the children filter the browse command uses over a borg listing, in a real shell."""
+    import subprocess
+    from vigil.plugins.borg.parsing import _children_filter
+    listing = tmp_path / "listing"
+    listing.write_text(lines + "\n")
+    return subprocess.run(["sh", "-c", f"{_children_filter(member)} {listing}"],
+                          capture_output=True, text=True, check=True).stdout
+
+
 class TestBrowse:
-    async def test_lists_one_level_below_the_path(self, plugin):
+    async def test_lists_the_path_through_the_children_filter(self, plugin):
         cmd = plugin.plan_action("browse_archive", archive="a1", path="/Storage/System/").command
         assert "::a1 Storage/System" in cmd.replace("'", "")
-        assert "re:^Storage/System/[^/]+/." in cmd
+        assert "awk -v p=Storage/System/" in cmd
 
-    async def test_top_level_when_no_path(self, plugin):
-        assert "re:^[^/]+/." in plugin.plan_action("browse_archive", archive="a1", path="").command
+    async def test_top_level_lists_the_whole_archive(self, plugin):
+        cmd = plugin.plan_action("browse_archive", archive="a1", path="").command
+        assert "::a1 --format" not in cmd and "awk -v p=''" in cmd
+
+    async def test_filter_keeps_direct_children_only(self, tmp_path):
+        out = _run_filter("Storage", "\n".join([
+            "d\t0\t2026-09-20T10:00:00\tStorage",
+            "-\t5\t2026-09-20T10:00:00\tStorage/a.txt",
+            "-\t5\t2026-09-20T10:00:00\tStorage/deep/b.txt",
+        ]), tmp_path)
+        assert out.splitlines() == ["-\t5\t2026-09-20T10:00:00\tStorage/a.txt", "d\t\t\tStorage/deep"]
+
+    async def test_filter_makes_up_parents_borg_never_stored(self, tmp_path):
+        out = _run_filter("", "\n".join([
+            "-\t5\t2026-09-20T10:00:00\tStorage/System/a",
+            "-\t5\t2026-09-20T10:00:00\tStorage/System/b",
+            "-\t5\t2026-09-20T10:00:00\thome/x",
+        ]), tmp_path)
+        assert out.splitlines() == ["d\t\t\tStorage", "d\t\t\thome"]
+
+    async def test_filter_keeps_a_path_with_a_tab(self, tmp_path):
+        out = _run_filter("", "-\t5\t2026-09-20T10:00:00\ta\tb", tmp_path)
+        assert out.splitlines() == ["-\t5\t2026-09-20T10:00:00\ta\tb"]
+
+    async def test_listing_is_parsed_and_cached(self, plugin):
+        outcome = plugin.interpret_action("browse_archive", _framed(plugin, CmdResult(0, LISTING, "")),
+                                          archive="a1", path="Storage/System")
+        assert outcome.success is True
+        entries = plugin.listing("a1", "/Storage/System/")
+        assert [e['name'] for e in entries] == ["etc", "var", "notes.txt"]
+        assert entries[2]['size'] == 2048 and entries[2]['mtime'] == "2026-09-20 10:01"
+
+    async def test_a_cached_folder_is_served_without_borg(self, plugin):
+        plugin.interpret_action("browse_archive", _framed(plugin, CmdResult(0, LISTING, "")),
+                                archive="a1", path="Storage/System")
+        outcome = plugin.plan_action("browse_archive", archive="a1", path="Storage/System")
+        assert outcome.success is True and "3 entries" in outcome.metadata['content']
+
+    async def test_a_real_item_beats_a_made_up_folder(self):
+        from vigil.plugins.borg.parsing import _parse_listing
+        entries = _parse_listing("d\t\t\tx/etc\nd\t0\t2026-09-20T10:00:00\tx/etc")
+        assert len(entries) == 1 and entries[0]['mtime'] == "2026-09-20 10:00"
 
     async def test_output_is_capped(self, make_plugin):
         p = make_plugin(Borg, {**BASE_CFG, "browse_limit": 2})
         assert "head -n 3" in p.plan_action("browse_archive", archive="a1", path="").command
-        outcome = p.interpret_action("browse_archive", _framed(p, CmdResult(0, "a\nb\nc", "")), archive="a1", path="")
+        lines = "\n".join(f"-\t1\t\t{n}" for n in "abc")
+        outcome = p.interpret_action("browse_archive", _framed(p, CmdResult(0, lines, "")), archive="a1", path="")
         assert "first 2 entries" in outcome.metadata['content']
-        assert "\nc" not in outcome.metadata['content']
+        assert "\nc " not in outcome.metadata['content']
 
     async def test_climbing_paths_are_refused(self, plugin):
         assert plugin.plan_action("browse_archive", archive="a1", path="x/../../etc").success is False
+
+    async def test_a_failed_listing_is_not_cached(self, plugin):
+        plugin.interpret_action("browse_archive", _framed(plugin, CmdResult(2, "", "boom")), archive="a1", path="")
+        assert plugin.listing("a1", "") is None
 
 
 RESTORE_CFG = {**BASE_CFG, "restore_dir": "/var/tmp/r", "require_sudo": True}
@@ -1083,6 +1145,15 @@ class TestRestore:
         p.storage.apply(p.interpret_action("restore_archive", CmdResult(0, "77\n", "")))
         assert p.plan_action("restore_archive", archive="a1", path="etc").success is False
 
+    async def test_restores_several_ticked_paths_at_once(self, make_plugin):
+        p = make_plugin(Borg, RESTORE_CFG)
+        plan = p.plan_action("restore_archive", archive="a1", paths=["/etc/x", "home/y"])
+        assert "::a1 etc/x home/y" in plan.command.replace("'", "")
+
+    async def test_one_climbing_path_refuses_the_lot(self, make_plugin):
+        p = make_plugin(Borg, RESTORE_CFG)
+        assert p.plan_action("restore_archive", archive="a1", paths=["etc", "../x"]).success is False
+
     async def test_extract_progress_becomes_the_summary(self):
         line = json.dumps({"type": "progress_percent", "message": " 50.0% Extracting: etc/x", "finished": False})
         assert Borg._progress_from_lines([line]) == "50.0% Extracting: etc/x"
@@ -1096,3 +1167,98 @@ class TestBackupSummary:
         assert summary['fresh'] is True
         assert summary['restore_check'] is None
         assert summary['repo_checks'] is None
+
+
+def _listed(plugin, run_cycle, *names):
+    """Runs a poll that lists these archives, newest first."""
+    now = int(time.time())
+    archives = [{"name": n, "start": _iso(now - 3600 * (i + 1))} for i, n in enumerate(names)]
+    _collect(plugin, run_cycle, CmdResult(0, json.dumps({"archives": archives}), ""))
+
+
+DELETE_CFG = {**BASE_CFG, "allow_delete": True, "keep_daily": 7}
+
+
+class TestMaintenance:
+    @pytest.mark.parametrize("action_id, kind, args", [
+        ("check_repo", "check", "check --progress"),
+        ("compact_repo", "compact", "compact --progress"),
+        ("prune_repo", "prune", "prune --list --stats --glob-archives"),
+    ])
+    async def test_runs_as_a_detached_job(self, make_plugin, action_id, kind, args):
+        p = make_plugin(Borg, DELETE_CFG)
+        plan = p.plan_action(action_id)
+        assert args in plan.command and "--log-json" in plan.command
+        p.storage.apply(p.interpret_action(action_id, CmdResult(0, "91\n", "")))
+        assert p.jobs.running()['kind'] == kind
+
+    async def test_prune_applies_the_retention_policy(self, make_plugin):
+        cmd = make_plugin(Borg, DELETE_CFG).plan_action("prune_repo").command
+        assert "--keep-daily 7" in cmd and "--dry-run" not in cmd
+
+    async def test_verify_data_is_opt_in(self, make_plugin):
+        assert "--verify-data" not in make_plugin(Borg, BASE_CFG).plan_action("check_repo").command
+        assert "--verify-data" in make_plugin(Borg, {**BASE_CFG, "check_verify_data": True}).plan_action("check_repo").command
+
+    @pytest.mark.parametrize("action_id", ["prune_repo", "delete_archive", "break_lock"])
+    async def test_destructive_actions_are_off_by_default(self, make_plugin, action_id):
+        outcome = make_plugin(Borg, {**BASE_CFG, "keep_daily": 7}).plan_action(action_id, archive="a1")
+        assert outcome.success is False and "allow_delete" in outcome.metadata['content']
+
+    async def test_one_job_at_a_time(self, make_plugin):
+        p = make_plugin(Borg, DELETE_CFG)
+        p.plan_action("check_repo")
+        p.storage.apply(p.interpret_action("check_repo", CmdResult(0, "91\n", "")))
+        assert p.plan_action("compact_repo").success is False
+        assert p.plan_action("break_lock").success is False
+
+    async def test_break_lock_runs_directly(self, make_plugin):
+        p = make_plugin(Borg, DELETE_CFG)
+        assert "break-lock" in p.plan_action("break_lock").command
+        assert p.interpret_action("break_lock", _framed(p, CmdResult(0, "", ""))).success is True
+
+    async def test_check_progress_messages_become_the_summary(self):
+        line = json.dumps({"type": "progress_message", "message": "Checking segments 12.0%", "finished": False})
+        assert Borg._progress_from_lines([line]) == "Checking segments 12.0%"
+
+
+class TestDelete:
+    async def test_deletes_a_listed_archive(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, DELETE_CFG)
+        _listed(p, run_cycle, "b2", "b1")
+        plan = p.plan_action("delete_archive", archive="b1")
+        assert "delete --stats" in plan.command and "::b1" in plan.command
+        outcome = p.interpret_action("delete_archive", CmdResult(0, "5\n", ""))
+        assert "for b1" in outcome.metadata['content']
+
+    async def test_an_unlisted_archive_is_refused(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, DELETE_CFG)
+        _listed(p, run_cycle, "b2")
+        assert p.plan_action("delete_archive", archive="nope").success is False
+
+    async def test_deleting_forgets_its_listings(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, DELETE_CFG)
+        _listed(p, run_cycle, "b2", "b1")
+        p.interpret_action("browse_archive", _framed(p, CmdResult(0, LISTING, "")), archive="b1", path="")
+        p.plan_action("delete_archive", archive="b1")
+        assert p.listing("b1", "") is None
+
+
+class TestDiff:
+    async def test_compares_with_the_previous_archive(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, BASE_CFG)
+        _listed(p, run_cycle, "b3", "b2", "b1")
+        cmd = p.plan_action("diff_archive", archive="b2").command.replace("'", "")
+        assert "diff" in cmd and "::b1 b2" in cmd
+
+    async def test_the_oldest_archive_has_nothing_to_compare(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, BASE_CFG)
+        _listed(p, run_cycle, "b2", "b1")
+        assert p.plan_action("diff_archive", archive="b1").success is False
+
+    async def test_shows_the_changes(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, BASE_CFG)
+        _listed(p, run_cycle, "b2", "b1")
+        out = "added       1.20 kB etc/new\nremoved     0 B etc/old"
+        content = p.interpret_action("diff_archive", _framed(p, CmdResult(0, out, "")), archive="b2").metadata['content']
+        assert content.startswith("Changes from b1 to b2: 2") and "etc/new" in content

@@ -44,10 +44,15 @@ STARTUP_JITTER_SECONDS = 3.0
 _PRUNE_CHECK_SECONDS = 60
 
 
+def _defined_in(cls: type, module_path: str) -> bool:
+    """True for a class defined in the plugin module itself or, for a plugin package, in one of its own submodules."""
+    return cls.__module__ == module_path or cls.__module__.startswith(module_path + '.')
+
+
 def _plugin_class(module, module_path: str) -> type:
     """The Plugin subclass a plugin module defines, ignoring the bases it imports."""
     candidates = [obj for _, obj in inspect.getmembers(module, inspect.isclass)
-                  if issubclass(obj, Plugin) and obj.__module__ == module_path
+                  if issubclass(obj, Plugin) and _defined_in(obj, module_path)
                   and not inspect.isabstract(obj)]
     if not candidates:
         raise ValueError(f"{module_path} defines no concrete Plugin subclass")

@@ -13,15 +13,16 @@ borg binary, a repo the SSH user cannot read, a lock borg gave up waiting for,
 or unparseable output is unavailable. This monitor has no warning tier.
 Optional extras: a restore canary (canary_path, canary_interval) extracted from
 the newest archive and compared with the live file; check freshness
-(check_units, check_max_age) read from those units' journal; and actions to
-preview a prune (keep_*, prune_match), browse an archive (browse_limit) and
-restore a path from one into restore_dir."""
+(check_units, check_max_age) read from those units' journal; actions to
+preview a prune (keep_*, prune_match), list an archive's folders for the
+browser (browse_limit), restore paths into restore_dir, diff an archive with
+the one before it, and run check, compact, prune and archive deletion as
+detached jobs, the destructive ones only with allow_delete."""
 
 import json
-import re
 import shlex
 import time
-from dataclasses import dataclass, field
+from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -31,27 +32,27 @@ from vigil.core.connectors import ssh_connector as detached
 from vigil.plugins.base.plugin_helpers import (
     KILL_GRACE_SECONDS, format_age, format_duration, parse_duration,
 )
+from vigil.plugins.borg.checks import (
+    _canary_verdict, _check_unit_script, _merge_unit, _observed_unit, _parse_check_units,
+)
+from vigil.plugins.borg.parsing import (
+    RepoView, _LIST_FORMAT, _PRUNE_LINE, _children_filter, _decode_json, _format_size, _parse_listing,
+)
+from vigil.plugins.borg.shell import (
+    _CUT_SHORT, _POLL_BASE_DIR_VAR, _POLL_DEADLINE_VAR, _POLL_LEFT_FN, _POLL_RC_VAR,
+    _archive_member, _as_list, _failure_hint, _frame_line, _list_unavailable, _redact, _split_poll,
+)
 
-
-_POLL_BASE_DIR_VAR = "__vigil_poll_base"
-_POLL_DEADLINE_VAR = "__vigil_poll_end"
-_POLL_LEFT_FN = "__vigil_poll_left"
-_POLL_RC_VAR = "__vigil_poll_rc"
-_FRAME = "__VIGIL_BORG__"
-_CUT_SHORT = "no output: the poll ended before this call ran"
 
 _KEEP_OPTIONS = ('keep_within', 'keep_last', 'keep_secondly', 'keep_minutely', 'keep_hourly',
                  'keep_daily', 'keep_weekly', 'keep_monthly', 'keep_yearly')
 
-# systemd's own lines for a unit run; borgmatic also logs messages starting "Finished", so these are read from PID 1 only.
-_UNIT_FINISHED, _UNIT_FAILED = 'Finished ', 'Failed with result'
+# Actions that start a detached job, which interpret_action records from the pid the launch prints.
+_LAUNCHED = ('run_backup', 'dry_run_backup', 'restore_archive', 'check_repo', 'compact_repo',
+             'prune_repo', 'delete_archive')
 
-# A check unit's previous run is looked for at most this far before its outcome when its start has scrolled out of the journal.
-_CHECK_RUN_WINDOW = 86400
-
-_PRUNE_LINE = re.compile(
-    r'^(?:Keeping archive \(rule: (?P<rule>[^)]+)\)|(?P<prune>Would prune)):\s+'
-    r'(?P<name>\S+)\s+(?P<date>.+?)\s+\[[0-9a-f]+\]\s*$')
+# How many listed folders the browser keeps before forgetting the least recently used.
+_LISTING_CACHE = 256
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'repo_card', 'maxage_card', 'state_card'],
@@ -59,299 +60,10 @@ _DEFAULT_LAYOUT = [
     ['canary_card', 'checks_card'],
     ['tools'],
     ['archives'],
+    ['browser'],
     ['jobs'],
     ['events'],
 ]
-
-
-def _as_list(value: Any) -> List[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    return [str(v) for v in value]
-
-
-def _format_size(size: float) -> str:
-    """Formats a raw byte count, unlike plugin_helpers.format_bytes which takes GB."""
-    for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
-        if abs(size) < 1024.0 or unit == 'TB':
-            return f"{size:.1f} {unit}" if unit != 'B' else f"{int(size)} B"
-        size /= 1024.0
-    return f"{size:.1f} TB"
-
-
-def _redact(command: str) -> str:
-    return re.sub(
-        r"(BORG_PASS(?:PHRASE|COMMAND)=)('(?:[^']|'\\'')*'|\"[^\"]*\"|\S+)",
-        r"\1*****",
-        command,
-    )
-
-
-def _frame_line(index: int, stream: str, code) -> str:
-    """The marker that separates one poll call's captured output from the next."""
-    return f"{_FRAME} {index} {stream} {code}"
-
-
-def _split_poll(result: CmdResult, count: int) -> List[CmdResult]:
-    """Splits a sequential poll's framed transcript back into one CmdResult per borg call."""
-    streams: Dict[int, Dict[str, str]] = {}
-    codes: Dict[int, int] = {}
-    key = None
-    buf: List[str] = []
-
-    def flush() -> None:
-        if key is not None:
-            streams.setdefault(key[0], {})[key[1]] = "\n".join(buf).strip()
-
-    for line in (result.stdout or "").splitlines():
-        if not line.startswith(_FRAME + " "):
-            buf.append(line)
-            continue
-        flush()
-        buf = []
-        fields = line.split()
-        try:
-            index, stream, code = int(fields[1]), fields[2], int(fields[3])
-        except (IndexError, ValueError):
-            key = None
-            continue
-        key = (index, stream)
-        codes[index] = code
-    flush()
-
-    # No frame arrived at all, so the shell or sudo failed before the first borg call and the whole transcript is that failure.
-    if not codes:
-        return [result] + [CmdResult(result.exit_code, "", result.stderr)] * (count - 1)
-
-    results = []
-    for index in range(count):
-        if index not in codes:
-            results.append(CmdResult(result.exit_code or 1, "", _CUT_SHORT))
-            continue
-        captured = streams.get(index, {})
-        results.append(CmdResult(codes[index], captured.get('out', ''), captured.get('err', '')))
-    return results
-
-
-def _failure_hint(stderr: str) -> Optional[str]:
-    text = (stderr or "").lower()
-    if "permission denied (publickey)" in text or "publickey" in text:
-        return ("Hint: borg could not authenticate to the repo server — set "
-                "`ssh_key` to a private key on that host which the borg server "
-                "authorizes (borg makes its own SSH connection, so Vigil's own "
-                "login key does not apply).")
-    if "command not found" in text:
-        return ("Hint: the borg binary is not on PATH for that user — under sudo "
-                "it must be on root's PATH too (set `borg_bin` to an absolute path).")
-    if "a password is required" in text or "sudo: a terminal is required" in text:
-        return ("Hint: sudo needs a password — grant the SSH user passwordless "
-                "sudo for borg (NOPASSWD).")
-    if "not allowed to set the following environment variables" in text:
-        return ("Hint: sudoers forbids setting BORG_PASSPHRASE — the rule needs "
-                "the SETENV tag to pass the passphrase through sudo.")
-    if "passphrase" in text or "not a valid repository" in text:
-        return ("Hint: the repo is encrypted and the passphrase was missing or "
-                "wrong — check `passphrase_file` / `passphrase_command`.")
-    if "permission denied" in text:
-        return ("Hint: the SSH user cannot read the repo — add it to the repo's "
-                "group or set `require_sudo: true`.")
-    if "does not exist" in text or "no such file" in text:
-        return "Hint: the `repo` path does not exist on that host."
-    if "failed to create/acquire the lock" in text:
-        # borg locks its local chunks cache under <base dir>/.cache/borg as well as the repo, and the two mean different things.
-        if "/.cache/borg/" in text:
-            return ("Hint: the lock is on borg's local chunks cache on this host, "
-                    "not on the repo — another borg process is using the same "
-                    "`cache_dir`. Give it a cache_dir of its own, or raise "
-                    "`lock_wait` past the time that process needs.")
-        return ("Hint: the repo is locked by another borg process — a backup may "
-                "be running.")
-    return None
-
-
-def _list_unavailable(exit_code: int, detail: str) -> bool:
-    """True when the listing could not be gathered at all, as opposed to borg reporting a repo problem."""
-    text = detail.lower()
-    # A lock borg gave up waiting for says only that something else held the repo or its cache, which leaves the archives unread rather than bad.
-    return (exit_code == -1 or "command not found" in text
-            or "permission denied" in text
-            or "failed to create/acquire the lock" in text)
-
-
-def _journal_epoch(line: str) -> Optional[int]:
-    """Read the epoch off a journalctl `-o short-unix` line."""
-    stamp = line.split(' ', 1)[0] if line else ''
-    try:
-        return int(float(stamp))
-    except ValueError:
-        return None
-
-
-def _journal_message(line: str) -> str:
-    """Strip the timestamp, host and process prefix off a journalctl line."""
-    _, _, message = line.partition(': ')
-    return (message or line).strip()[:300]
-
-
-def _archive_member(path: str) -> Optional[str]:
-    """A path as borg stores it inside an archive, or None when it could climb out of the restore dir."""
-    member = (path or '').strip().strip('/')
-    if any(part in ('..', '.') for part in member.split('/')):
-        return None
-    return member
-
-
-def _canary_verdict(extracted: CmdResult, live: CmdResult) -> Tuple[Optional[bool], str]:
-    """Pure: (True/False, detail) once the restore check reached a verdict, (None, reason) when it could not run."""
-    detail = (extracted.stderr or extracted.stdout or '').strip()
-    if extracted.exit_code != 0:
-        if 'never matched' in detail:
-            return False, "the canary is not in the newest archive — is it inside the backup set?"
-        if detail == _CUT_SHORT or _list_unavailable(extracted.exit_code, detail):
-            return None, f"could not extract the canary: {detail[:200]}"
-        return False, f"extracting the canary failed (exit {extracted.exit_code}): {detail[:200]}"
-    if live.exit_code != 0:
-        return False, f"the live canary is unreadable: {(live.stderr or live.stdout).strip()[:200]}"
-    if extracted.stdout.strip() != live.stdout.strip():
-        return False, "the restored canary differs from the live file"
-    return True, "the restored canary matches the live file"
-
-
-def _check_unit_script(units: List[str]) -> str:
-    """One brace group printing, per unit, its last success, last outcome, last start and any borgmatic command failures."""
-    journal = "journalctl -o short-unix --no-pager -q"
-    parts = []
-    for unit in units:
-        u = shlex.quote(unit)
-        parts += [
-            f'echo "unit={unit}"',
-            f"echo \"ok=$({journal} -u {u} _PID=1 -g '^{_UNIT_FINISHED}' -n 1 2>/dev/null | grep -v '^-- ' | tail -1)\"",
-            f"echo \"end=$({journal} -u {u} _PID=1 -g '^{_UNIT_FINISHED}|{_UNIT_FAILED}' -n 1 2>/dev/null | grep -v '^-- ' | tail -1)\"",
-            f"echo \"start=$({journal} -u {u} _PID=1 -g '^Starting ' -n 1 2>/dev/null | grep -v '^-- ' | tail -1)\"",
-            f"{journal} -u {u} -g 'returned non-zero exit status' -n 20 2>/dev/null | grep -v '^-- ' | sed 's/^/err=/'",
-        ]
-    return "{ " + "; ".join(parts) + "; }"
-
-
-def _parse_check_units(stdout: str) -> Dict[str, Dict[str, Any]]:
-    """Group the check script's key=value lines by unit."""
-    units: Dict[str, Dict[str, Any]] = {}
-    current = None
-    for line in (stdout or '').splitlines():
-        key, sep, value = line.partition('=')
-        if not sep:
-            continue
-        if key == 'unit':
-            current = units.setdefault(value.strip(), {'err': []})
-        elif current is not None and key == 'err':
-            current['err'].append(value.strip())
-        elif current is not None:
-            current[key] = value.strip()
-    return units
-
-
-def _observed_unit(fields: Dict[str, Any], repo: str) -> Dict[str, Any]:
-    """Pure: one unit's last success and last outcome, where a failed run that names only other repositories counts as a success for this one."""
-    ok = _journal_epoch(fields.get('ok', ''))
-    end_line = fields.get('end', '')
-    end = _journal_epoch(end_line)
-    start = _journal_epoch(fields.get('start', ''))
-    state = {'ok': ok, 'end': end, 'failed': False, 'error': None}
-    if end is None or _UNIT_FAILED not in end_line:
-        return state
-
-    since = start if start is not None and start <= end else end - _CHECK_RUN_WINDOW
-    run_errors = [e for e in fields.get('err', []) if since <= (_journal_epoch(e) or -1) <= end]
-    names_repo = re.compile(r"\s" + re.escape(repo) + r"(?:::\S*)?'")
-    ours = [e for e in run_errors if names_repo.search(e)]
-    if run_errors and not ours:
-        state['ok'] = max(ok or 0, end)
-        return state
-    state['failed'] = True
-    state['error'] = _journal_message(ours[-1]) if ours else _journal_message(end_line)
-    return state
-
-
-def _merge_unit(stored: Dict[str, Any], seen: Dict[str, Any]) -> Dict[str, Any]:
-    """Fold this poll's reading into the stored one, so a rotated journal forgets nothing already seen."""
-    merged = dict(stored)
-    oks = [v for v in (stored.get('ok'), seen.get('ok')) if v]
-    merged['ok'] = max(oks) if oks else None
-    if (seen.get('end') or 0) >= (stored.get('end') or 0):
-        merged.update(end=seen.get('end'), failed=seen.get('failed', False), error=seen.get('error'))
-    return merged
-
-
-def _parse_archive_time(value: str) -> int:
-    if not value:
-        return 0
-    text = value.strip()
-    if text.endswith('Z'):
-        text = text[:-1] + '+00:00'
-    try:
-        dt = datetime.fromisoformat(text)
-    except ValueError:
-        return 0
-    return int(dt.timestamp())
-
-
-def _decode_json(stdout: str) -> Dict[str, Any]:
-    """Decodes a borg --json payload, returning {} when it is not a JSON object."""
-    try:
-        data = json.loads(stdout)
-    except (json.JSONDecodeError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-@dataclass(frozen=True)
-class RepoView:
-    """Decoded `borg list --json` output shared by the parse helpers."""
-    valid: bool = False
-    raw_count: int = 0
-    newest_epoch: int = 0
-    archives: List[Dict[str, Any]] = field(default_factory=list)
-    info: Dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_stdout(cls, stdout: str) -> 'RepoView':
-        """Parses the payload once, returning an invalid view on malformed output."""
-        try:
-            data = json.loads(stdout)
-        except (json.JSONDecodeError, ValueError):
-            return cls()
-        if not isinstance(data, dict):
-            return cls()
-        raw = data.get('archives') or []
-        if not isinstance(raw, list):
-            return cls()
-
-        archives = []
-        for archive in raw:
-            if not isinstance(archive, dict):
-                continue
-            archives.append({
-                'name': archive.get('name') or archive.get('archive') or '?',
-                'epoch': _parse_archive_time(
-                    archive.get('start') or archive.get('time', '')
-                ),
-            })
-        archives.sort(key=lambda a: a['epoch'], reverse=True)
-        newest = max((a['epoch'] for a in archives if a['epoch'] > 0), default=0)
-
-        info = {}
-        repo = data.get('repository')
-        if isinstance(repo, dict):
-            info['location'] = repo.get('location') or ''
-            info['last_modified'] = repo.get('last_modified') or ''
-        enc = data.get('encryption')
-        if isinstance(enc, dict):
-            info['encryption'] = enc.get('mode') or ''
-
-        return cls(valid=True, raw_count=len(raw), newest_epoch=newest,
-                   archives=archives, info=info)
 
 
 class Borg(Plugin):
@@ -393,8 +105,12 @@ class Borg(Plugin):
         self.browse_limit = max(1, int(config.get('browse_limit', 2000)))
         self.retention = {key: config[key] for key in _KEEP_OPTIONS if config.get(key) not in (None, '', 0)}
         self.prune_match = config.get('prune_match', f"{self.archive_prefix}-*")
+        self.allow_delete = bool(config.get('allow_delete', False))
+        self.check_verify_data = bool(config.get('check_verify_data', False))
         self._polling_job = None
         self._poll_calls: List[str] = []
+        # Archives never change once written, so a folder listed once stays true until the archive is deleted.
+        self._listings: 'OrderedDict[Tuple[str, str], List[Dict[str, Any]]]' = OrderedDict()
 
     def _read_passphrase_file(self) -> Optional[str]:
         try:
@@ -467,8 +183,9 @@ class Borg(Plugin):
         """The poll as one command: run as separate commands the calls below would be dispatched concurrently and contend for this repo's chunks cache lock."""
         return self._sequence_command([command for _, command in self._poll_plan()])
 
-    def _sequence_command(self, calls: List[str], limits: Optional[Dict[int, int]] = None) -> str:
-        """Runs calls one after another under one deadline and frames each one's output; `limits` caps a call's stdout at that many lines."""
+    def _sequence_command(self, calls: List[str], limits: Optional[Dict[int, int]] = None,
+                          filters: Optional[Dict[int, str]] = None) -> str:
+        """Runs calls one after another under one deadline and frames each one's output; `filters` pipes a call's stdout through a shell filter and `limits` then caps it at that many lines."""
         base = f"${_POLL_BASE_DIR_VAR}"
         # The trap is what keeps the throwaway dir throwaway, since borg builds a full chunks cache in it on every poll
         parts = [
@@ -491,8 +208,9 @@ class Borg(Plugin):
                 # The closing newline is what keeps output with no trailing one from running into the next marker.
                 parts.append(f'printf \'%s\\n\' "{marker}"')
                 limit = (limits or {}).get(index) if stream == "out" else None
-                reader = f"head -n {int(limit)}" if limit else "cat"
-                parts.append(f'{reader} "{base}/{index}.{stream}"')
+                keep = (filters or {}).get(index) if stream == "out" else None
+                reader = f'{keep} "{base}/{index}.{stream}"' if keep else f'cat "{base}/{index}.{stream}"'
+                parts.append(f"{reader} | head -n {int(limit)}" if limit else reader)
                 parts.append("printf '\\n'")
         return "; ".join(parts)
 
@@ -860,46 +578,36 @@ class Borg(Plugin):
 
     def plan_action(self, action_id: str, **kwargs):
         planners = {
+            'run_backup': self._plan_backup,
+            'dry_run_backup': self._plan_backup,
             'prune_preview': self._plan_prune_preview,
             'verify_restore': self._plan_verify_restore,
             'browse_archive': self._plan_browse,
             'restore_archive': self._plan_restore,
+            'check_repo': self._plan_check,
+            'compact_repo': self._plan_compact,
+            'prune_repo': self._plan_prune,
+            'delete_archive': self._plan_delete,
+            'break_lock': self._plan_break_lock,
+            'diff_archive': self._plan_diff,
         }
-        if action_id in planners:
-            return planners[action_id](**kwargs)
-        if action_id not in ('run_backup', 'dry_run_backup'):
-            return None
-
-        if not self.repo:
-            return CollectResult.failed("Cannot back up: no 'repo' configured")
-        if not self.source_paths:
-            return CollectResult.failed("Cannot back up: no 'source_paths' configured")
-        if self._running_job() is not None:
-            return CollectResult.failed("A backup is already running for this monitor",
-                                        level="WARNING", status=None)
-
-        dry_run = action_id == 'dry_run_backup'
-        kind = 'dry-run' if dry_run else 'backup'
-        command = self._backup_command(dry_run=dry_run)
-        # Name the on-target workdir before the Job row exists; interpret_action
-        # records the pid the launch prints and creates the row.
-        token = f"{self.id}-{int(time.time())}"
-        workdir = detached.workdir_for(token)
-        self._pending_launch = (kind, _redact(command), workdir)
-        return ActionPlan(detached.launch_command(command, workdir))
+        planner = planners.get(action_id)
+        return planner(action_id=action_id, **kwargs) if planner else None
 
     def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
         interpreters = {
             'prune_preview': self._interpret_prune_preview,
             'verify_restore': self._interpret_verify_restore,
             'browse_archive': self._interpret_browse,
+            'break_lock': self._interpret_break_lock,
+            'diff_archive': self._interpret_diff,
         }
         if action_id in interpreters:
             return interpreters[action_id](result, **kwargs)
-        if action_id not in ('run_backup', 'dry_run_backup', 'restore_archive'):
+        if action_id not in _LAUNCHED:
             return result.exit_code == 0
 
-        kind, redacted, workdir = getattr(self, '_pending_launch', ('backup', '', ''))
+        kind, redacted, workdir, started = getattr(self, '_pending_launch', None) or ('job', '', '', '')
         self._pending_launch = None
 
         pid = detached.parse_launch(result.stdout) if result.exit_code == 0 else None
@@ -909,9 +617,7 @@ class Borg(Plugin):
 
         job_id = self.jobs.create(kind, redacted, workdir)
         self.jobs.set_pid(job_id, pid)
-        started = f"{kind.capitalize()} started (pid {pid})"
-        if action_id == 'restore_archive':
-            started += f" into {self._pending_restore_dest}"
+        started = f"{kind.capitalize()} started (pid {pid}){started}"
         return CollectResult(
             logs=[(started, "INFO")],
             metadata={'content': started},
@@ -923,9 +629,37 @@ class Borg(Plugin):
         """An action outcome that reports a problem without touching the monitor's status."""
         return CollectResult(logs=[(message, "WARNING")], metadata={'content': message}, success=False)
 
-    def _run_one(self, call: str) -> ActionPlan:
+    def _run_one(self, call: str, limit: Optional[int] = None, keep: Optional[str] = None) -> ActionPlan:
         """A single framed borg call as an action, bounded like a poll."""
-        return ActionPlan(self._sequence_command([call]), timeout=self.timeout or None)
+        return ActionPlan(self._sequence_command([call], limits={0: limit} if limit else None,
+                                                 filters={0: keep} if keep else None),
+                          timeout=self.timeout or None)
+
+    def _launch(self, kind: str, command: str, started: str = '') -> ActionPlan:
+        """Launches `command` as a detached job; interpret_action records the pid it prints and creates the job row."""
+        token = f"{self.id}-{int(time.time())}"
+        workdir = detached.workdir_for(token)
+        self._pending_launch = (kind, _redact(command), workdir, started)
+        return ActionPlan(detached.launch_command(command, workdir))
+
+    def _job_refusal(self, what: str) -> Optional[CollectResult]:
+        """The refusal for starting a job without a repo or while another one runs, else None."""
+        if not self.repo:
+            return self._refused(f"Cannot {what}: no 'repo' configured")
+        if self._running_job() is not None:
+            return self._refused("A job is already running for this monitor")
+        return None
+
+    def _plan_backup(self, action_id: str, **_):
+        if not self.repo:
+            return CollectResult.failed("Cannot back up: no 'repo' configured")
+        if not self.source_paths:
+            return CollectResult.failed("Cannot back up: no 'source_paths' configured")
+        if self._running_job() is not None:
+            return CollectResult.failed("A backup is already running for this monitor",
+                                        level="WARNING", status=None)
+        dry_run = action_id == 'dry_run_backup'
+        return self._launch('dry-run' if dry_run else 'backup', self._backup_command(dry_run=dry_run))
 
     # --- Prune preview ----------------------------------------------------
 
@@ -997,27 +731,33 @@ class Borg(Plugin):
 
     # --- Browse -----------------------------------------------------------
 
+    def listing(self, archive: str, path: str) -> Optional[List[Dict[str, Any]]]:
+        """The children of `path` in `archive` as last listed, or None when that folder has not been listed yet."""
+        key = (archive, _archive_member(path) or '')
+        if key in self._listings:
+            self._listings.move_to_end(key)
+        return self._listings.get(key)
+
     def _plan_browse(self, archive: Optional[str] = None, path: Optional[str] = None, **_):
         member = _archive_member(path or '')
         if not self.repo or not archive:
             return self._refused("Cannot browse: no archive given")
         if member is None:
             return self._refused("A path may not contain '.' or '..' components")
-        # One level at a time: everything deeper than the path's own children is excluded, since borg has no depth limit.
-        prefix = re.escape(member) + "/" if member else ""
+        cached = self.listing(archive, member)
+        if cached is not None:
+            return CollectResult(metadata={'content': self._listing_text(archive, member, cached)}, success=True)
         args = [
             self.borg_bin, "list",
-            "--format", "{mode} {user:8} {size:>12} {mtime} {path}{NL}",
+            "--format", _LIST_FORMAT,
             "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             f"{self.repo}::{archive}",
         ]
         if member:
             args.append(member)
-        args += ["--exclude", f"re:^{prefix}[^/]+/."]
         call = self._build(args, persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)
-        return ActionPlan(self._sequence_command([call], limits={0: self.browse_limit + 1}),
-                          timeout=self.timeout or None)
+        return self._run_one(call, limit=self.browse_limit + 1, keep=_children_filter(member))
 
     def _interpret_browse(self, result: CmdResult, archive: Optional[str] = None,
                           path: Optional[str] = None, **_):
@@ -1027,47 +767,158 @@ class Borg(Plugin):
             hint = _failure_hint(detail)
             return self._refused(f"borg list failed (exit {call.exit_code}): {detail[:300]}"
                                  + (f"\n{hint}" if hint else ""))
-        entries = [line for line in call.stdout.splitlines() if line.strip()]
-        where = f"{archive}:/{_archive_member(path or '') or ''}"
+        member = _archive_member(path or '') or ''
+        entries = _parse_listing(call.stdout)
+        # A listing longer than browse_limit is kept one entry over it, which is how the browser knows it was cut short.
+        self._listings[(archive, member)] = entries
+        while len(self._listings) > _LISTING_CACHE:
+            self._listings.popitem(last=False)
+        return CollectResult(metadata={'content': self._listing_text(archive, member, entries)}, success=True)
+
+    def _listing_text(self, archive: str, member: str, entries: List[Dict[str, Any]]) -> str:
+        where = f"{archive}:/{member}"
         if not entries:
-            return CollectResult(metadata={'content': f"{where} — nothing at that path"}, success=True)
+            return f"{where} — nothing at that path"
         header = f"{where} — {len(entries)} entries"
         if len(entries) > self.browse_limit:
             entries = entries[:self.browse_limit]
             header = f"{where} — first {self.browse_limit} entries (raise browse_limit for more)"
-        return CollectResult(metadata={'content': "\n".join([header, ""] + entries)}, success=True)
+        lines = [f"{e['name']}/" if e['dir'] else f"{e['name']}  {_format_size(e['size'] or 0)}  {e['mtime']}"
+                 for e in entries]
+        return "\n".join([header, ""] + lines)
 
     # --- Restore ----------------------------------------------------------
 
-    def _restore_command(self, archive: str, member: str, dest: str) -> str:
-        """Creates a fresh directory under restore_dir and extracts the path into it, never over live files."""
+    def _restore_command(self, archive: str, members: List[str], dest: str) -> str:
+        """Creates a fresh directory under restore_dir and extracts the paths into it, never over live files."""
         extract = self._build([
             self.borg_bin, "extract",
             "--log-json",
             "--progress",
             "--lock-wait", str(self.backup_lock_wait),
             f"{self.repo}::{archive}",
-            member,
+            *members,
         ], persistent_cache=True)
         mkdir = ("sudo -n " if self.require_sudo else "") + "mkdir -p " + shlex.quote(dest)
         return f"{mkdir} && cd {shlex.quote(dest)} && {extract}"
 
-    def _plan_restore(self, archive: Optional[str] = None, path: Optional[str] = None, **_):
-        member = _archive_member(path or '')
+    def _plan_restore(self, archive: Optional[str] = None, path: Optional[str] = None,
+                      paths: Optional[List[str]] = None, **_):
+        members = [_archive_member(p) for p in ([path] if path else []) + list(paths or [])]
         if not self.repo or not archive:
             return self._refused("Cannot restore: no archive given")
-        if not member:
+        if any(m is None for m in members):
+            return self._refused("A path may not contain '.' or '..' components")
+        if not members or not all(members):
             return self._refused("Give the path to restore — a whole archive is not restored from here")
-        if self._running_job() is not None:
-            return self._refused("A job is already running for this monitor")
+        refusal = self._job_refusal("restore")
+        if refusal:
+            return refusal
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
         dest = f"{self.restore_dir.rstrip('/')}/{archive}-{stamp}"
-        command = self._restore_command(archive, member, dest)
-        token = f"{self.id}-{int(time.time())}"
-        workdir = detached.workdir_for(token)
-        self._pending_launch = ('restore', _redact(command), workdir)
-        self._pending_restore_dest = dest
-        return ActionPlan(detached.launch_command(command, workdir))
+        return self._launch('restore', self._restore_command(archive, members, dest), f" into {dest}")
+
+    # --- Maintenance ------------------------------------------------------
+
+    def _maintenance_command(self, args: List[str]) -> str:
+        return self._build([self.borg_bin, *args, "--log-json", "--lock-wait", str(self.backup_lock_wait)],
+                           persistent_cache=True)
+
+    def _plan_check(self, **_):
+        refusal = self._job_refusal("check the repository")
+        if refusal:
+            return refusal
+        args = ["check", "--progress"] + (["--verify-data"] if self.check_verify_data else [])
+        return self._launch('check', self._maintenance_command(args + [self.repo]))
+
+    def _plan_compact(self, **_):
+        refusal = self._job_refusal("compact the repository")
+        if refusal:
+            return refusal
+        return self._launch('compact', self._maintenance_command(["compact", "--progress", self.repo]))
+
+    def _plan_prune(self, **_):
+        if not self.allow_delete:
+            return self._refused("Pruning is off for this monitor — set allow_delete: true to enable it")
+        if not self.retention:
+            return self._refused("Cannot prune: no keep_* retention configured")
+        refusal = self._job_refusal("prune")
+        if refusal:
+            return refusal
+        args = ["prune", "--list", "--stats", "--glob-archives", self.prune_match]
+        for key, value in self.retention.items():
+            args += ["--" + key.replace('_', '-'), str(value)]
+        return self._launch('prune', self._maintenance_command(args + [self.repo]))
+
+    def _plan_delete(self, archive: Optional[str] = None, **_):
+        if not self.allow_delete:
+            return self._refused("Deleting archives is off for this monitor — set allow_delete: true to enable it")
+        archives, _ = self.cached_archives()
+        # Only an archive the monitor has listed may be deleted, so a stale or hand-typed name cannot reach borg.
+        if not archive or archive not in {a.get('name') for a in archives}:
+            return self._refused(f"Cannot delete {archive or 'an unnamed archive'}: it is not in the archive list")
+        refusal = self._job_refusal("delete an archive")
+        if refusal:
+            return refusal
+        self._listings = OrderedDict((k, v) for k, v in self._listings.items() if k[0] != archive)
+        return self._launch('delete', self._maintenance_command(["delete", "--stats", f"{self.repo}::{archive}"]),
+                            f" for {archive}")
+
+    def _plan_break_lock(self, **_):
+        if not self.allow_delete:
+            return self._refused("Breaking locks is off for this monitor — set allow_delete: true to enable it")
+        refusal = self._job_refusal("break the lock")
+        if refusal:
+            return refusal
+        return self._run_one(self._build([self.borg_bin, "break-lock", self.repo],
+                                         persistent_cache=True, bounded=True, wrapped=False))
+
+    def _interpret_break_lock(self, result: CmdResult, **_):
+        call = _split_poll(result, 1)[0]
+        if call.exit_code != 0:
+            detail = (call.stderr or call.stdout).strip()
+            return self._refused(f"borg break-lock failed (exit {call.exit_code}): {detail[:300]}")
+        message = "Broke the repository and cache locks"
+        return CollectResult(logs=[(message, "WARNING")], metadata={'content': message}, success=True)
+
+    # --- Diff -------------------------------------------------------------
+
+    def _previous_archive(self, archive: str) -> Optional[str]:
+        """The listed archive just older than `archive`, which a diff compares it against."""
+        names = [a.get('name') for a in self.cached_archives()[0]]
+        if archive not in names:
+            return None
+        index = names.index(archive)
+        return names[index + 1] if index + 1 < len(names) else None
+
+    def _plan_diff(self, archive: Optional[str] = None, **_):
+        if not self.repo or not archive:
+            return self._refused("Cannot diff: no archive given")
+        older = self._previous_archive(archive)
+        if older is None:
+            return self._refused(f"{archive} is the oldest listed archive — there is nothing before it to compare")
+        call = self._build([
+            self.borg_bin, "diff",
+            "--bypass-lock",
+            "--lock-wait", str(self.lock_wait),
+            f"{self.repo}::{older}", archive,
+        ], persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)
+        return self._run_one(call, limit=self.browse_limit + 1)
+
+    def _interpret_diff(self, result: CmdResult, archive: Optional[str] = None, **_):
+        call = _split_poll(result, 1)[0]
+        if call.exit_code != 0:
+            detail = (call.stderr or call.stdout).strip()
+            hint = _failure_hint(detail)
+            return self._refused(f"borg diff failed (exit {call.exit_code}): {detail[:300]}"
+                                 + (f"\n{hint}" if hint else ""))
+        lines = [line for line in call.stdout.splitlines() if line.strip()]
+        header = f"Changes from {self._previous_archive(archive)} to {archive}: {len(lines)}"
+        if len(lines) > self.browse_limit:
+            lines = lines[:self.browse_limit]
+            header = f"{header.rsplit(':', 1)[0]}: first {self.browse_limit} (raise browse_limit for more)"
+        return CollectResult(metadata={'content': "\n".join([header, ""] + (lines or ["(no changes)"]))},
+                             success=True)
 
     def _parse_poll(self, job: dict, result: CmdResult) -> CollectResult:
         """Advance a running detached backup from one poll's output. Appends
@@ -1123,6 +974,10 @@ class Borg(Plugin):
             try:
                 record = json.loads(text)
             except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(record, dict) and record.get('type') == 'progress_message':
+                if record.get('message') and not record.get('finished'):
+                    summary = record['message'].strip()
                 continue
             if isinstance(record, dict) and record.get('type') == 'progress_percent':
                 if record.get('message') and not record.get('finished'):
@@ -1243,6 +1098,10 @@ class Borg(Plugin):
             'repo_checked_epoch': int(check_at.value) if check_at and check_at.value else None,
         }
 
+    def render_ui(self, context: str = 'page'):
+        from vigil.plugins.borg.browser import render_page
+        render_page(self, context)
+
     @property
     def UI_SPEC(self):
         return {
@@ -1268,15 +1127,25 @@ class Borg(Plugin):
                      'kind': 'dialog', 'dialog': 'prune_preview', 'visible_if': lambda p: bool(p.retention)},
                     {'id': 'verify_restore', 'label': 'Verify Restore', 'icon': 'verified',
                      'visible_if': lambda p: bool(p.canary_path)},
+                    {'id': 'check_repo', 'label': 'Check', 'icon': 'health_and_safety',
+                     'visible_if': lambda p: bool(p.repo)},
+                    {'id': 'compact_repo', 'label': 'Compact', 'icon': 'compress',
+                     'visible_if': lambda p: bool(p.repo)},
+                    {'id': 'prune_repo', 'label': 'Prune', 'icon': 'delete_sweep', 'color': 'negative',
+                     'visible_if': lambda p: p.allow_delete and bool(p.retention),
+                     'confirm': 'Prune {plugin.repo} by its retention policy? Archives it drops are gone for good '
+                                '— run Prune Preview first to see which. Space is freed by a Compact afterwards.'},
+                    {'id': 'break_lock', 'label': 'Break Lock', 'icon': 'lock_open', 'color': 'negative',
+                     'visible_if': lambda p: p.allow_delete,
+                     'confirm': 'Break the locks on {plugin.repo}? Only do this when no borg process is using it; '
+                                'breaking a live lock can corrupt the repository.'},
                 ],
             },
             'dialogs': {
                 'prune_preview': {'kind': 'read', 'title': 'Prune Preview: {plugin.name}',
                                   'action_id': 'prune_preview', 'render': 'textarea_readonly'},
-                'browse': {'kind': 'form', 'title': 'Browse {row[name]}', 'action_id': 'browse_archive',
-                           'params': {'archive': 'name'}, 'submit_label': 'List',
-                           'fields': [{'name': 'path', 'label': 'Path inside the archive',
-                                       'placeholder': 'Empty for the top level, e.g. Storage/System'}]},
+                'diff': {'kind': 'read', 'title': 'Changes in {row[name]}', 'action_id': 'diff_archive',
+                         'params': {'archive': 'name'}, 'render': 'textarea_readonly'},
                 'restore': {'kind': 'form', 'title': 'Restore from {row[name]}', 'action_id': 'restore_archive',
                             'params': {'archive': 'name'}, 'submit_label': 'Restore',
                             'fields': [{'name': 'path', 'label': 'Path to restore',
@@ -1295,14 +1164,19 @@ class Borg(Plugin):
                         {'name': 'files', 'label': 'Files', 'field': 'files', 'align': 'right', 'sortable': True},
                     ],
                     'row_actions': [
-                        {'id': 'browse', 'icon': 'folder_open', 'tooltip': 'Browse', 'kind': 'dialog', 'dialog': 'browse'},
-                        {'id': 'restore', 'icon': 'restore', 'tooltip': 'Restore', 'kind': 'dialog', 'dialog': 'restore'},
+                        {'id': 'diff', 'icon': 'difference', 'tooltip': 'Changes since the previous archive',
+                         'kind': 'dialog', 'dialog': 'diff'},
+                        {'id': 'restore', 'icon': 'restore', 'tooltip': 'Restore a path', 'kind': 'dialog', 'dialog': 'restore'},
+                        {'id': 'delete', 'icon': 'delete', 'tooltip': 'Delete archive', 'color': 'negative',
+                         'action_id': 'delete_archive', 'params': {'archive': 'name'},
+                         'visible_if': lambda p: p.allow_delete,
+                         'confirm': 'Delete archive {row[name]}? It cannot be recovered.'},
                     ],
                 },
             },
             'job_panel': {
                 'widget': 'jobs',
-                'title': 'BACKUP JOBS',
+                'title': 'JOBS',
                 'run_action_id': 'run_backup', 'run_label': 'Run Backup', 'run_icon': 'play_arrow',
                 'cancel_label': 'Cancel', 'cancel_icon': 'stop',
                 'enabled_if': lambda p: bool(p.source_paths),
@@ -1331,4 +1205,3 @@ class Borg(Plugin):
             }
             for a in archives
         ]
-

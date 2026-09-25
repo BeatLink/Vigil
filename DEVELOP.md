@@ -681,6 +681,8 @@ A monitor's `type` is the module name under `vigil/plugins/`, and
 module must define exactly one. Selecting by name instead would depend on
 alphabetical luck: `SignalPlugin` sorts before `Throughput`.
 
+A plugin that outgrows one file becomes a package (`plugins/borg/`), and its class may then live in any of the package's own submodules.
+
 A plugin whose subject is not the host it collects on — `vuln_scan` runs nmap
 on one agent against another host — sets `display_target`, and `_wire_plugin`
 labels the monitor with that instead of the transport's target. `target` is

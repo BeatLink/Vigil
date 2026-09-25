@@ -57,8 +57,9 @@ filters         ``{widget_name: {'placeholder': ..., 'fields': [row keys]}}`` �
 buttons         ``{widget_name: [button spec, ...]}`` — one row of action buttons per cell.
                 A button spec: ``{'id', 'label', 'icon', 'color', 'flat' (default True),
                 'visible_if' (ENABLED_PREDICATES), 'kind', 'dialog', 'notify' (default
-                True)}``; kind ``'dialog'`` opens the named dialog, anything else awaits
-                ``plugin.run_action(id)`` and notifies the outcome.
+                True), 'confirm'}``; kind ``'dialog'`` opens the named dialog, anything else
+                awaits ``plugin.run_action(id)`` and notifies the outcome, first asking the
+                user to confirm the ``confirm`` template when one is set.
 dialogs         ``{dialog_name: dialog spec}`` — opened by kind ``'dialog'`` buttons and
                 row actions; see "Dialog specs".
 job_panel       ``{'widget' (default 'jobs'), 'title', 'run_label', 'run_icon',
@@ -134,9 +135,10 @@ columns         ``[{'name', 'label', 'field', 'align', 'sortable', 'cell_color_b
                 (ITEM_COLOR_RULES name/callable over the row)}, ...]``.
 row_actions     ``[{'id', 'icon', 'color', 'tooltip', 'visible_if' (ENABLED_PREDICATES),
                 'kind', 'dialog', 'action_id' (default id), 'params' (kwarg name -> row
-                field), 'notify' (default True)}, ...]``; kind ``'dialog'`` opens the
-                named dialog with the row, anything else awaits
-                ``plugin.run_action(action_id, **params)``.
+                field), 'notify' (default True), 'confirm'}, ...]``; kind ``'dialog'``
+                opens the named dialog with the row, anything else awaits
+                ``plugin.run_action(action_id, **params)``, after the user confirms the
+                ``confirm`` template (``{row[field]}``, ``{plugin.attr}``) when one is set.
 rows_attr       ``getattr(plugin, rows_attr)`` supplies the rows.
 source          Repeat-spec source used when rows_attr is absent (default ``'snapshot'``).
 

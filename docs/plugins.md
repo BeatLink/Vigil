@@ -35,6 +35,7 @@ config examples. For what Vigil is and how to run it, see the
   [`throughput`](#throughput) ·
   [`connections`](#connections) ·
   [`wifi`](#wifi) ·
+  [`borg`](#borg) ·
   [`containers`](#containers) ·
   [`command`](#command) ·
   [`filesystems`](#filesystems) ·
@@ -81,7 +82,7 @@ config examples. For what Vigil is and how to run it, see the
 | [`connections`](#connections)           | TCP connection counts by state         | SSH (`/proc/net/tcp`)                           | `conn_total`, `conn_established`, `conn_listen` | — |
 | [`wifi`](#wifi)                         | WiFi link quality and signal strength  | SSH (`/proc/net/wireless`)                      | `link_quality`, `signal_dbm`                    | — |
 | [`ports`](#ports)                       | TCP port / URL reachability           | SSH (`/dev/tcp`, `curl`)                         | `<check>_up`, `<check>_latency_ms`              | — |
-| [`borg`](#borg)                         | Borg backup freshness                 | SSH (`borg list`)                                | `archive_count`, `last_backup_epoch`            | — |
+| [`borg`](#borg)                         | Borg backups: freshness, browse, restore | SSH (`borg list`)                                | `archive_count`, `last_backup_epoch`            | — |
 | [`containers`](#containers)             | Docker / Podman container states      | SSH (`docker`/`podman ps`)                       | `containers_total`, `containers_running`, `containers_stopped` | Restart (per expected container) |
 | [`command`](#command)                   | Arbitrary command (generic check)     | SSH (any command)                                | `exit_code` (+ `value` in pattern mode)         | — |
 | [`filesystems`](#filesystems)           | All mounted filesystems (auto-discovered) | SSH (`df`)                                    | `worst_used_pct`, `fs_<mount>_used_pct`         | — |
@@ -1034,6 +1035,70 @@ WiFi link quality and signal strength from `/proc/net/wireless`. With no `interf
   ssh_config:
     host: "odin.example.com"
 ```
+---
+
+### `borg`
+Whether a Borg repository is being backed up, can be restored from, and is being checked, plus a file browser and the maintenance jobs that go with it. Everything runs as `borg` on the target over SSH, so the repository can be a local path there or a remote `ssh://` one.
+
+Each cycle lists the newest archives (`borg list --json`) and, with `collect_stats`, reads their sizes (`borg info --json`). Both run in one command so they do not fight over the chunks cache lock.
+
+**Browsing.** The **Browse archive** panel lists one folder at a time: pick an archive, click into folders, tick files or folders, then restore them. borg has to read the whole archive to list any folder, so the first visit to a big archive takes a while. Archives never change, so every folder listed is kept and reopening it is instant. A top-level folder that borg never stored, such as `Storage` for a backup of `/Storage/System`, is still shown.
+
+**Restoring** always extracts into a new folder under `restore_dir`, named after the archive and the time, and never over live files. It runs as a detached job, listed under Jobs with its progress. The archive table's restore button does the same for a path you type.
+
+**Maintenance.** Check, Compact and Prune run as detached jobs, one job at a time per monitor (see [Job control](../DEVELOP.md#job-control)). Prune applies the `keep_*` policy for real, so use Prune Preview first to see what it would drop. Compact is what actually frees the space afterwards (borg 1.2 or later). An archive row can show what changed since the previous archive (`borg diff`), or delete the archive. **Prune, delete and Break Lock are off unless `allow_delete: true`**, and each one asks for confirmation.
+
+| Option | Description |
+|--------|-------------|
+| `repo` | Repository path or URL (required) |
+| `max_age` | Age of the newest archive before it counts as stale (default: `1d`) |
+| `passphrase` / `passphrase_file` / `passphrase_command` | How borg gets the key passphrase; the file is read by Vigil, the command runs on the target |
+| `ssh_key` / `rsh` | Key borg uses to reach a remote repo, or a full `BORG_RSH` command |
+| `require_sudo` | Run borg as root through `sudo -n` (default: `false`) |
+| `borg_bin` | borg binary (default: `borg`) |
+| `list_archives` | How many of the newest archives to list (default: `10`) |
+| `collect_stats` | Read sizes with `borg info` (default: `true`) |
+| `cache_dir` | borg's cache and config dir for jobs, and for polls when set (default: `/var/cache/vigil-borg`) |
+| `lock_wait` / `backup_lock_wait` | Seconds to wait for a lock in polls / in jobs (defaults: `30` / `600`) |
+| `source_paths`, `exclude`, `exclude_from`, `exclude_caches`, `exclude_if_present`, `one_file_system`, `compression`, `archive_prefix` | The backup set for the Run Backup action |
+| `canary_path` / `canary_interval` | A file extracted from the newest archive and compared with the live copy, and how often (default: `1d`) |
+| `check_units` / `check_max_age` | systemd units that run `borg check`, read from the journal, and how old their last success may be (default: `8d`) |
+| `keep_within`, `keep_last`, `keep_hourly`, `keep_daily`, `keep_weekly`, `keep_monthly`, `keep_yearly`, … | Retention policy for Prune Preview and Prune |
+| `prune_match` | Archives the policy applies to (default: `<archive_prefix>-*`) |
+| `restore_dir` | Where restores land (default: `/var/tmp/vigil-restore`) |
+| `browse_limit` | Most entries shown per folder or diff (default: `2000`) |
+| `allow_delete` | Allow Prune, deleting archives and Break Lock (default: `false`) |
+| `check_verify_data` | Make the Check job read every chunk (`--verify-data`), which is much slower (default: `false`) |
+| `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `archive_count`, `last_backup_epoch`, `archive_list`, `original_size`, `compressed_size`, `deduplicated_size`, `dedup_ratio`, `total_chunks`, `unique_chunks`, `canary_ok`, `canary_checked_epoch`, `checks_ok`, `check_ok_epoch`
+
+**Actions**: Run Backup, Dry Run, Verify Restore, Prune Preview, Check, Compact, Prune, Break Lock; per archive: Changes, Restore, Delete; the browser's Restore selected
+
+**Status**: `failed` when borg reports an error, the repo has no archives, the newest one is older than `max_age`, the restore canary does not match, or a check unit failed or is older than `check_max_age`; `unavailable` when the host, the borg binary or the repo cannot be reached, a lock was not released in time, or the output could not be read.
+
+> Prune, delete and Break Lock act on the repository itself. Break Lock is only safe when no borg process is using the repo, since breaking a live lock can corrupt it, so Vigil refuses it while one of its own jobs is running. Delete only accepts an archive the monitor has listed.
+
+```yaml
+- name: "Vault backups"
+  id: "vault-borg"
+  type: "borg"
+  interval: 1h
+  repo: "ssh://borg@backup.example.com/srv/borg/vault"
+  passphrase_file: "/run/secrets/borg-vault"
+  ssh_key: "/root/.ssh/borg"
+  require_sudo: true
+  max_age: 26h
+  canary_path: "/etc/hostname"
+  check_units: ["borgmatic-check.service"]
+  keep_daily: 7
+  keep_weekly: 4
+  keep_monthly: 6
+  allow_delete: true
+  ssh_config:
+    host: "vault.example.com"
+```
+
 ---
 
 ### `containers`
