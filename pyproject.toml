@@ -66,6 +66,9 @@ convention = "pep257"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# Declared by nicegui.testing.plugin, which pulls in selenium; the render test loads
+# only its user fixture, so the mark it needs is registered here.
+markers = ["nicegui_main_file(path): the app entry point the nicegui user fixture imports"]
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -723,3 +723,13 @@ fake connector and apply the resulting `CollectResult` — mirroring
 `VigilEngine._run_cycle` without a real event loop. `_FakeEngine` stands in for
 the Coordination Engine, and `plugin.storage` is a thin test-only per-plugin
 adapter over `db.apply_result` (production has no such object).
+
+**One test renders real widgets.** `tests/unit/test_ui_spec_render.py` builds a
+plugin's declarative UI inside a NiceGUI client and asserts the card a viewer
+gets, not the spec dict describing it. It loads `nicegui.testing.user_plugin`
+rather than the full `nicegui.testing.plugin`, whose Screen fixture needs
+selenium, and marks itself `nicegui_main_file(None)` because the page under test
+is declared in the test rather than imported from an app entry point. It renders
+with `start=False` and ticks the page itself, so nothing refreshes between
+assertions. Everything else about the UI is tested through the spec and the
+model; this is the one place widgets are built.
