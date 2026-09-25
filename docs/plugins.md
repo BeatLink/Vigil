@@ -35,6 +35,7 @@ config examples. For what Vigil is and how to run it, see the
   [`throughput`](#throughput) ·
   [`connections`](#connections) ·
   [`wifi`](#wifi) ·
+  [`power`](#power) ·
   [`borg`](#borg) ·
   [`containers`](#containers) ·
   [`command`](#command) ·
@@ -81,6 +82,7 @@ config examples. For what Vigil is and how to run it, see the
 | [`throughput`](#throughput)             | Network interface throughput           | SSH (`/proc/net/dev`)                           | `rx_kbps`, `tx_kbps`                            | — |
 | [`connections`](#connections)           | TCP connection counts by state         | SSH (`/proc/net/tcp`)                           | `conn_total`, `conn_established`, `conn_listen` | — |
 | [`wifi`](#wifi)                         | WiFi link quality and signal strength  | SSH (`/proc/net/wireless`)                      | `link_quality`, `signal_dbm`                    | — |
+| [`power`](#power)                       | Battery charge, external power, wear   | SSH (`/sys/class/power_supply`)                 | `charge_pct`, `plugged_in`, `capacity_health_pct`, `battery_<name>_charge_pct` | — |
 | [`ports`](#ports)                       | TCP port / URL reachability           | SSH (`/dev/tcp`, `curl`)                         | `<check>_up`, `<check>_latency_ms`              | — |
 | [`borg`](#borg)                         | Borg backups: freshness, browse, restore | SSH (`borg list`)                                | `archive_count`, `last_backup_epoch`            | — |
 | [`containers`](#containers)             | Docker / Podman container states      | SSH (`docker`/`podman ps`)                       | `containers_total`, `containers_running`, `containers_stopped` | Restart (per expected container) |
@@ -97,7 +99,7 @@ All plugin types share these common fields:
 |----------|----------------------------------------------------------------------|
 | `name`   | Display name shown in the sidebar and dashboard                      |
 | `id`     | Unique identifier used internally (defaults to `name` if omitted)    |
-| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `nixos_upgrade`, `nix_gc`, `vuln_scan`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `smart`, `zfs`, `btrfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
+| `type`   | Plugin type — one of `uptime`, `push`, `http`, `dns_record`, `ddns_updater`, `systemd_service`, `service_list`, `nixos_upgrade`, `nix_gc`, `vuln_scan`, `cpu`, `memory`, `load`, `temperature`, `interrupts`, `gpu`, `oom`, `throughput`, `connections`, `wifi`, `power`, `smart`, `zfs`, `btrfs`, `md`, `disk_io`, `disk_space`, `ports`, `processes`, `borg`, `containers`, `command`, `filesystems`, `folders`, `vms`, `cloud`, `group` |
 | `interval` | Polling frequency in seconds (default: 60)                         |
 
 ---
@@ -1037,6 +1039,33 @@ WiFi link quality and signal strength from `/proc/net/wireless`. With no `interf
 ```
 ---
 
+### `power`
+Battery charge, whether the device is on external power, and how worn the battery is, from `/sys/class/power_supply`. The headline battery is the first one powering the system itself, so an accessory battery such as a phone's keyboard case (kernel scope `Device`) is listed beside it but never taken for it. A host with no battery stays online with no metric.
+
+**Plugged in** is true when any charger or USB input is live, or the battery reports charging or full. **Capacity left** is the battery's learned full capacity as a share of its factory design capacity; it is left out when the gauge reports only the design figure, as the PinePhone's does. **Health** is the kernel's own verdict when it reports a problem, otherwise `Good`, `Worn` or `Replace` by capacity left. Low charge only counts against the status while running on battery.
+
+| Option               | Description                                                  |
+|----------------------|--------------------------------------------------------------|
+| `battery`            | Supply name to report on, e.g. `BAT0` (default: the first system battery) |
+| `charge_warning`     | Charge at or below which, on battery, the status is `warning` (default: `20`) |
+| `charge_threshold`   | Charge at or below which, on battery, the status is `failed` (default: `10`)  |
+| `capacity_warning`   | Capacity left at or below which the status is `warning` (default: `60`) |
+| `capacity_threshold` | Capacity left at or below which the status is `failed` (default: `40`)  |
+| `interval`           | Polling frequency (default: `60`)                            |
+| `ssh_config`         | SSH connection details — see [SSH Config](#ssh-config) below |
+
+**Metrics**: `charge_pct`, `plugged_in` (1 or 0), `capacity_health_pct`, `battery_<name>_charge_pct` per battery
+
+```yaml
+- name: "Power"
+  id: "odin-power"
+  type: "power"
+  interval: 1m
+  ssh_config:
+    host: "odin.example.com"
+```
+---
+
 ### `borg`
 Whether a Borg repository is being backed up, can be restored from, and is being checked, plus a file browser and the maintenance jobs that go with it. Everything runs as `borg` on the target over SSH, so the repository can be a local path there or a remote `ssh://` one.
 
@@ -1414,6 +1443,7 @@ The same keys can instead be given as a **mapping of widget name → properties*
 | `throughput`       | `host_card`, `iface_card`, `rx_card`, `tx_card`, `rx_chart`, `tx_chart`, `events` |
 | `connections`      | `host_card`, `conn_total_card`, `conn_established_card`, `conn_listen_card`, `conn_timewait_card`, `conn_total_chart`, `conn_established_chart`, `events` |
 | `wifi`             | `host_card`, `wifi_iface_card`, `quality_card`, `signal_card`, `quality_chart`, `signal_chart`, `events` |
+| `power`            | `host_card`, `charge_card`, `power_card`, `state_card`, `health_card`, `capacity_card`, `batteries`, `charge_chart`, `capacity_chart`, `events` |
 | `smart`            | `host_card`, `smart_total_card`, `smart_ok_card`, `smart_failed_card`, `events` |
 | `zfs`              | `host_card`, `zfs_total_card`, `zfs_ok_card`, `zfs_degraded_card`, `zfs_usage_card`, `zfs_pools`, `zfs_chart`, `events` |
 | `md`               | `host_card`, `md_total_card`, `md_ok_card`, `md_degraded_card`, `events`    |
