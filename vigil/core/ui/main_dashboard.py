@@ -3,6 +3,7 @@ import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import quote
 from nicegui import app, ui
 from vigil.core.contracts import EngineLike
 from . import theme
@@ -22,6 +23,30 @@ def navigate_to(plugin_instance: Any):
             _navigation_state['switch_func']('overview')
         else:
             _navigation_state['switch_func']('plugin', plugin_instance)
+
+
+def view_path(view_type: str, plugin: Optional[Any] = None) -> str:
+    """The address of a dashboard view, so each monitor's page can be linked to."""
+    if view_type == 'events':
+        return '/events'
+    if view_type == 'plugin' and plugin is not None:
+        return f"/monitor/{quote(plugin.id, safe='')}"
+    return '/'
+
+
+def _find_monitor(plugins: list, monitor_id: str) -> Optional[Any]:
+    """The monitor with this id anywhere in the tree, or None."""
+    stack = list(plugins)
+    while stack:
+        plugin = stack.pop()
+        if plugin.id == monitor_id:
+            return plugin
+        stack.extend(plugin.children)
+    return None
+
+
+# The views switch in place, so going back re-renders the page for the address it returns to.
+_RELOAD_ON_BACK = '<script>window.addEventListener("popstate", () => location.reload());</script>'
 
 
 @dataclass
@@ -79,13 +104,18 @@ def _render_header(left_drawer_toggle: Callable, auth_config: Optional[AuthConfi
             _render_account_menu(auth_config)
 
 
-def _render_index(engine: EngineLike, auth_config: Optional[AuthConfig] = None):
+def _render_index(engine: EngineLike, auth_config: Optional[AuthConfig] = None,
+                  view: str = 'overview', plugin: Optional[Any] = None):
     """Renders the dashboard page: header, sidebar and the switchable main view."""
     theme.install()
+    ui.add_head_html(_RELOAD_ON_BACK)
 
-    state = DashboardState()
+    state = DashboardState(current_view=view, selected_plugin=plugin)
 
     def switch_view(view_type: str, plugin: Optional[Any] = None):
+        path = view_path(view_type, plugin)
+        if path != view_path(state.current_view, state.selected_plugin):
+            ui.navigate.history.push(path)
         state.current_view = view_type
         state.selected_plugin = plugin
         if state.render_main:
@@ -130,6 +160,19 @@ def init_gui(engine: EngineLike, port: int = 8080):
     @ui.page('/')
     def index_page():
         _render_index(engine, auth_config)
+
+    @ui.page('/events')
+    def events_page():
+        _render_index(engine, auth_config, view='events')
+
+    @ui.page('/monitor/{monitor_id}')
+    def monitor_page(monitor_id: str):
+        plugin = _find_monitor(engine.plugins, monitor_id)
+        if plugin is None:
+            _render_index(engine, auth_config)
+            ui.notify(f'No monitor with id {monitor_id!r}', type='warning')
+        else:
+            _render_index(engine, auth_config, view='plugin', plugin=plugin)
 
     svg = _ICON.read_text()
     ui.run(
