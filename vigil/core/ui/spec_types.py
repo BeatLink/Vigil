@@ -20,7 +20,8 @@ class CardSpec(TypedDict, total=False):
     title: str
     metric: str                    # bind_text_from a single metric, live-updating
     format: str                    # FORMATTERS key: Optional[float] -> str
-    color: str                     # COLOR_RULES key: Optional[float] -> Optional[str state]
+    color: Any                     # COLOR_RULES key, a rule callable, or
+                                   # {'warning': n, 'threshold': n} inline thresholds
     metrics: List[str]             # combine several metrics into one card
     format_fn: str                 # ITEM_FORMATTERS key: dict[metric,value] -> str
     color_fn: str                  # ITEM_FORMATTERS key: dict[metric,value] -> Optional[str state]

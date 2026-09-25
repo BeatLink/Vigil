@@ -24,10 +24,6 @@ class DiskSpace(Plugin):
         self.path = config.get('path', '/')
         self.threshold = int(config.get('threshold', 90))
 
-        from vigil.core.ui.spec import register_color_rule, threshold_color
-        self._color_rule_name = f'disk_space_threshold_{self.id}'
-        register_color_rule(self._color_rule_name)(
-            threshold_color(warning=self.threshold, threshold=self.threshold))
 
     SAMPLED = True
 
@@ -80,7 +76,8 @@ class DiskSpace(Plugin):
                 'threshold_card': {'title': 'THRESHOLD', 'value_attr': 'threshold', 'value_format': '{}%'},
                 'usage_card': {
                     'metric': 'used_pct', 'title': 'USAGE',
-                    'format': 'percent1', 'color': self._color_rule_name,
+                    'format': 'percent1',
+                    'color': {'warning': self.threshold, 'threshold': self.threshold},
                 },
                 'avail_card': {'metric': 'avail_gb', 'title': 'AVAILABLE', 'format': 'bytes_gb'},
                 'total_card': {'metric': 'size_gb', 'title': 'TOTAL SIZE', 'format': 'bytes_gb'},

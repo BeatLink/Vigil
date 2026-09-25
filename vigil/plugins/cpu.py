@@ -39,10 +39,6 @@ class Cpu(SignalPlugin):
         self.warning   = float(config.get('warning',   70))
         self.threshold = float(config.get('threshold', 85))
 
-        from vigil.core.ui.spec import register_color_rule, threshold_color
-        self._color_rule = f'cpu_{self.id}'
-        register_color_rule(self._color_rule)(
-            threshold_color(warning=self.warning, threshold=self.threshold))
 
     SAMPLED = True
 
@@ -75,7 +71,8 @@ class Cpu(SignalPlugin):
 
     def cards(self) -> Dict[str, Dict[str, Any]]:
         return {'cpu_card': {'metric': 'cpu_pct', 'title': 'CPU', 'format': 'percent1',
-                             'color': self._color_rule}}
+                             'color': {'warning': self.warning,
+                                       'threshold': self.threshold}}}
 
     def charts(self) -> Dict[str, Dict[str, Any]]:
         return {'cpu_chart': {'metric': 'cpu_pct', 'title': 'CPU USAGE (%)'}}

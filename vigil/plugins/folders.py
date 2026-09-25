@@ -37,10 +37,7 @@ class Folders(Plugin):
         self.folders = config.get('folders', []) or []
         self.du_timeout = int(config.get('timeout', 60))
 
-        from vigil.core.ui.spec import register_item_color_rule
         self._by_key = {_sanitize(f.get('path', '')): f for f in self.folders if f.get('path')}
-        self._color_rule_name = f'folders_threshold_{self.id}'
-        register_item_color_rule(self._color_rule_name)(self._item_color)
 
     def _level_for(self, gb: float, folder: Dict[str, Any]) -> str:
         threshold = folder.get('threshold')
@@ -136,7 +133,7 @@ class Folders(Plugin):
                         'metrics_prefix': 'folder_', 'metrics_suffix': '_gb',
                         'metrics_exclude': ['worst_folder_gb'],
                         'item_format': 'bytes_gb',
-                        'item_color_by': self._color_rule_name,
+                        'item_color_by': self._item_color,
                         'label_transform': 'slashes',
                         'container': 'cards',
                         'empty_text': 'No folders configured',

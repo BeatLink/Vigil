@@ -79,14 +79,11 @@ class Trilium(Plugin):
         self.stale_warning = float(config.get('stale_warning', 72))
         self.api_timeout = int(config.get('api_timeout', 10))
 
-        from vigil.core.ui.spec import register_color_rule
-        self._color_rule_name = f'trilium_stale_{self.id}'
-
-        @register_color_rule(self._color_rule_name)
-        def _lastmod_color(v, _stale_warning=self.stale_warning):
-            if v is None:
-                return None
-            return 'warning' if v >= _stale_warning else 'online'
+    def _lastmod_color(self, v):
+        """Warn once the newest note's age passes the configured staleness limit."""
+        if v is None:
+            return None
+        return 'warning' if v >= self.stale_warning else 'online'
 
     def requests(self) -> List[Request]:
         if not self.api_url:
@@ -147,7 +144,7 @@ class Trilium(Plugin):
             'cards': {
                 'lastmod_card': {
                     'metric': 'last_modified_age_hours', 'title': 'LAST MODIFIED',
-                    'format': 'trilium_age_ago', 'color': self._color_rule_name,
+                    'format': 'trilium_age_ago', 'color': self._lastmod_color,
                 },
                 'notes_card': {'metric': 'notes_total', 'title': 'TOTAL NOTES', 'format': 'count_comma'},
             },

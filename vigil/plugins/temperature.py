@@ -32,13 +32,9 @@ class Temperature(SignalPlugin):
         self.warning   = float(config.get('warning',   70))
         self.threshold = float(config.get('threshold', 80))
 
-        from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
-        self._item_color_rule = f'temp_zone_{self.id}'
-        register_item_color_rule(self._item_color_rule)(
-            lambda item: level_for(item.get('value') or 0.0, self.warning, self.threshold))
-        self._color_rule = f'temp_{self.id}'
-        register_color_rule(self._color_rule)(
-            threshold_color(warning=self.warning, threshold=self.threshold))
+    def _item_level(self, item):
+        """Color one sensor's chip by its own reading against this monitor's thresholds."""
+        return level_for(item.get('value') or 0.0, self.warning, self.threshold)
 
     SAMPLED = True
 
@@ -88,13 +84,13 @@ class Temperature(SignalPlugin):
     def cards(self) -> Dict[str, Dict[str, Any]]:
         return {
             'temp_card': {'metric': 'temp_c', 'title': 'MAX TEMP', 'format': 'temp_c1',
-                          'color': self._color_rule},
+                          'color': {'warning': self.warning, 'threshold': self.threshold}},
             'sensors': {
                 'repeat': {
                     'source': 'metrics_prefix',
                     'metrics_prefix': 'temp_zone_', 'metrics_suffix': '',
                     'item_format': 'temp_c1',
-                    'item_color_by': self._item_color_rule,
+                    'item_color_by': self._item_level,
                     'label_transform': 'spaces_upper',
                     'container': 'cards',
                     'empty_text': 'No thermal zones found',

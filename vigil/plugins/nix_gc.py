@@ -201,10 +201,6 @@ class NixGc(Plugin):
         self._pending_launch = None
         self._polling_job = None
 
-        from vigil.core.ui.spec import register_color_rule, threshold_color
-        self._store_color = f'nix_gc_store_{self.id}'
-        register_color_rule(self._store_color)(
-            threshold_color(warning=self.warning, threshold=self.threshold))
 
     # --- collection ---
 
@@ -615,7 +611,9 @@ class NixGc(Plugin):
                 'next_gc_card': {'title': 'NEXT COLLECTION', 'value_attr': '_next_gc_text',
                                  'color_attr': '_next_gc_color'},
                 'store_card': {'metric': 'store_used_pct', 'title': 'STORE USED',
-                               'format': 'percent1', 'color': self._store_color},
+                               'format': 'percent1',
+                               'color': {'warning': self.warning,
+                                         'threshold': self.threshold}},
                 'paths_card': {'metric': 'store_paths', 'title': 'STORE PATHS',
                                'format': 'count_comma'},
                 'generations_card': {'metric': 'generations', 'title': 'GENERATIONS',

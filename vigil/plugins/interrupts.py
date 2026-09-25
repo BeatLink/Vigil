@@ -30,10 +30,6 @@ class Interrupts(SignalPlugin):
         self.warning   = float(config.get('warning',   20000))
         self.threshold = float(config.get('threshold', 50000))
 
-        from vigil.core.ui.spec import register_color_rule, threshold_color
-        self._color_rule = f'interrupts_{self.id}'
-        register_color_rule(self._color_rule)(
-            threshold_color(warning=self.warning, threshold=self.threshold))
 
     SAMPLED = True
 
@@ -75,7 +71,8 @@ class Interrupts(SignalPlugin):
     def cards(self) -> Dict[str, Dict[str, Any]]:
         return {
             'irq_card': {'metric': 'irq_per_sec', 'title': 'INTERRUPTS/S',
-                         'format': 'count_comma_rounded', 'color': self._color_rule},
+                         'format': 'count_comma_rounded',
+                         'color': {'warning': self.warning, 'threshold': self.threshold}},
             'ctxt_card': {'metric': 'ctxt_per_sec', 'title': 'CTX SWITCH/S',
                           'format': 'count_comma_rounded'},
         }

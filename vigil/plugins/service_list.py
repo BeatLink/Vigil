@@ -43,10 +43,6 @@ class ServiceList(Plugin):
         self.max_logs = int(config.get('lines', 10))
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
 
-        from vigil.core.ui.spec import register_enabled_predicate
-        self._edit_predicate_name = f'service_list_edit_{self.id}'
-        register_enabled_predicate(self._edit_predicate_name)(lambda p: p.allow_unit_file_edit)
-
     def commands(self) -> List[Command]:
         return [Command(_LIST_UNITS_CMD), Command(_LIST_UNIT_FILES_CMD)]
 
@@ -217,7 +213,7 @@ class ServiceList(Plugin):
              'tooltip': 'View Unit File', 'kind': 'dialog', 'dialog': 'view_unit_file'},
             {'id': 'edit_file', 'icon': 'edit', 'color': 'secondary',
              'tooltip': 'Edit Unit File', 'kind': 'dialog', 'dialog': 'edit_unit_file',
-             'visible_if': self._edit_predicate_name},
+             'visible_if': lambda p: p.allow_unit_file_edit},
         ]
         return {
             'layout': _DEFAULT_LAYOUT,

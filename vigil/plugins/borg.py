@@ -263,10 +263,6 @@ class Borg(Plugin):
         self.backup_lock_wait = config.get('backup_lock_wait', 600)
         self._polling_job = None
 
-        from vigil.core.ui.spec import register_enabled_predicate
-        self._has_sources_name = f'borg_has_sources_{self.id}'
-        register_enabled_predicate(self._has_sources_name)(lambda p: bool(p.source_paths))
-
     def _read_passphrase_file(self) -> Optional[str]:
         try:
             with open(self.passphrase_file, "r") as f:
@@ -801,7 +797,7 @@ class Borg(Plugin):
                 'title': 'BACKUP JOBS',
                 'run_action_id': 'run_backup', 'run_label': 'Run Backup', 'run_icon': 'play_arrow',
                 'cancel_label': 'Cancel', 'cancel_icon': 'stop',
-                'enabled_if': self._has_sources_name,
+                'enabled_if': lambda p: bool(p.source_paths),
                 'history_limit': 10,
             },
             'events': {'title': 'EVENTS', 'limit': 100, 'full_height': True},

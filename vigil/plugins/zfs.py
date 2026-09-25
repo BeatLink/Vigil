@@ -28,13 +28,9 @@ class Zfs(SignalPlugin):
         self.threshold = float(config.get('threshold', 90))
         self.pools = list(config.get('pools') or [])
 
-        from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
-        self._color_rule = f'zfs_usage_{self.id}'
-        register_color_rule(self._color_rule)(
-            threshold_color(warning=self.warning, threshold=self.threshold))
-        self._item_color_rule = f'zfs_pool_{self.id}'
-        register_item_color_rule(self._item_color_rule)(
-            lambda item: level_for(item.get('value') or 0.0, self.warning, self.threshold))
+    def _item_level(self, item):
+        """Color one pool's chip by its own capacity against this monitor's thresholds."""
+        return level_for(item.get('value') or 0.0, self.warning, self.threshold)
 
     SAMPLED = True
 
@@ -100,14 +96,15 @@ class Zfs(SignalPlugin):
             },
             'zfs_usage_card': {
                 'metric': 'zfs_usage_max', 'title': 'FULLEST POOL',
-                'format': 'percent1', 'color': self._color_rule,
+                'format': 'percent1',
+                'color': {'warning': self.warning, 'threshold': self.threshold},
             },
             'zfs_pools': {
                 'repeat': {
                     'source': 'metrics_prefix',
                     'metrics_prefix': 'pool_usage_', 'metrics_suffix': '',
                     'item_format': 'percent1',
-                    'item_color_by': self._item_color_rule,
+                    'item_color_by': self._item_level,
                     'label_transform': 'spaces_upper',
                     'container': 'cards',
                     'empty_text': 'No ZFS pools found',

@@ -42,15 +42,9 @@ class CommandPlugin(Plugin):
         self.value_unit = config.get('value_unit', '')
         self.has_value = self.pattern is not None
 
-        from vigil.core.ui.spec import register_color_rule, register_formatter
-        self._exit_color_name = f'command_exit_{self.id}'
-        register_color_rule(self._exit_color_name)(
-            lambda code: None if code is None else ('online' if code == 0 else 'failed'))
-        self._value_color_name = f'command_value_{self.id}'
-        register_color_rule(self._value_color_name)(self._value_color)
-        self._value_format_name = f'command_value_fmt_{self.id}'
-        register_formatter(self._value_format_name)(
-            lambda v: '--' if v is None else f'{v:g}{self.value_unit}')
+    def _value_text(self, v):
+        """Format the extracted value with this command's configured unit."""
+        return '--' if v is None else f'{v:g}{self.value_unit}'
 
     def _level_for_value(self, value: float) -> str:
         if self.warning is None or self.threshold is None:
@@ -127,7 +121,7 @@ class CommandPlugin(Plugin):
     def UI_SPEC(self):
         cards = {
             'exit_card': {'metric': 'exit_code', 'title': 'EXIT CODE', 'format': 'int',
-                          'color': self._exit_color_name},
+                          'color': 'nonzero_failed'},
         }
         spec = {
             'layout': _DEFAULT_LAYOUT_METRIC if self.has_value else _DEFAULT_LAYOUT_PLAIN,
@@ -136,7 +130,7 @@ class CommandPlugin(Plugin):
         }
         if self.has_value:
             cards['value_card'] = {'metric': 'value', 'title': self.value_label,
-                                   'format': self._value_format_name, 'color': self._value_color_name}
+                                   'format': self._value_text, 'color': self._value_color}
             spec['chart'] = {'metric': 'value', 'title': self.value_label}
         return spec
 

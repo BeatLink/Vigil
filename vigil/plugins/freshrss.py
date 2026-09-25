@@ -113,14 +113,11 @@ class Freshrss(Plugin):
         self.refresh_stale_warning = float(config.get('refresh_stale_warning', 6))
         self.api_timeout = int(config.get('api_timeout', 10))
 
-        from vigil.core.ui.spec import register_color_rule
-        self._color_rule_name = f'freshrss_refresh_stale_{self.id}'
-
-        @register_color_rule(self._color_rule_name)
-        def _refresh_color(v, _warning=self.refresh_stale_warning):
-            if v is None:
-                return None
-            return 'warning' if v >= _warning else 'online'
+    def _refresh_color(self, v):
+        """Warn once the last feed refresh is older than the configured limit."""
+        if v is None:
+            return None
+        return 'warning' if v >= self.refresh_stale_warning else 'online'
 
     def requests(self) -> List[Request]:
         if not self.api_url or not self.username:
@@ -190,7 +187,7 @@ class Freshrss(Plugin):
             'cards': {
                 'refresh_card': {
                     'metric': 'refresh_age_hours', 'title': 'LAST REFRESH',
-                    'format': 'freshrss_age', 'color': self._color_rule_name,
+                    'format': 'freshrss_age', 'color': self._refresh_color,
                 },
                 'feeds_card': {'metric': 'feeds_total', 'title': 'FEEDS', 'format': 'int'},
                 'stale_card': {

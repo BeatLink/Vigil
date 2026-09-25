@@ -141,10 +141,6 @@ class VulnScan(Plugin):
         self.display_target = self.scan_host
         self.scanner = str(config.get('agent') or config.get('ssh_config', {}).get('host') or 'localhost')
 
-        from vigil.core.ui.spec import register_item_color_rule
-        self._grade_color = f'vuln_scan_grade_{self.id}'
-        register_item_color_rule(self._grade_color)(lambda row: row.get('grade'))
-
     # --- collection ---
 
     def _scan_command(self) -> str:
@@ -426,7 +422,7 @@ class VulnScan(Plugin):
                     'rows_attr': '_finding_rows',
                     'columns': [
                         {'name': 'severity', 'label': 'Severity', 'field': 'severity',
-                         'align': 'left', 'cell_color_by': self._grade_color},
+                         'align': 'left', 'cell_color_by': lambda row: row.get('grade')},
                         {'name': 'port', 'label': 'Port', 'field': 'port', 'align': 'left'},
                         {'name': 'service', 'label': 'Service', 'field': 'service', 'align': 'left'},
                         {'name': 'id', 'label': 'ID', 'field': 'id', 'align': 'left'},

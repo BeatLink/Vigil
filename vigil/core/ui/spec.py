@@ -13,8 +13,9 @@ Anywhere a spec field references a function (``format``, ``color``, ``format_fn`
 ``enabled_if``), the value may be either the NAME of a registered
 function or the CALLABLE itself — ``resolve()`` accepts both. The shared vocabulary below is
 name-keyed so specs stay plain data; a one-off plugin transform passes its bound method
-directly. A plugin that needs an instance-tuned rule (e.g. ``threshold_color()`` curried
-with its config thresholds) registers it under a unique per-instance name in ``__init__``.
+directly. A card wanting the standard banded coloring from its own config thresholds writes
+them inline instead — ``'color': {'warning': self.warning, 'threshold': self.threshold}``
+— with no registration at all.
 
 Registries
 ==========
@@ -84,7 +85,9 @@ key present:    ``value_format`` template (default ``'{}'``); otherwise static `
                 ``{metric: value}`` to the text and ``color_fn`` maps the same dict to a
                 status name; both are item-level functions (name or callable).
 ``metric``      One metric bound live: ``format`` names a FORMATTERS entry (default
-                ``'int'``) and ``color`` names a COLOR_RULES entry applied on refresh.
+                ``'int'``) and ``color`` names a COLOR_RULES entry applied on refresh, or
+                holds ``{'warning': n, 'threshold': n}`` for banded coloring built on the
+                spot from the plugin's own thresholds.
 
 Dispatch precedence when a card carries several of these: ``metrics``, then
 ``metric``, then the static/attribute forms.
@@ -186,12 +189,14 @@ name              example
 ================= =================================================
 nonzero_warning   0 → 'online', 3 → 'warning', None → None
 nonzero_failed    0 → 'online', 3 → 'failed', None → None
+zero_failed       1 → 'online', 0 → 'failed', None → None
 always_online     87.6 → 'online', 0 → 'online', None → None
 ================= =================================================
 
-``threshold_color(warning, threshold)`` builds the standard banded rule — value >=
-threshold → 'failed', value >= warning → 'warning', else 'online', None → None — for a
-plugin to register under a per-instance name with its config thresholds.
+A card's ``color`` may also be ``{'warning': n, 'threshold': n}``, which builds the standard
+banded rule — value >= threshold → 'failed', value >= warning → 'warning', else 'online',
+None → None — from the plugin's own config. ``threshold_color(warning, threshold)`` is that
+same rule as a callable, for the item-level and table places an inline dict isn't read.
 """
 
 from typing import Any, Dict, List, Optional
@@ -374,6 +379,14 @@ def _nonzero_failed(v):
     return 'failed' if v > 0 else 'online'
 
 
+@register_color_rule('zero_failed')
+def _zero_failed(v):
+    """For a metric that is a 1/0 verdict: anything non-zero passed, zero failed."""
+    if v is None:
+        return None
+    return 'online' if v else 'failed'
+
+
 def threshold_color(warning: float, threshold: float):
     """Build a color rule that maps a value onto status colors by two thresholds."""
     def rule(v):
@@ -474,6 +487,28 @@ def _render_multi_metric_card(page, layout, widget_name: str, title: str, card_s
     return _make_multi_update(page, label, card_spec['metrics'], format_fn, color_fn)
 
 
+def _card_color_rule(card_spec, widget_name: str) -> Optional[ColorRule]:
+    """Resolve a card's ``color`` to a rule: inline thresholds, a registered name, or the callable itself."""
+    color = card_spec.get('color')
+    if not color:
+        return None
+    if isinstance(color, dict):
+        try:
+            return threshold_color(warning=color['warning'], threshold=color['threshold'])
+        except KeyError:
+            raise KeyError(
+                f"UI_SPEC card {widget_name!r} has an inline color needing both "
+                f"'warning' and 'threshold', got {sorted(color)}"
+            ) from None
+    rule = resolve(COLOR_RULES, color)
+    if rule is None:
+        raise KeyError(
+            f"UI_SPEC card {widget_name!r} references unknown color rule {color!r} "
+            f"— register it via spec.register_color_rule first"
+        )
+    return rule
+
+
 def _render_metric_card(page, layout, widget_name: str, title: str, card_spec):
     """Render a card bound live to one formatted metric and return its color update, if a color rule is set."""
     from vigil.core.ui.components import info_card
@@ -488,15 +523,9 @@ def _render_metric_card(page, layout, widget_name: str, title: str, card_spec):
     with layout.cell(widget_name):
         label = info_card(title, formatter(None)).bind_text_from(
             page.model, ('metrics', metric_name), backward=formatter)
-    color_name = card_spec.get('color')
-    if not color_name:
-        return None
-    color_rule = resolve(COLOR_RULES, color_name)
+    color_rule = _card_color_rule(card_spec, widget_name)
     if color_rule is None:
-        raise KeyError(
-            f"UI_SPEC card {widget_name!r} references unknown color rule {color_name!r} "
-            f"— register it via spec.register_color_rule first"
-        )
+        return None
     return _make_color_update(page, label, metric_name, color_rule)
 
 

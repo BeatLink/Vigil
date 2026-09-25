@@ -117,8 +117,15 @@ def level_for(value: float, warning: float, threshold: float) -> str:
     return 'online'
 
 
-def format_bytes(gb: float) -> str:
-    """Format a size given in GB as a human-readable MB/GB/TB string."""
+_BYTE_UNITS = {'B': 1024 ** -3, 'KB': 1024 ** -2, 'MB': 1024 ** -1, 'GB': 1.0, 'TB': 1024.0}
+
+
+def format_bytes(value: float, unit: str = 'GB') -> str:
+    """Format a size as a human-readable MB/GB/TB string, reading the value in unit."""
+    try:
+        gb = value * _BYTE_UNITS[unit]
+    except KeyError:
+        raise ValueError(f"unknown size unit {unit!r}, expected one of {sorted(_BYTE_UNITS)}") from None
     if gb >= 1024:
         return f"{gb / 1024:.1f} TB"
     if gb >= 1:

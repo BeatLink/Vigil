@@ -144,12 +144,6 @@ class Filesystems(Plugin):
         self.inode_threshold = int(config.get('inode_threshold', 95))
         self.readonly_is_failure = bool(config.get('readonly_is_failure', True))
 
-        from vigil.core.ui.spec import register_item_color_rule, register_item_formatter
-        self._color_rule_name = f'filesystems_level_{self.id}'
-        register_item_color_rule(self._color_rule_name)(self._item_color)
-        self._format_fn_name = f'filesystems_text_{self.id}'
-        register_item_formatter(self._format_fn_name)(self._item_text)
-
     def _inode_level_for(self, pct: float) -> str:
         if pct >= self.inode_threshold:
             return 'failed'
@@ -240,8 +234,8 @@ class Filesystems(Plugin):
                             {'name': 'used_pct', 'prefix': 'fs_', 'suffix': '_used_pct'},
                             {'name': 'inodes_pct', 'prefix': 'fs_', 'suffix': '_inodes_pct'},
                         ],
-                        'item_format_fn': self._format_fn_name,
-                        'item_color_by': self._color_rule_name,
+                        'item_format_fn': self._item_text,
+                        'item_color_by': self._item_color,
                         'label_transform': 'slashes',
                         'container': 'cards',
                         'empty_text': 'No filesystems found',

@@ -25,13 +25,6 @@ class Memory(SignalPlugin):
         self.warning   = float(config.get('warning',   75))
         self.threshold = float(config.get('threshold', 90))
 
-        from vigil.core.ui.spec import register_color_rule, threshold_color, register_item_formatter
-        self._color_rule = f'memory_{self.id}'
-        register_color_rule(self._color_rule)(
-            threshold_color(warning=self.warning, threshold=self.threshold))
-        self._used_format = f'memory_used_{self.id}'
-        register_item_formatter(self._used_format)(_format_memory_used)
-
     SAMPLED = True
 
     def commands(self) -> List[Command]:
@@ -76,9 +69,10 @@ class Memory(SignalPlugin):
     def cards(self) -> Dict[str, Dict[str, Any]]:
         return {
             'mem_pct_card': {'metric': 'memory_pct', 'title': 'MEMORY',
-                             'format': 'percent1_plain_dash', 'color': self._color_rule},
+                             'format': 'percent1_plain_dash',
+                             'color': {'warning': self.warning, 'threshold': self.threshold}},
             'mem_used_card': {'title': 'MEM USED', 'metrics': ['memory_used_gb', 'memory_total_gb'],
-                              'format_fn': self._used_format},
+                              'format_fn': _format_memory_used},
         }
 
     def charts(self) -> Dict[str, Dict[str, Any]]:

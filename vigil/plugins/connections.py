@@ -51,10 +51,6 @@ class Connections(SignalPlugin):
         self.warning   = int(config.get('warning',   500))
         self.threshold = int(config.get('threshold', 1000))
 
-        from vigil.core.ui.spec import register_color_rule, threshold_color
-        self._color_rule = f'connections_{self.id}'
-        register_color_rule(self._color_rule)(
-            threshold_color(warning=self.warning, threshold=self.threshold))
 
     SAMPLED = True
 
@@ -84,7 +80,9 @@ class Connections(SignalPlugin):
     def cards(self) -> Dict[str, Dict[str, Any]]:
         return {
             'conn_total_card': {'metric': 'conn_total', 'title': 'CONNECTIONS',
-                                'format': 'int_rounded', 'color': self._color_rule},
+                                'format': 'int_rounded',
+                                'color': {'warning': self.warning,
+                                          'threshold': self.threshold}},
             'conn_established_card': {'metric': 'conn_established', 'title': 'ESTABLISHED',
                                       'format': 'int_rounded'},
             'conn_listen_card': {'metric': 'conn_listen', 'title': 'LISTENING',

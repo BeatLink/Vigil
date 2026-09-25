@@ -113,18 +113,6 @@ class Btrfs(SignalPlugin):
         self.filesystems = list(config.get('filesystems') or [])
         self.unallocated_warning = int(config.get('unallocated_warning', _GIB))
 
-        from vigil.core.ui.spec import (
-            register_color_rule, register_item_color_rule, register_item_formatter,
-            threshold_color,
-        )
-        self._color_rule = f'btrfs_usage_{self.id}'
-        register_color_rule(self._color_rule)(
-            threshold_color(warning=self.warning, threshold=self.threshold))
-        self._item_color_rule = f'btrfs_fs_{self.id}'
-        register_item_color_rule(self._item_color_rule)(self._item_level)
-        self._item_format_fn = f'btrfs_text_{self.id}'
-        register_item_formatter(self._item_format_fn)(self._item_text)
-
     SAMPLED = True
 
     def commands(self) -> List[Command]:
@@ -220,7 +208,8 @@ class Btrfs(SignalPlugin):
             },
             'btrfs_usage_card': {
                 'metric': 'btrfs_usage_max', 'title': 'FULLEST FS',
-                'format': 'percent1', 'color': self._color_rule,
+                'format': 'percent1',
+                'color': {'warning': self.warning, 'threshold': self.threshold},
             },
             'btrfs_filesystems': {
                 'repeat': {
@@ -230,8 +219,8 @@ class Btrfs(SignalPlugin):
                         {'name': 'errors', 'prefix': 'fs_errors_', 'suffix': ''},
                         {'name': 'unallocated', 'prefix': 'fs_unallocated_', 'suffix': ''},
                     ],
-                    'item_format_fn': self._item_format_fn,
-                    'item_color_by': self._item_color_rule,
+                    'item_format_fn': self._item_text,
+                    'item_color_by': self._item_level,
                     'label_transform': 'slashes',
                     'container': 'cards',
                     'empty_text': 'No btrfs filesystems found',

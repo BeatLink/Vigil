@@ -95,23 +95,12 @@ class Blockurl(Plugin):
         self.api_key_command = config.get(
             "api_key_command", "cut -d= -f2- /run/secrets/blockurl_api_key"
         )
-        from vigil.core.ui.spec import register_color_rule
 
-        self._color_rule_name = f"blockurl_min_domains_{self.id}"
-
-        @register_color_rule(self._color_rule_name)
-        def _domains_color(v, _min_domains=self.min_domains):
-            if v is None:
-                return None
-            return "warning" if v < _min_domains else "online"
-
-        self._write_rule_name = f"blockurl_write_ok_{self.id}"
-
-        @register_color_rule(self._write_rule_name)
-        def _write_color(v):
-            if v is None:
-                return None
-            return "online" if v else "failed"
+    def _domains_color(self, v):
+        """Warn when the blocklist holds fewer domains than the configured floor."""
+        if v is None:
+            return None
+        return "warning" if v < self.min_domains else "online"
 
     def _probe_command(self) -> str:
         """Block, check and unblock the reserved URL in that order, printing each step's outcome."""
@@ -219,7 +208,7 @@ class Blockurl(Plugin):
                     "metric": "domains_total",
                     "title": "DOMAINS",
                     "format": "int",
-                    "color": self._color_rule_name,
+                    "color": self._domains_color,
                 },
                 "urls_card": {
                     "metric": "urls_total",
@@ -230,7 +219,7 @@ class Blockurl(Plugin):
                     "metric": "write_ok",
                     "title": "WRITES",
                     "format": "int",
-                    "color": self._write_rule_name,
+                    "color": "zero_failed",
                 },
             },
             "chart": {"metric": "urls_total", "title": "BLOCKED URLS"},

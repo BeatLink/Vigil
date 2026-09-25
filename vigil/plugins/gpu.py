@@ -77,19 +77,9 @@ class Gpu(SignalPlugin):
         self._consecutive_timeouts = 0
         self._suspended_until = 0.0
 
-        from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
-        self._item_color_rule = f'gpu_util_{self.id}'
-        register_item_color_rule(self._item_color_rule)(
-            lambda item: level_for(item.get('value') or 0.0, self.util_warning, self.util_threshold))
-        self._util_color_rule = f'gpu_util_card_{self.id}'
-        register_color_rule(self._util_color_rule)(
-            threshold_color(warning=self.util_warning, threshold=self.util_threshold))
-        self._mem_color_rule = f'gpu_mem_card_{self.id}'
-        register_color_rule(self._mem_color_rule)(
-            threshold_color(warning=self.mem_warning, threshold=self.mem_threshold))
-        self._temp_color_rule = f'gpu_temp_card_{self.id}'
-        register_color_rule(self._temp_color_rule)(
-            threshold_color(warning=self.temp_warning, threshold=self.temp_threshold))
+    def _item_level(self, item):
+        """Color one card's chip by its own utilization against this monitor's thresholds."""
+        return level_for(item.get('value') or 0.0, self.util_warning, self.util_threshold)
 
     SAMPLED = True
 
@@ -155,18 +145,18 @@ class Gpu(SignalPlugin):
     def cards(self) -> Dict[str, Dict[str, Any]]:
         return {
             'gpu_util_card': {'metric': 'gpu_util', 'title': 'GPU', 'format': 'percent0',
-                              'color': self._util_color_rule},
+                              'color': {'warning': self.util_warning, 'threshold': self.util_threshold}},
             'gpu_mem_card': {'metric': 'gpu_mem_pct', 'title': 'VRAM', 'format': 'percent0',
-                             'color': self._mem_color_rule},
+                             'color': {'warning': self.mem_warning, 'threshold': self.mem_threshold}},
             'gpu_temp_card': {'metric': 'gpu_temp', 'title': 'GPU TEMP', 'format': 'temp_c0',
-                              'color': self._temp_color_rule},
+                              'color': {'warning': self.temp_warning, 'threshold': self.temp_threshold}},
             'gpus': {
                 'repeat': {
                     'source': 'metrics_prefix',
                     'metrics_prefix': 'gpu', 'metrics_suffix': '_util',
                     'metrics_exclude': ['gpu_util'],
                     'item_format': 'percent0',
-                    'item_color_by': self._item_color_rule,
+                    'item_color_by': self._item_level,
                     'item_label_prefix': 'GPU ',
                     'container': 'cards',
                     'empty_text': 'No GPUs found',

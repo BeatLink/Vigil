@@ -64,10 +64,6 @@ class DnsRecord(Plugin):
         )
         self.target = self.domain or self.name
 
-        from vigil.core.ui.spec import register_item_color_rule
-        self._color_rule_name = f'dns_record_expected_{self.id}'
-        register_item_color_rule(self._color_rule_name)(self._item_color)
-
     def requests(self) -> List[Request]:
         if not self.domain:
             return []
@@ -144,7 +140,7 @@ class DnsRecord(Plugin):
                         'setting_key': 'dns_record:{plugin_id}',
                         'item_label': '_none',
                         'item_value': 'value',
-                        'item_color_by': self._color_rule_name,
+                        'item_color_by': self._item_color,
                         'container': 'chips',
                         'empty_text': 'No answer yet',
                     },

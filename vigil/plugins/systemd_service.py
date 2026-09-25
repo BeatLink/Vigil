@@ -53,10 +53,6 @@ class SystemdService(Plugin):
         self.allow_unit_file_edit = bool(config.get('allow_unit_file_edit', False))
         self.allowed_write_paths = tuple(config.get('allowed_write_paths', _DEFAULT_UNIT_FILE_WRITE_PATHS))
 
-        from vigil.core.ui.spec import register_enabled_predicate
-        self._edit_predicate_name = f'systemd_edit_{self.id}'
-        register_enabled_predicate(self._edit_predicate_name)(lambda p: p.allow_unit_file_edit)
-
     def commands(self) -> List[Command]:
         journal_cmd = Command(
             f"journalctl -u {self.service_name} -n {self.lines} "
@@ -295,7 +291,7 @@ class SystemdService(Plugin):
              'color': 'secondary', 'kind': 'dispatch'},
             {'id': 'edit_unit_file', 'label': 'Edit Unit File', 'icon': 'edit',
              'color': 'secondary', 'kind': 'dialog', 'dialog': 'edit_unit_file',
-             'visible_if': self._edit_predicate_name},
+             'visible_if': lambda p: p.allow_unit_file_edit},
         ]
 
     def _render_unit_file_controls(self):

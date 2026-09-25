@@ -54,18 +54,14 @@ class Processes(Plugin):
         self.cpu_warning   = float(config['cpu_warning'])   if 'cpu_warning'   in config else None
         self.cpu_threshold = float(config['cpu_threshold'])  if 'cpu_threshold'  in config else None
 
-        if self.cpu_warning is not None and self.cpu_threshold is not None:
-            from vigil.core.ui.spec import register_item_color_rule, register_color_rule, threshold_color
-            self._cpu_color_rule_name = f'processes_cpu_{self.id}'
-            register_item_color_rule(self._cpu_color_rule_name)(
-                lambda row: level_for(row['cpu'], self.cpu_warning, self.cpu_threshold)
-            )
-            self._top_cpu_color_rule_name = f'processes_top_cpu_{self.id}'
-            register_color_rule(self._top_cpu_color_rule_name)(
-                threshold_color(warning=self.cpu_warning, threshold=self.cpu_threshold))
-        else:
-            self._cpu_color_rule_name = None
-            self._top_cpu_color_rule_name = None
+    @property
+    def _ranks_cpu(self) -> bool:
+        """Whether both CPU thresholds are configured, without which nothing is colored."""
+        return self.cpu_warning is not None and self.cpu_threshold is not None
+
+    def _row_cpu_level(self, row):
+        """Color one process row by its CPU share against the configured thresholds."""
+        return level_for(row['cpu'], self.cpu_warning, self.cpu_threshold)
 
     SAMPLED = True
 
@@ -133,7 +129,8 @@ class Processes(Plugin):
                 'count_card': {'metric': 'process_count', 'title': 'PROCESSES', 'format': 'int'},
                 'top_cpu_card': {
                     'metric': 'top_cpu_pct', 'title': 'TOP CPU', 'format': 'percent1',
-                    **({'color': self._top_cpu_color_rule_name} if self._top_cpu_color_rule_name else {}),
+                    **({'color': {'warning': self.cpu_warning, 'threshold': self.cpu_threshold}}
+                       if self._ranks_cpu else {}),
                 },
             },
             'tables': {
@@ -143,7 +140,7 @@ class Processes(Plugin):
                         {'name': 'pid', 'label': 'PID', 'field': 'pid', 'sortable': True, 'align': 'right'},
                         {'name': 'user', 'label': 'USER', 'field': 'user', 'sortable': True, 'align': 'left'},
                         {'name': 'cpu', 'label': 'CPU %', 'field': 'cpu', 'sortable': True, 'align': 'right',
-                         **({'cell_color_by': self._cpu_color_rule_name} if self._cpu_color_rule_name else {})},
+                         **({'cell_color_by': self._row_cpu_level} if self._ranks_cpu else {})},
                         {'name': 'mem', 'label': 'MEM %', 'field': 'mem', 'sortable': True, 'align': 'right'},
                         {'name': 'command', 'label': 'COMMAND', 'field': 'command', 'sortable': True, 'align': 'left'},
                     ],

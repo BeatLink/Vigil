@@ -19,13 +19,6 @@ class Load(SignalPlugin):
         self.warning   = float(config['warning'])   if 'warning'   in config else None
         self.threshold = float(config['threshold']) if 'threshold' in config else None
 
-        self._color_rule = None
-        if self.warning is not None and self.threshold is not None:
-            from vigil.core.ui.spec import register_color_rule, threshold_color
-            self._color_rule = f'load_{self.id}'
-            register_color_rule(self._color_rule)(
-                threshold_color(warning=self.warning, threshold=self.threshold))
-
     SAMPLED = True
 
     def commands(self) -> List[Command]:
@@ -72,8 +65,8 @@ class Load(SignalPlugin):
 
     def cards(self) -> Dict[str, Dict[str, Any]]:
         load_1m_card = {'metric': 'load_pct_1m', 'title': 'LOAD 1M', 'format': 'percent0_plain_dash'}
-        if self._color_rule:
-            load_1m_card['color'] = self._color_rule
+        if self.warning is not None and self.threshold is not None:
+            load_1m_card['color'] = {'warning': self.warning, 'threshold': self.threshold}
         return {
             'load_1m_card':  load_1m_card,
             'load_5m_card':  {'metric': 'load_pct_5m',  'title': 'LOAD 5M',  'format': 'percent0_plain_dash'},

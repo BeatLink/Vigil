@@ -42,10 +42,6 @@ class Wifi(SignalPlugin):
         self.quality_warning   = float(config.get('quality_warning',   40))
         self.quality_threshold = float(config.get('quality_threshold', 20))
 
-        from vigil.core.ui.spec import register_color_rule
-        self._color_rule = f'wifi_quality_{self.id}'
-        register_color_rule(self._color_rule)(self._quality_color)
-
     @property
     def setting_key(self) -> str:
         return f"network:{self.id}:wifi_interface"
@@ -96,7 +92,7 @@ class Wifi(SignalPlugin):
             'wifi_iface_card': {'title': 'WIFI INTERFACE', 'value_attr': 'active_interface_text',
                                 'refresh': True},
             'quality_card': {'metric': 'link_quality', 'title': 'LINK QUALITY',
-                             'format': 'int_rounded', 'color': self._color_rule},
+                             'format': 'int_rounded', 'color': self._quality_color},
             'signal_card': {'metric': 'signal_dbm', 'title': 'SIGNAL', 'format': 'dbm0'},
         }
 

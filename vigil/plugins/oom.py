@@ -90,14 +90,11 @@ class Oom(SignalPlugin):
         self._last_total: Optional[int] = None
         self._since_kill: Optional[int] = None
 
-        from vigil.core.ui.spec import register_color_rule
-        self._color_rule = f'oom_recent_{self.id}'
-
-        @register_color_rule(self._color_rule)
-        def _recent_color(v, _is_warning=self.is_warning):
-            if v is None:
-                return None
-            return 'online' if v == 0 else ('warning' if _is_warning else 'failed')
+    def _recent_color(self, v):
+        """Color the recent-kills card: none is fine, any kill takes this plugin's configured severity."""
+        if v is None:
+            return None
+        return 'online' if v == 0 else ('warning' if self.is_warning else 'failed')
 
     @property
     def _kill_status(self) -> str:
@@ -172,7 +169,7 @@ class Oom(SignalPlugin):
             'oom_total_card': {'metric': 'oom_kills_total', 'title': 'OOM KILLS (BOOT)',
                                'format': 'count_comma_rounded'},
             'oom_recent_card': {'metric': 'oom_kills_new', 'title': 'OOM SINCE LAST CHECK',
-                                'format': 'count_comma_rounded', 'color': self._color_rule},
+                                'format': 'count_comma_rounded', 'color': self._recent_color},
         }
 
     def charts(self) -> Dict[str, Dict[str, Any]]:
