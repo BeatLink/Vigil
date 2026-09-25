@@ -101,8 +101,10 @@ class AppriseChannel(Channel):
     def notify_type(self, message: Message) -> str:
         """Apprise's severity for a notification, which some services show as a color or icon."""
         types = self._apprise.NotifyType
-        if message.kind == 'recovered':
+        if message.clears:
             return types.SUCCESS
+        if message.kind == 'flapping':
+            return types.WARNING
         return {'failed': types.FAILURE, 'warning': types.WARNING}.get(message.status, types.INFO)
 
     async def send(self, message: Message) -> None:

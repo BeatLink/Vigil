@@ -126,9 +126,10 @@ class NtfyChannel(HttpChannel):
 
     DEFAULT_URL = "https://ntfy.sh"
     DEFAULT_PRIORITY = {'failed': 'high', 'warning': 'default', 'unavailable': 'default',
-                        'recovered': 'low'}
+                        'recovered': 'low', 'flapping': 'default'}
     DEFAULT_TAGS = {'failed': 'rotating_light', 'warning': 'warning',
-                    'unavailable': 'grey_question', 'recovered': 'white_check_mark'}
+                    'unavailable': 'grey_question', 'recovered': 'white_check_mark',
+                    'flapping': 'repeat'}
 
     def __init__(self, channel_id: str, config: Dict[str, Any], agents: Any = None):
         super().__init__(channel_id, config)

@@ -9,7 +9,7 @@ from vigil.core.connectors.agent_connector import AgentConnection, AgentRegistry
 from vigil.core.notifications import NotificationEngine, build_channels, monitor_url
 from vigil.core.notifications.channels import DesktopChannel, Message
 from vigil.core.notifications.rules import (
-    PROBLEM, RECOVERED, REMINDER, Alert, Rule, Tracker, resolve_rules,
+    FLAPPING, PROBLEM, RECOVERED, REMINDER, SETTLED, Alert, Rule, Tracker, resolve_rules,
 )
 from vigil_agent import protocol as proto
 
@@ -134,6 +134,38 @@ class TestTracker:
         t.seed('m', 'failed', since=5, now=100)
         assert t.observe('m', 'failed', 110) is None
         assert t.observe('m', 'online', 120) == Alert(RECOVERED, 'online', 5)
+
+    def test_flapping_is_announced_once_then_held_until_it_settles(self):
+        t = self._tracker(flap_changes=4, flap_window=600)
+        assert t.observe('m', 'failed', 0).kind == PROBLEM
+        assert t.observe('m', 'online', 60).kind == RECOVERED
+        assert t.observe('m', 'failed', 120).kind == PROBLEM
+        assert t.observe('m', 'online', 180) == Alert(FLAPPING, 'online', 120)
+        assert t.flapping('m')
+        assert t.observe('m', 'failed', 240) is None
+        assert t.observe('m', 'online', 300) is None
+        assert t.observe('m', 'failed', 360) is None
+        assert t.observe('m', 'failed', 959) is None
+        assert t.observe('m', 'failed', 961) == Alert(SETTLED, 'failed', 360)
+        assert not t.flapping('m')
+        assert t.observe('m', 'online', 1000) == Alert(RECOVERED, 'online', 360)
+
+    def test_a_flapping_monitor_that_settles_healthy_says_it_recovered(self):
+        t = self._tracker(flap_changes=2, flap_window=100)
+        t.observe('m', 'failed', 0)
+        assert t.observe('m', 'online', 10).kind == FLAPPING
+        assert t.observe('m', 'online', 50) is None
+        assert t.observe('m', 'online', 111) == Alert(RECOVERED, 'online', 0, settled=True)
+
+    def test_changes_outside_the_window_do_not_count(self):
+        t = self._tracker(flap_changes=3, flap_window=100)
+        t.observe('m', 'failed', 0)
+        t.observe('m', 'online', 50)
+        assert t.observe('m', 'failed', 200).kind == PROBLEM
+
+    def test_flapping_is_read_from_settings(self):
+        rules = resolve_rules([_plugin('a')], {'flapping': {'changes': 4, 'within': '30m'}}, ['d'])
+        assert (rules['a'].flap_changes, rules['a'].flap_window) == (4, 1800)
 
     def test_monitors_without_a_rule_are_ignored(self):
         assert self._tracker().observe('other', 'failed', 0) is None
@@ -264,6 +296,48 @@ class TestEngine:
         await self._set(db_manager, 'online')
         assert self._titles(engine) == ['Nas recovered']
 
+    async def test_flapping_and_settling_messages(self, engine, db_manager):
+        from vigil.core.notifications.rules import Rule
+        engine.start([_plugin('nas')])
+        engine._tracker.rules['nas'] = Rule(('desk',), flap_changes=2, flap_window=3600)
+        await self._set(db_manager, 'failed', 'online')
+        assert self._titles(engine) == ['Nas is failed', 'Nas is flapping']
+        assert 'holds steady for 1 Hour' in engine.channels['desk'].sent[-1].body
+
+    async def test_notifications_arriving_together_go_as_one_digest(self, db_manager, monkeypatch):
+        monkeypatch.setattr('vigil.core.notifications.RETRY_DELAYS', (0, 0))
+        eng = NotificationEngine(db_manager, {'base_url': 'https://v', 'group_window': 1},
+                                 AgentRegistry())
+        eng.channels = {'desk': RecordingChannel()}
+        batches = []
+
+        async def send_batch(messages, summary):
+            batches.append((messages, summary))
+
+        eng.channels['desk'].send_batch = send_batch
+        eng.start([_plugin('nas'), _plugin('web'), _plugin('dns')])
+        for monitor in ('nas', 'web'):
+            db_manager.insert_status(monitor, 'failed')
+        db_manager.insert_status('dns', 'warning')
+        await _drain()
+        assert batches == [] and eng.channels['desk'].sent == []
+        await asyncio.sleep(1.1)
+        [(messages, summary)] = batches
+        assert [m.monitor_id for m in messages] == ['nas', 'web']
+        assert summary.title == 'Vigil: 2 failed'
+        assert summary.body == '• Nas is failed\n• Web is failed'
+        assert summary.url == 'https://v'
+        eng.stop()
+
+    async def test_a_lone_notification_in_the_window_is_sent_as_itself(self, db_manager, monkeypatch):
+        eng = NotificationEngine(db_manager, {'group_window': 1}, AgentRegistry())
+        eng.channels = {'desk': RecordingChannel()}
+        eng.start([_plugin('nas')])
+        db_manager.insert_status('nas', 'failed')
+        await asyncio.sleep(1.1)
+        assert [m.title for m in eng.channels['desk'].sent] == ['Nas is failed']
+        eng.stop()
+
     async def test_without_channels_nothing_is_watched(self, db_manager):
         eng = NotificationEngine(db_manager, {}, AgentRegistry())
         eng.start([_plugin('nas')])
@@ -321,6 +395,37 @@ class TestDesktopChannel:
         await channel.send(Message('t', 'b', 'online', RECOVERED))
         assert [(f['icon'], f['urgency']) for f in socket.sent] == [
             ('dialog-warning', 'normal'), ('dialog-warning', 'low')]
+
+    async def test_a_batch_becomes_one_group_notification_that_shrinks_and_closes(self):
+        from vigil.core.notifications.channels import digest
+        registry, socket = _registry(caps=('notify', 'dismiss'))
+        channel = DesktopChannel('desk', {'agent': 'desktop'}, registry)
+        failed = [Message(f'{n} is failed', 'b', 'failed', PROBLEM, n, None, n, '', 100.0)
+                  for n in ('nas', 'web', 'dns')]
+        await channel.send_batch(failed, digest(failed, 'https://v'))
+        [group] = socket.sent
+        assert group['key'] == 'group:nas:100'
+        assert group['title'] == 'Vigil: 3 failed'
+        assert group['url'] == 'https://v'
+
+        await channel.send(Message('nas recovered', 'b', 'online', RECOVERED, 'nas'))
+        assert (socket.sent[-1]['key'], socket.sent[-1]['title']) == ('group:nas:100', 'Vigil: 2 failed')
+        await channel.send(Message('web is still failed', 'b', 'failed', REMINDER, 'web'))
+        assert [(f['t'], f.get('title')) for f in socket.sent[-2:]] == [
+            ('notify', 'Vigil: 1 failed'), ('notify', 'web is still failed')]
+        await channel.send(Message('dns recovered', 'b', 'online', RECOVERED, 'dns'))
+        assert socket.sent[-1] == {'t': 'dismiss', 'key': 'group:nas:100'}
+        await channel.send(Message('web recovered', 'b', 'online', RECOVERED, 'web'))
+        assert socket.sent[-1] == {'t': 'dismiss', 'key': 'web'}
+
+    async def test_a_batch_with_one_problem_shows_it_on_its_own(self):
+        from vigil.core.notifications.channels import digest
+        registry, socket = _registry(caps=('notify', 'dismiss'))
+        channel = DesktopChannel('desk', {'agent': 'desktop'}, registry)
+        batch = [Message('nas is failed', 'b', 'failed', PROBLEM, 'nas'),
+                 Message('web recovered', 'b', 'online', RECOVERED, 'web')]
+        await channel.send_batch(batch, digest(batch, None))
+        assert [(f['t'], f['key']) for f in socket.sent] == [('notify', 'nas'), ('dismiss', 'web')]
 
     def test_bad_icon_or_urgency_settings_are_rejected(self):
         registry, _ = _registry()

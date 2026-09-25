@@ -78,6 +78,6 @@ of one per monitor.
 3. **More providers and UI:** the dashboard part is done: a mute switch on each monitor's page,
    and a header dialog that tests channels and lists mutes. Still to do: telegram, discord,
    slack, gotify, pushover, matrix, home-assistant and signal built in.
-4. **On-call and flapping:** pagerduty and opsgenie, using the monitor id as the alert id so a
-   recovery closes the alert. Grouping alerts that fire close together into one message.
-   Maintenance windows.
+4. **On-call and flapping:** flapping detection and grouping are done. Still to do: pagerduty and
+   opsgenie, using the monitor id as the alert id so a recovery closes the alert. Maintenance
+   windows are next.

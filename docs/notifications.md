@@ -55,6 +55,7 @@ off. A child can turn itself back on with its own mapping.
 | `for`      | `0` (off)        | How long a problem must last, with no good reading in between, before the first notification, e.g. `1h`. Suits load and usage monitors that spike |
 | `repeat`   | `0` (off)        | How often to remind while the problem lasts, e.g. `1h` |
 | `recovery` | `true`           | Also notify when the monitor stops having a problem |
+| `flapping` | off              | `{changes: 4, within: 1h}`: a monitor whose problem starts or ends that many times within that window is flapping. See [Flapping](#flapping) |
 
 A group never notifies for itself. Its status only repeats its children's, so it would duplicate
 their notifications.
@@ -68,6 +69,36 @@ not recovered, and the problem carries on once it measures again.
 
 If Vigil restarts while a monitor has a problem, it is not announced again. Its recovery still
 is.
+
+## Flapping
+
+A monitor that keeps failing and recovering would send a notification every time. With
+`flapping` set, the change that reaches `changes` within `within` sends one "is flapping"
+notification instead, and nothing more is sent for that monitor until it has held one status for
+the whole window. Then one message says it stopped flapping, and whether it is still failing or
+has recovered.
+
+```yaml
+notifications:
+  defaults:
+    flapping: {changes: 4, within: 1h}
+```
+
+## Grouping
+
+When several notifications arrive close together, for example when a host goes down and takes
+its monitors with it, `group_window` sends them as one. Vigil waits that long after the first
+notification, then sends everything that arrived meanwhile to each channel as one digest, such as
+"Vigil: 3 failed, 1 recovered" with a line per monitor. A notification that arrives alone is sent
+as itself, only later by the window. It is off by default.
+
+```yaml
+notifications:
+  group_window: 30s
+```
+
+On the desktop, a group of failures is one notification listing them. It shrinks as each
+monitor recovers and closes when the last one does.
 
 ## Muting
 

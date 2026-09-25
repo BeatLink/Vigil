@@ -11,13 +11,15 @@ import time
 from typing import Any, Dict, List, Mapping, Optional, Set
 from urllib.parse import quote
 
-from vigil.core.notifications.channels import Channel, DesktopChannel, Message
+from vigil.core.notifications.channels import Channel, DesktopChannel, Message, digest
 from vigil.core.notifications.http import NtfyChannel, WebhookChannel
 from vigil.core.notifications.mail import AppriseChannel, SmtpChannel
-from vigil.core.notifications.rules import PROBLEM, RECOVERED, Alert, Tracker, resolve_rules
+from vigil.core.notifications.rules import (
+    FLAPPING, PROBLEM, RECOVERED, SETTLED, Alert, Tracker, resolve_rules,
+)
 from vigil.core.state import changes
 from vigil.core.state.changes import CHANGES
-from vigil.plugins.base.plugin_helpers import format_duration
+from vigil.plugins.base.plugin_helpers import format_duration, parse_duration
 
 RETRY_DELAYS = (5, 30)
 """Seconds to wait before each retry of a failed delivery."""
@@ -66,6 +68,8 @@ class NotificationEngine:
         self.base_url = settings.get('base_url')
         self.channels: Dict[str, Channel] = build_channels(settings.get('channels') or [], agents)
         self._defaults = settings.get('defaults') or {}
+        self.group_window = parse_duration(settings.get('group_window', 0) or 0)
+        self._pending: Dict[str, List[Message]] = {}
         self._monitors: Dict[str, Any] = {}
         self._parents: Dict[str, str] = {}
         self._announced: Set[str] = set()
@@ -158,17 +162,43 @@ class NotificationEngine:
             self._announced.add(plugin_id)
         message = self.message(plugin_id, alert, now)
         for channel in channels:
-            self._spawn(self._deliver(channel, message))
+            self._enqueue(channel, message)
+
+    def _enqueue(self, channel: Channel, message: Message) -> None:
+        """Send now, or hold for the group window so notifications arriving together go as one."""
+        if not self.group_window:
+            self._spawn(self._deliver(channel, [message]))
+            return
+        pending = self._pending.setdefault(channel.id, [])
+        pending.append(message)
+        if len(pending) == 1:
+            asyncio.get_running_loop().call_later(self.group_window, self._flush, channel)
+
+    def _flush(self, channel: Channel) -> None:
+        messages = self._pending.pop(channel.id, [])
+        if messages:
+            self._spawn(self._deliver(channel, messages))
 
     def message(self, plugin_id: str, alert: Alert, now: float) -> Message:
         """The notification for one alert on one monitor."""
         plugin = self._monitors.get(plugin_id)
         name = getattr(plugin, 'name', plugin_id)
-        if alert.kind == RECOVERED:
-            title = f"{name} recovered" if alert.status == 'online' else f"{name} is {alert.status}"
+        status = alert.status
+        if alert.kind == RECOVERED and alert.settled:
+            title = f"{name} stopped flapping and recovered" if status == 'online' else f"{name} stopped flapping and is {status}"
+            detail = ""
+        elif alert.kind == RECOVERED:
+            title = f"{name} recovered" if status == 'online' else f"{name} is {status}"
             detail = f"Was down for {format_duration(int(now - alert.since))}"
+        elif alert.kind == FLAPPING:
+            window = format_duration(self._tracker.rules[plugin_id].flap_window)
+            title = f"{name} is flapping"
+            detail = f"Its status keeps changing, so nothing more is sent until it holds steady for {window}."
+        elif alert.kind == SETTLED:
+            title = f"{name} stopped flapping and is {status}"
+            detail = self._reason(plugin_id, name)
         else:
-            title = f"{name} is {alert.status}" if alert.kind == PROBLEM else f"{name} is still {alert.status}"
+            title = f"{name} is {status}" if alert.kind == PROBLEM else f"{name} is still {status}"
             detail = self._reason(plugin_id, name)
         target = getattr(plugin, 'target', '') or ''
         body = "\n".join(line for line in (detail, f"Host: {target}" if target else "") if line)
@@ -192,21 +222,29 @@ class NotificationEngine:
             "online", "test", url=self.base_url, timestamp=time.time(),
         ))
 
-    async def _deliver(self, channel: Channel, message: Message) -> None:
+    async def _deliver(self, channel: Channel, messages: List[Message]) -> None:
+        """Send one notification, or several as one batch, retrying before reporting a failure."""
+        if len(messages) == 1:
+            summary = messages[0]
+        else:
+            summary = digest(messages, self.base_url)
         for attempt, delay in enumerate((0, *RETRY_DELAYS)):
             await asyncio.sleep(delay)
             # Any failure is retried, then reported; a broken channel must not stop the others.
             try:
-                await channel.send(message)
-                logging.info(f"Notified {channel.id!r}: {message.title}")
+                if len(messages) == 1:
+                    await channel.send(summary)
+                else:
+                    await channel.send_batch(messages, summary)
+                logging.info(f"Notified {channel.id!r}: {summary.title}")
                 return
             except Exception as e:
                 error = e
                 logging.warning(f"Notification to {channel.id!r} failed (try {attempt + 1}): {e}")
         self._db.insert_event(
             "WARNING",
-            f"[notifications] Could not notify {channel.id!r} that {message.title}: {error}",
-            "vigil_core", plugin_id=message.monitor_id or None,
+            f"[notifications] Could not notify {channel.id!r} that {summary.title}: {error}",
+            "vigil_core", plugin_id=summary.monitor_id or None,
         )
 
     def _spawn(self, coro) -> None:

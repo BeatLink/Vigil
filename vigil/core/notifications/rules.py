@@ -6,8 +6,9 @@ problem lasts, and whether to announce the recovery. The tracker applies
 those rules to the stream of status writes, one per collection cycle.
 """
 
+from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
+from typing import Any, Deque, Dict, FrozenSet, Iterable, List, Mapping, Optional, Tuple
 import logging
 
 from vigil.core.connectors.types import Status
@@ -18,6 +19,8 @@ PROBLEM_STATUSES = (Status.FAILED, Status.WARNING, Status.UNAVAILABLE)
 PROBLEM = "problem"
 REMINDER = "reminder"
 RECOVERED = "recovered"
+FLAPPING = "flapping"
+SETTLED = "settled"
 
 
 @dataclass(frozen=True)
@@ -30,6 +33,9 @@ class Rule:
     recovery: bool = True
     hold: int = 0
     """Seconds a problem must last, unbroken, before the first notification: the `for` setting."""
+    flap_changes: int = 0
+    """Problem starts and ends within `flap_window` that make a monitor flapping; 0 is off."""
+    flap_window: int = 3600
 
 
 def _status(value: str) -> Status:
@@ -76,10 +82,16 @@ def _rule(settings: Dict[str, Any], channel_ids: List[str], where: str) -> Optio
         after = max(1, int(settings.get('after', 1)))
         repeat = parse_duration(settings.get('repeat', 0) or 0)
         hold = parse_duration(settings.get('for', 0) or 0)
+        flapping = settings.get('flapping') or {}
+        if not isinstance(flapping, dict):
+            raise ValueError("`flapping` must be a mapping with `changes` and `within`")
+        flap_changes = max(0, int(flapping.get('changes', 0)))
+        flap_window = parse_duration(flapping.get('within', '1h'))
     except ValueError as e:
         logging.error(f"{where}: bad notify setting ({e}); notifications for it are off")
         return None
-    return Rule(tuple(known), statuses, after, repeat, bool(settings.get('recovery', True)), hold)
+    return Rule(tuple(known), statuses, after, repeat, bool(settings.get('recovery', True)), hold,
+                flap_changes, flap_window)
 
 
 def resolve_rules(roots: Iterable[Any], defaults: Mapping[str, Any],
@@ -112,6 +124,8 @@ class Alert:
     kind: str
     status: str
     since: float
+    settled: bool = False
+    """A recovery that ends a spell of flapping."""
 
 
 @dataclass
@@ -121,6 +135,8 @@ class _State:
     problem_cycles: int = 0
     since: float = 0.0
     last_sent: float = 0.0
+    flapping: bool = False
+    changes: Deque[float] = field(default_factory=deque)
 
 
 @dataclass
@@ -144,14 +160,40 @@ class Tracker:
         state = self._states.get(plugin_id)
         return bool(state and state.alerting)
 
+    def flapping(self, plugin_id: str) -> bool:
+        """Whether the monitor is flapping, with its notifications held until it settles."""
+        state = self._states.get(plugin_id)
+        return bool(state and state.flapping)
+
     def observe(self, plugin_id: str, status: str, now: float) -> Optional[Alert]:
         """Record one status write; return the notification it triggers, if any."""
         rule = self.rules.get(plugin_id)
         if rule is None:
             return None
         state = self._states.setdefault(plugin_id, _State())
-        current = _status(status)
+        was_alerting = state.alerting
+        alert = self._transition(rule, state, _status(status), now)
+        if not rule.flap_changes:
+            return alert
 
+        if state.alerting != was_alerting:
+            state.changes.append(now)
+        while state.changes and now - state.changes[0] > rule.flap_window:
+            state.changes.popleft()
+        if state.flapping:
+            if state.changes:
+                return None
+            state.flapping = False
+            if state.alerting:
+                return Alert(SETTLED, state.status.value, state.since)
+            return Alert(RECOVERED, state.status.value, state.since, settled=True)
+        if len(state.changes) >= rule.flap_changes:
+            state.flapping = True
+            return Alert(FLAPPING, state.status.value, state.since)
+        return alert
+
+    def _transition(self, rule: Rule, state: _State, current: Status, now: float) -> Optional[Alert]:
+        """Apply one status to the monitor's state; return what the change alone would announce."""
         if current == Status.UNAVAILABLE and current.value not in rule.on:
             # Not measuring says nothing about the problem: it neither ends it nor counts toward one.
             return None
