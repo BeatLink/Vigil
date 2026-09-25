@@ -1077,6 +1077,8 @@ Each cycle lists the newest archives (`borg list --json`) and, with `collect_sta
 
 **Maintenance.** Check, Compact and Prune run as detached jobs, one job at a time per monitor (see [Job control](../DEVELOP.md#job-control)). Prune applies the `keep_*` policy for real, so use Prune Preview first to see what it would drop. Compact is what actually frees the space afterwards (borg 1.2 or later). An archive row can show what changed since the previous archive (`borg diff`), or delete the archive. **Prune, delete and Break Lock are off unless `allow_delete: true`**, and each one asks for confirmation.
 
+**Purging excluded files.** New exclude patterns only keep files out of new archives. Purge Excluded rewrites the existing archives with `borg recreate` so they drop whatever the backup set's `exclude*` options now leave out, then compacts to free the space. It first deletes any `<archive>.recreate` left by an interrupted run, since borg refuses to start while one exists. Purge Preview is a dry run that lists the top-most path of each dropped tree, archive by archive. Both run as detached jobs and hold the repository lock for their whole run, and on a large remote repository that can take hours. Running the purge again with the same patterns rewrites every archive again, so it is a button, not a schedule. **Both are off unless `allow_purge: true`.**
+
 | Option | Description |
 |--------|-------------|
 | `repo` | Repository path or URL (required) |
@@ -1098,15 +1100,17 @@ Each cycle lists the newest archives (`borg list --json`) and, with `collect_sta
 | `browse_limit` | Most entries shown per folder or diff (default: `2000`) |
 | `allow_delete` | Allow Prune, deleting archives and Break Lock (default: `false`) |
 | `check_verify_data` | Make the Check job read every chunk (`--verify-data`), which is much slower (default: `false`) |
+| `allow_purge` | Allow Purge Preview and Purge Excluded (default: `false`) |
+| `purge_match` | Archives a purge rewrites (default: every archive in the repo) |
 | `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
 
 **Metrics**: `archive_count`, `last_backup_epoch`, `archive_list`, `original_size`, `compressed_size`, `deduplicated_size`, `dedup_ratio`, `total_chunks`, `unique_chunks`, `canary_ok`, `canary_checked_epoch`, `checks_ok`, `check_ok_epoch`
 
-**Actions**: Run Backup, Dry Run, Verify Restore, Prune Preview, Check, Compact, Prune, Break Lock; per archive: Changes, Restore, Delete; the browser's Restore selected
+**Actions**: Run Backup, Dry Run, Verify Restore, Prune Preview, Check, Compact, Prune, Purge Preview, Purge Excluded, Break Lock; per archive: Changes, Restore, Delete; the browser's Restore selected
 
 **Status**: `failed` when borg reports an error, the repo has no archives, the newest one is older than `max_age`, the restore canary does not match, or a check unit failed or is older than `check_max_age`; `unavailable` when the host, the borg binary or the repo cannot be reached, a lock was not released in time, or the output could not be read.
 
-> Prune, delete and Break Lock act on the repository itself. Break Lock is only safe when no borg process is using the repo, since breaking a live lock can corrupt it, so Vigil refuses it while one of its own jobs is running. Delete only accepts an archive the monitor has listed.
+> Prune, delete, Purge Excluded and Break Lock act on the repository itself. Break Lock is only safe when no borg process is using the repo, since breaking a live lock can corrupt it, so Vigil refuses it while one of its own jobs is running. Delete only accepts an archive the monitor has listed.
 
 ```yaml
 - name: "Vault backups"

@@ -6,8 +6,8 @@ runs them in sequence and frames their output, because separate commands are
 dispatched concurrently and would contend for the repo's chunks cache lock.
 Config: repo, max_age, passphrase / passphrase_file / passphrase_command,
 borg_bin, ssh_key / rsh, require_sudo, list_archives, collect_stats, cache_dir,
-lock_wait / backup_lock_wait, and the backup set (source_paths, exclude*,
-one_file_system, compression, archive_prefix). A borg error, an empty repo, or
+lock_wait / backup_lock_wait, the backup set (source_paths, exclude*,
+one_file_system, compression, archive_prefix), and allow_purge / purge_match. A borg error, an empty repo, or
 a newest archive older than max_age is failed; an unreachable host, a missing
 borg binary, a repo the SSH user cannot read, a lock borg gave up waiting for,
 or unparseable output is unavailable. This monitor has no warning tier.
@@ -17,7 +17,9 @@ the newest archive and compared with the live file; check freshness
 preview a prune (keep_*, prune_match), list an archive's folders for the
 browser (browse_limit), restore paths into restore_dir, diff an archive with
 the one before it, and run check, compact, prune and archive deletion as
-detached jobs, the destructive ones only with allow_delete."""
+detached jobs, the destructive ones only with allow_delete. With allow_purge,
+Purge Excluded rewrites existing archives without whatever the exclude set now
+drops and compacts the space away, and Purge Preview lists what that would be."""
 
 import json
 import shlex
@@ -49,7 +51,14 @@ _KEEP_OPTIONS = ('keep_within', 'keep_last', 'keep_secondly', 'keep_minutely', '
 
 # Actions that start a detached job, which interpret_action records from the pid the launch prints.
 _LAUNCHED = ('run_backup', 'dry_run_backup', 'restore_archive', 'check_repo', 'compact_repo',
-             'prune_repo', 'delete_archive')
+             'prune_repo', 'delete_archive', 'purge_preview', 'purge_excluded')
+
+# Keeps only the "Processing" lines and the top-most excluded path of each dropped tree from `borg recreate --list`, then exits with borg's own status.
+_TOPMOST_EXCLUDED = (
+    "awk '/^__vigil_rc=/ { rc = substr($0, 12); next } "
+    "/^x / { p = substr($0, 3); if (top != \"\" && index(p, top \"/\") == 1) next; top = p; print; next } "
+    "{ top = \"\"; print } END { exit rc }'"
+)
 
 # How many listed folders the browser keeps before forgetting the least recently used.
 _LISTING_CACHE = 256
@@ -107,6 +116,9 @@ class Borg(Plugin):
         self.prune_match = config.get('prune_match', f"{self.archive_prefix}-*")
         self.allow_delete = bool(config.get('allow_delete', False))
         self.check_verify_data = bool(config.get('check_verify_data', False))
+        self.allow_purge = bool(config.get('allow_purge', False))
+        # Unset means every archive, since archives Vigil created share the repo with the owning tool's under a different prefix.
+        self.purge_match = config.get('purge_match')
         self._polling_job = None
         self._poll_calls: List[str] = []
         # Archives never change once written, so a folder listed once stays true until the archive is deleted.
@@ -246,19 +258,24 @@ class Borg(Plugin):
         args.append("--dry-run" if dry_run else "--stats")
         if self.one_file_system:
             args.append("--one-file-system")
-        if self.exclude_caches:
-            args.append("--exclude-caches")
-        if self.exclude_if_present:
-            for marker in self.exclude_if_present:
-                args += ["--exclude-if-present", marker]
-        for pattern in self.exclude:
-            args += ["--exclude", pattern]
-        if self.exclude_from:
-            args += ["--exclude-from", self.exclude_from]
+        args += self._exclude_args()
         args += ["--lock-wait", str(self.backup_lock_wait)]
         args.append(f"{self.repo}::{name}")
         args += self.source_paths
         return self._build(args, persistent_cache=True)
+
+    def _exclude_args(self) -> List[str]:
+        """The exclusion options a backup applies, which a purge also uses to rewrite existing archives to match."""
+        args = []
+        if self.exclude_caches:
+            args.append("--exclude-caches")
+        for marker in self.exclude_if_present:
+            args += ["--exclude-if-present", marker]
+        for pattern in self.exclude:
+            args += ["--exclude", pattern]
+        if self.exclude_from:
+            args += ["--exclude-from", self.exclude_from]
+        return args
 
     def default_archive_name(self) -> str:
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
@@ -589,6 +606,8 @@ class Borg(Plugin):
             'prune_repo': self._plan_prune,
             'delete_archive': self._plan_delete,
             'break_lock': self._plan_break_lock,
+            'purge_preview': self._plan_purge,
+            'purge_excluded': self._plan_purge,
             'diff_archive': self._plan_diff,
         }
         planner = planners.get(action_id)
@@ -864,6 +883,34 @@ class Borg(Plugin):
         return self._launch('delete', self._maintenance_command(["delete", "--stats", f"{self.repo}::{archive}"]),
                             f" for {archive}")
 
+    def _purge_refusal(self) -> Optional[CollectResult]:
+        """The refusal for a purge this monitor is not set up for, else None."""
+        if not self.allow_purge:
+            return self._refused("Purging is off for this monitor — set allow_purge: true to enable it")
+        if not (self.exclude or self.exclude_from or self.exclude_if_present or self.exclude_caches):
+            return self._refused("Cannot purge: no exclude patterns configured")
+        return self._job_refusal("purge excluded files")
+
+    def _plan_purge(self, action_id: str, **_):
+        refusal = self._purge_refusal()
+        if refusal:
+            return refusal
+        scope = ["--glob-archives", self.purge_match] if self.purge_match else []
+        if action_id == 'purge_preview':
+            recreate = self._build([self.borg_bin, "recreate", "--dry-run", "--list", "--filter=x", *scope,
+                                    *self._exclude_args(), "--lock-wait", str(self.backup_lock_wait), self.repo],
+                                   persistent_cache=True)
+            command = f'{{ {recreate} 2>&1; echo "__vigil_rc=$?"; }} | {_TOPMOST_EXCLUDED}'
+            return self._launch('purge-preview', command)
+        # An interrupted recreate leaves a <name>.recreate archive behind that makes the next attempt fail at once.
+        leftovers = self._maintenance_command(["delete", "--glob-archives", "*.recreate", self.repo])
+        recreate = self._maintenance_command(["recreate", "--info", "--stats", "--progress", *scope,
+                                              *self._exclude_args(), self.repo])
+        compact = self._maintenance_command(["compact", "--progress", self.repo])
+        # A plain `exit` would leave the job's shell before it records the status, so a subshell carries the failure instead.
+        command = f'{leftovers}; {recreate}; rc=$?; if [ "$rc" -le 1 ]; then {compact}; else (exit "$rc"); fi'
+        return self._launch('purge', command)
+
     def _plan_break_lock(self, **_):
         if not self.allow_delete:
             return self._refused("Breaking locks is off for this monitor — set allow_delete: true to enable it")
@@ -969,6 +1016,10 @@ class Borg(Plugin):
         archive_progress records in a batch of newly-read output lines."""
         summary = None
         for text in lines:
+            # recreate prints which archive it is on as plain text, even under --log-json.
+            if text.startswith('Processing '):
+                summary = text.strip()
+                continue
             if not text.startswith('{'):
                 continue
             try:
@@ -1135,6 +1186,13 @@ class Borg(Plugin):
                      'visible_if': lambda p: p.allow_delete and bool(p.retention),
                      'confirm': 'Prune {plugin.repo} by its retention policy? Archives it drops are gone for good '
                                 '— run Prune Preview first to see which. Space is freed by a Compact afterwards.'},
+                    {'id': 'purge_preview', 'label': 'Purge Preview', 'icon': 'filter_alt',
+                     'visible_if': lambda p: p.allow_purge},
+                    {'id': 'purge_excluded', 'label': 'Purge Excluded', 'icon': 'cleaning_services', 'color': 'negative',
+                     'visible_if': lambda p: p.allow_purge,
+                     'confirm': 'Rewrite every archive in {plugin.repo} without the files its exclude patterns now drop, '
+                                'then compact? Those files are gone from every archive for good — run Purge Preview first '
+                                'to see which. It holds the repository lock for the whole run, so backups wait until it ends.'},
                     {'id': 'break_lock', 'label': 'Break Lock', 'icon': 'lock_open', 'color': 'negative',
                      'visible_if': lambda p: p.allow_delete,
                      'confirm': 'Break the locks on {plugin.repo}? Only do this when no borg process is using it; '

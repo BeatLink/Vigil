@@ -1222,6 +1222,51 @@ class TestMaintenance:
         assert Borg._progress_from_lines([line]) == "Checking segments 12.0%"
 
 
+PURGE_CFG = {**BASE_CFG, "allow_purge": True, "exclude": ["fm:*/.cache"], "exclude_if_present": [".nobackup"]}
+
+
+def _unquoted(plan) -> str:
+    """The launched command with the quoting of its nested sh -c removed, so arguments read as typed."""
+    return re.sub(r"[\"'\\]", "", plan.command)
+
+
+class TestPurge:
+    @pytest.mark.parametrize("action_id, kind", [("purge_preview", "purge-preview"), ("purge_excluded", "purge")])
+    async def test_runs_as_a_detached_job(self, make_plugin, action_id, kind):
+        p = make_plugin(Borg, PURGE_CFG)
+        p.plan_action(action_id)
+        p.storage.apply(p.interpret_action(action_id, CmdResult(0, "91\n", "")))
+        assert p.jobs.running()['kind'] == kind
+
+    async def test_rewrites_with_the_backup_exclusions_then_compacts(self, make_plugin):
+        cmd = _unquoted(make_plugin(Borg, PURGE_CFG).plan_action("purge_excluded"))
+        assert "recreate --info --stats" in cmd and "--dry-run" not in cmd
+        assert "--exclude fm:*/.cache" in cmd and "--exclude-if-present .nobackup" in cmd
+        assert cmd.index("delete --glob-archives *.recreate") < cmd.index("recreate --info") < cmd.index("compact --progress")
+
+    async def test_every_archive_unless_purge_match_is_set(self, make_plugin):
+        everything = _unquoted(make_plugin(Borg, PURGE_CFG).plan_action("purge_excluded"))
+        assert "--glob-archives *.recreate" in everything and "--glob-archives Odin-*" not in everything
+        scoped = _unquoted(make_plugin(Borg, {**PURGE_CFG, "purge_match": "Odin-*"}).plan_action("purge_excluded"))
+        assert "recreate --info --stats --progress --glob-archives Odin-*" in scoped
+
+    async def test_preview_is_a_dry_run_listing_only_excluded_items(self, make_plugin):
+        cmd = make_plugin(Borg, PURGE_CFG).plan_action("purge_preview").command
+        assert "recreate --dry-run --list --filter=x" in cmd and "compact" not in cmd
+
+    @pytest.mark.parametrize("action_id", ["purge_preview", "purge_excluded"])
+    async def test_off_by_default(self, make_plugin, action_id):
+        outcome = make_plugin(Borg, {**PURGE_CFG, "allow_purge": False}).plan_action(action_id)
+        assert outcome.success is False and "allow_purge" in outcome.metadata['content']
+
+    async def test_needs_something_to_exclude(self, make_plugin):
+        cfg = {**BASE_CFG, "allow_purge": True, "exclude_caches": False}
+        assert make_plugin(Borg, cfg).plan_action("purge_excluded").success is False
+
+    async def test_processing_lines_become_the_summary(self):
+        assert Borg._progress_from_lines(["Processing Odin-2026-07-23", "0 B O 0 B C 0 B D 0 N src"]) == "Processing Odin-2026-07-23"
+
+
 class TestDelete:
     async def test_deletes_a_listed_archive(self, make_plugin, run_cycle):
         p = make_plugin(Borg, DELETE_CFG)
