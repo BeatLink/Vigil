@@ -16,6 +16,7 @@ from vigil.core.notifications.channels import Channel, DesktopChannel, Message, 
 from vigil.core.notifications.http import NtfyChannel, WebhookChannel
 from vigil.core.notifications.mail import AppriseChannel, SmtpChannel
 from vigil.core.notifications.maintenance import Window, parse_windows
+from vigil.core.notifications.oncall import OpsgenieChannel, PagerDutyChannel
 from vigil.core.notifications.rules import (
     FLAPPING, PROBLEM, RECOVERED, SETTLED, Alert, Tracker, resolve_rules,
 )
@@ -31,7 +32,8 @@ MUTE_SETTING = "notifications.muted:{}"
 
 
 CHANNEL_TYPES = {cls.TYPE: cls for cls in (DesktopChannel, WebhookChannel, NtfyChannel,
-                                           SmtpChannel, AppriseChannel)}
+                                           SmtpChannel, AppriseChannel, PagerDutyChannel,
+                                           OpsgenieChannel)}
 
 
 def build_channels(entries: List[Dict[str, Any]], agents: Any) -> Dict[str, Channel]:

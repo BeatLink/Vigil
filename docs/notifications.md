@@ -4,9 +4,10 @@ Vigil sends a notification when a monitor's status changes in a way you care abo
 failing, it is still failing, or it recovers. Notifications go to **channels**. Each monitor
 follows a **rule** that sets which channels it uses and which changes count.
 
-Five channel types exist: [`desktop`](#desktop-notifications), [`webhook`](#webhook),
-[`ntfy`](#ntfy), [`smtp`](#email) and [`apprise`](#apprise). See
-[notifications-plan.md](notifications-plan.md) for what is planned.
+Seven channel types exist: [`desktop`](#desktop-notifications), [`webhook`](#webhook),
+[`ntfy`](#ntfy), [`smtp`](#email), [`apprise`](#apprise), [`pagerduty`](#pagerduty-and-opsgenie)
+and [`opsgenie`](#pagerduty-and-opsgenie). See [notifications-plan.md](notifications-plan.md) for
+what is planned.
 
 ## Config
 
@@ -334,6 +335,33 @@ channels:
 Apprise URLs usually carry the service's token, so prefer `urls_file`. The channel needs the
 `apprise` Python package, which the Nix package includes; with pip, install `vigil[apprise]`. Apprise
 shows failures, warnings and recoveries with the service's own colors or icons where it has them.
+
+## PagerDuty and Opsgenie
+
+These on-call channels keep one alert per monitor, keyed by its id. A problem opens it (or updates
+it while it is still open), and a recovery resolves or closes it, even while the monitor is muted.
+Notifications that arrive together are sent as separate alerts rather than one digest, so each
+monitor's alert can close on its own. A test notification opens an alert and closes it at once.
+
+```yaml
+channels:
+  - id: pagerduty
+    type: pagerduty
+    routing_key_file: /run/secrets/pagerduty_routing_key   # an Events API v2 integration key
+    severity: {failed: critical}                          # critical, error, warning or info
+  - id: opsgenie
+    type: opsgenie
+    api_key_file: /run/secrets/opsgenie_api_key
+    region: eu                                            # us (default) or eu
+    priority: {failed: P1, warning: P3}                   # P1 to P5
+```
+
+| Status        | PagerDuty severity | Opsgenie priority |
+|---------------|--------------------|-------------------|
+| `failed`      | `critical`         | `P1`              |
+| `warning`     | `warning`          | `P3`              |
+| `unavailable` | `error`            | `P3`              |
+| `flapping`    | `warning`          | `P3`              |
 
 ## Checking a channel
 

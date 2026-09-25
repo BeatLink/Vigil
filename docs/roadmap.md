@@ -28,6 +28,7 @@
 - [x] Notification engine with per-monitor rules, and desktop notifications through the agent
 - [x] Webhook and ntfy notification channels
 - [x] Email (SMTP) and Apprise notification channels
+- [x] PagerDuty and Opsgenie notification channels, flapping detection, grouping and maintenance windows
 - [x] Authentication for the dashboard and REST API (HTTP Basic Auth)
 - [ ] HTTPS for the dashboard and REST API
 - [ ] Boot-uptime monitor (`uptime -p` — how long the host has been up, distinct from ping reachability)
