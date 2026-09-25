@@ -892,6 +892,18 @@ class TestRestoreCanary:
         assert "extract --stdout" in cmd
         assert "host-2024 Storage/System/.vigil-canary" in cmd.replace("'", "")
 
+    async def test_the_live_canary_is_read_without_sudo_first(self, make_plugin, run_cycle, tmp_path):
+        import subprocess
+        canary = tmp_path / ".vigil-canary"
+        canary.write_text("token\n")
+        p = make_plugin(Borg, {**CANARY_CFG, "canary_path": str(canary), "require_sudo": True})
+        _cycle_with(p, run_cycle)
+        live = dict(p._poll_plan())['canary_live']
+        # No sudo is available here, so this only succeeds if the plain read comes first.
+        out = subprocess.run(["sh", "-c", live], capture_output=True, text=True, env={"PATH": "/run/current-system/sw/bin:/usr/bin:/bin"})
+        assert out.returncode == 0 and out.stdout == "token\n"
+        assert live.startswith("cat ") and "|| sudo -n cat" in live
+
     async def test_matching_canary_passes(self, make_plugin, run_cycle):
         p = make_plugin(Borg, CANARY_CFG)
         _cycle_with(p, run_cycle)
