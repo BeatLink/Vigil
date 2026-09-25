@@ -206,6 +206,7 @@ class DatabaseManager:
         # How far downsampling has thinned, and whether a pass is still working through its days.
         self._thinned_through: Optional[datetime] = None
         self._thinning = False
+        self._stop_thinning = False
         _writer.batch_window = write_batch_seconds
         self._connect_and_init()
         # The engine hydrates later, off the event loop, so the dashboard can answer while a large database loads.
@@ -697,6 +698,10 @@ class DatabaseManager:
         _writer.submit(_do_prune)
         return 0
 
+    def stop_downsampling(self) -> None:
+        """Lets a running downsample pass finish its current day and queue no more, so a flush at shutdown returns promptly."""
+        self._stop_thinning = True
+
     def downsample_metrics(self, older_than_days: int) -> None:
         """Thin metrics older than the window to one row per series per hour.
         Charts and hydration only ever read a series' recent tail, so old
@@ -706,7 +711,7 @@ class DatabaseManager:
         Works one day per writer job, each queueing the next, so a first pass
         over weeks of rows never holds the writer long enough to stall the
         writes behind it. Days already thinned are remembered and skipped."""
-        if older_than_days is None or older_than_days <= 0 or self._thinning:
+        if older_than_days is None or older_than_days <= 0 or self._thinning or self._stop_thinning:
             return
         cutoff = (datetime.now() - timedelta(days=older_than_days)).replace(minute=0, second=0, microsecond=0)
         self._thinning = True
@@ -739,7 +744,8 @@ class DatabaseManager:
             except Exception:
                 self._thinning = False
                 raise
-            if end < cutoff:
+            # A pass paces at one day per writer batch, so shutdown's flush would otherwise wait out every day still to come.
+            if end < cutoff and not self._stop_thinning:
                 _writer.submit(lambda: _thin_from(end))
             else:
                 _finish()

@@ -388,6 +388,26 @@ class TestDownsampling:
         _writer.flush()
         assert len(self._rows()) == 6 and mgr._thinning is False
 
+    def test_a_stopped_pass_lets_flush_return_before_its_remaining_days(self, mgr, monkeypatch):
+        import time
+        from vigil.core.database.database import _writer
+        start = (datetime.now() - timedelta(days=30)).replace(minute=0, second=0, microsecond=0)
+        for day in range(20):
+            for minute in (1, 2):
+                self._insert_at(start + timedelta(days=day, minutes=minute))
+        monkeypatch.setattr(_writer, 'synchronous', False)
+        # A wide batch window, like a production write_batch_seconds, is what makes a full pass slow.
+        monkeypatch.setattr(_writer, 'batch_window', 0.2)
+        _writer.start()
+        mgr.downsample_metrics(7)
+        mgr.stop_downsampling()
+        began = time.monotonic()
+        _writer.flush()
+        assert time.monotonic() - began < 1.0
+        assert mgr._thinning is False
+        mgr.downsample_metrics(7)
+        assert mgr._thinning is False
+
     def test_a_later_pass_starts_where_the_last_one_stopped(self, mgr):
         old = datetime.now() - timedelta(days=12)
         self._insert_at(old)

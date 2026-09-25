@@ -499,6 +499,7 @@ class VigilEngine:
             task.cancel()
         self.notifications.stop()
         self.connectors.close()
+        self.db.stop_downsampling()
         self.db.flush()
         logging.info("Vigil Engine shut down cleanly.")
 
