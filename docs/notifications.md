@@ -148,6 +148,10 @@ Every monitor has its own dashboard address, `/monitor/<id>`, and the events fee
 A `desktop` channel shows a notification on a computer that runs a Vigil agent. Clicking it opens
 the monitor's page in the browser.
 
+Every notification has a **Dismiss** button beside **Open**, and closes itself after `timeout`
+(30 seconds unless set). The agent closes it itself when the time runs out, because most desktops
+keep a `critical` notification on screen until it is clicked.
+
 Each monitor has at most one notification on screen. A reminder or a worse status replaces it,
 and when the monitor recovers the notification closes itself instead of a "recovered" one
 appearing. Set `dismiss_on_recovery: false` on the channel to get the recovery notification
@@ -179,6 +183,7 @@ channels:
     type: desktop
     agent: laptop-desktop
     dismiss_on_recovery: true        # the default: close the notification when the monitor recovers
+    timeout: 30s                     # the default: close it after this long; 0 keeps it until dismissed
     icon: vigil                      # the default: Vigil's own icon, shipped with the agent
     urgency:                         # one value for everything, or per status as here
       failed: critical

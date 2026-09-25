@@ -5,10 +5,11 @@ notification daemon the desktop runs (GNOME, KDE, mako, dunst, ...). That
 needs the user's session bus, which only a process running as the logged-in
 user can reach: an agent running as a system service cannot show one.
 
-When the server sends a link, the notification carries a default action, and
-clicking it opens the link with ``xdg-open``. Each notification can belong to
-a key, the monitor it is about: a newer one for the same key replaces it, and
-dismissing the key closes it.
+Every notification has a Dismiss button, and when the server sends a link, clicking
+the notification opens it with ``xdg-open``. A notification given a timeout is closed
+by the agent when it runs out, whatever its urgency, since desktops keep critical ones
+on screen. Each notification can belong to a key, the monitor it is about: a newer one
+for the same key replaces it, and dismissing the key closes it.
 """
 
 import asyncio
@@ -32,18 +33,21 @@ ID_SECONDS = 10.0
 
 
 def command(title: str, body: str, urgency: str, url: Optional[str],
-            icon: Optional[str] = None, replace_id: Optional[int] = None) -> List[str]:
+            icon: Optional[str] = None, replace_id: Optional[int] = None,
+            timeout: float = 0) -> List[str]:
     """The notify-send argument list for one notification."""
     args = ['notify-send', '--app-name=Vigil', f'--urgency={urgency}', '--print-id']
+    if timeout:
+        args.append(f'--expire-time={int(timeout * 1000)}')
     if icon:
         # 'vigil' is the bundled icon; anything else is an icon theme name or a file here.
         args.append(f'--icon={_ICON_FILE if icon == VIGIL_ICON else icon}')
     if replace_id is not None:
         args.append(f'--replace-id={replace_id}')
     if url:
-        # --wait keeps notify-send running until the notification closes, and
-        # prints the action's name if it was clicked.
-        args += ['--action=default=Open', '--wait']
+        args.append('--action=default=Open')
+    # --wait keeps notify-send running until the notification closes, and prints the action's name if one was clicked.
+    args += ['--action=dismiss=Dismiss', '--wait']
     return args + ['--', title, body]
 
 
@@ -79,24 +83,34 @@ class Notifier:
         url = frame.get('url') or None
         icon = str(frame['icon']) if frame.get('icon') else None
         key = str(frame['key']) if frame.get('key') else None
+        try:
+            timeout = max(0.0, float(frame.get('timeout') or 0))
+        except (TypeError, ValueError):
+            timeout = 0.0
 
         async with self._lock(key):
-            started = await self._start(title, body, urgency, url, icon, key)
+            started = await self._start(title, body, urgency, url, icon, key, timeout)
         if started is None:
             return
-        proc, mine = started
+        proc, mine, notification_id = started
         try:
-            rest, err = await asyncio.wait_for(proc.communicate(), timeout=WAIT_SECONDS)
+            rest, err = await asyncio.wait_for(proc.communicate(), timeout=timeout or WAIT_SECONDS)
         except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+            # Out of time: close it here, because a desktop keeps a critical notification regardless.
+            if timeout and notification_id is not None:
+                await close(notification_id)
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=5)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
             return
         except asyncio.CancelledError:
             # Replaced by a newer notification: stop waiting on this one without closing it.
             proc.kill()
             raise
         finally:
-            if mine is not None and url and self._shown.get(key) is mine:
+            if mine is not None and self._shown.get(key) is mine:
                 del self._shown[key]
 
         if proc.returncode != 0:
@@ -106,7 +120,7 @@ class Notifier:
             await _open(str(url))
 
     async def _start(self, title: str, body: str, urgency: str, url: Optional[str],
-                     icon: Optional[str], key: Optional[str]):
+                     icon: Optional[str], key: Optional[str], timeout: float):
         """Show the notification and record its id under the key, replacing the key's previous one."""
         replace_id = None
         previous = self._shown.pop(key, None) if key else None
@@ -116,7 +130,7 @@ class Notifier:
                 previous.task.cancel()
         try:
             proc = await asyncio.create_subprocess_exec(
-                *command(title, body, urgency, url, icon, replace_id),
+                *command(title, body, urgency, url, icon, replace_id, timeout),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
         except OSError as e:
@@ -129,28 +143,18 @@ class Notifier:
             proc.kill()
             await proc.wait()
             return None
-        if key and first.strip().isdigit():
-            mine = self._shown[key] = _Shown(int(first), asyncio.current_task() if url else None)
-        return proc, mine
+        notification_id = int(first) if first.strip().isdigit() else None
+        if key and notification_id is not None:
+            mine = self._shown[key] = _Shown(notification_id, asyncio.current_task())
+        return proc, mine, notification_id
 
     async def dismiss(self, frame: Dict[str, Any]) -> None:
         """Close the notification a key has on screen, if any."""
         key = str(frame.get('key') or '')
         async with self._lock(key):
             shown = self._shown.pop(key, None)
-        if shown is None:
-            return
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *close_command(shown.id),
-                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
-            )
-            _, err = await proc.communicate()
-        except OSError as e:
-            logging.error(f"could not close a desktop notification (is busctl installed?): {e}")
-            return
-        if proc.returncode != 0:
-            logging.error(f"closing notification {shown.id} failed: {err.decode(errors='replace').strip()}")
+        if shown is not None:
+            await close(shown.id)
 
     def cancel_all(self) -> None:
         """Stop waiting on every notification, as the agent shuts down."""
@@ -158,6 +162,21 @@ class Notifier:
             if shown.task is not None:
                 shown.task.cancel()
         self._shown.clear()
+
+
+async def close(notification_id: int) -> None:
+    """Close one notification through the desktop's notification service."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *close_command(notification_id),
+            stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        _, err = await proc.communicate()
+    except OSError as e:
+        logging.error(f"could not close a desktop notification (is busctl installed?): {e}")
+        return
+    if proc.returncode != 0:
+        logging.error(f"closing notification {notification_id} failed: {err.decode(errors='replace').strip()}")
 
 
 async def _open(url: str) -> None:

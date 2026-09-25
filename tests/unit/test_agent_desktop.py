@@ -30,8 +30,8 @@ class FakeDesktop:
                 proc.finish(b'')
         return FakeProc()
 
-    def click(self, notification_id):
-        self.open.pop(notification_id).finish(b'default\n')
+    def click(self, notification_id, action=b'default\n'):
+        self.open.pop(notification_id).finish(action)
 
     def names(self):
         return [c[0] for c in self.calls]
@@ -106,15 +106,34 @@ class TestShow:
         await task
         assert fake.calls == [
             ['notify-send', '--app-name=Vigil', '--urgency=critical', '--print-id',
-             '--action=default=Open', '--wait', '--', 'Nas is failed', 'why'],
+             '--action=default=Open', '--action=dismiss=Dismiss', '--wait', '--', 'Nas is failed', 'why'],
             ['xdg-open', 'https://v/monitor/nas'],
         ]
 
-    async def test_without_a_link_it_does_not_wait(self, monkeypatch):
+    async def test_without_a_link_it_offers_only_dismiss(self, monkeypatch):
         fake = FakeDesktop(monkeypatch)
-        await desktop.Notifier().show({'title': '-t', 'body': 'b', 'urgency': 'bogus'})
+        task = asyncio.create_task(desktop.Notifier().show({'title': '-t', 'body': 'b', 'urgency': 'bogus'}))
+        await _settle()
+        fake.click(101, b'dismiss\n')
+        await task
         assert fake.calls == [['notify-send', '--app-name=Vigil', '--urgency=normal', '--print-id',
-                               '--', '-t', 'b']]
+                               '--action=dismiss=Dismiss', '--wait', '--', '-t', 'b']]
+
+    async def test_the_dismiss_button_closes_without_opening_the_link(self, monkeypatch):
+        fake = FakeDesktop(monkeypatch)
+        task = asyncio.create_task(desktop.Notifier().show({'title': 't', 'body': 'b', 'url': 'https://v'}))
+        await _settle()
+        fake.click(101, b'dismiss\n')
+        await task
+        assert fake.names() == ['notify-send']
+
+    async def test_a_timeout_closes_it_even_when_critical(self, monkeypatch):
+        fake = FakeDesktop(monkeypatch)
+        await asyncio.wait_for(desktop.Notifier().show(
+            {'title': 't', 'body': 'b', 'urgency': 'critical', 'timeout': 0.05}), timeout=2)
+        assert '--expire-time=50' in fake.calls[0]
+        assert fake.calls[1] == desktop.close_command(101)
+        assert fake.open == {}
 
     async def test_a_missing_notify_send_is_logged_not_raised(self, monkeypatch, caplog):
         async def missing(*args, **kwargs):

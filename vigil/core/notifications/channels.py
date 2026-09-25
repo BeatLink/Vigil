@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from vigil.core.connectors.types import Status
+from vigil.plugins.base.plugin_helpers import parse_duration
 
 
 @dataclass(frozen=True)
@@ -125,6 +126,7 @@ class DesktopChannel(Channel):
             raise ValueError(f"`urgency` must be low, normal or critical, not {sorted(bad)}")
         self.icon = per_status(config.get('icon'), self.DEFAULT_ICON, 'icon')
         self.dismisses_on_recovery = bool(config.get('dismiss_on_recovery', True))
+        self.timeout = parse_duration(config.get('timeout', '30s') or 0)
         self._groups: Dict[str, Any] = {}
         self._member: Dict[str, str] = {}
 
@@ -160,7 +162,7 @@ class DesktopChannel(Channel):
         await self._agents.get(self.agent_id).notify(
             message.title, message.body,
             self.urgency.get(message.key, 'normal'), message.url,
-            str(self.icon.get(message.key, self.DEFAULT_ICON['failed'])), key,
+            str(self.icon.get(message.key, self.DEFAULT_ICON['failed'])), key, self.timeout,
         )
 
     async def _show_group(self, key: str) -> None:

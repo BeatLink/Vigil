@@ -152,10 +152,10 @@ class AgentConnection:
 
     async def notify(self, title: str, body: str, urgency: str = "normal",
                      url: Optional[str] = None, icon: Optional[str] = None,
-                     key: Optional[str] = None) -> None:
+                     key: Optional[str] = None, timeout: float = 0) -> None:
         """Ask the agent to show a desktop notification. Raises if it cannot be handed over."""
         self._require(proto.NOTIFY, "desktop notifications")
-        await self._send(proto.notify(title, body, urgency, url, icon, key))
+        await self._send(proto.notify(title, body, urgency, url, icon, key, timeout))
 
     async def dismiss(self, key: str) -> None:
         """Ask the agent to close the desktop notification it shows for `key`."""

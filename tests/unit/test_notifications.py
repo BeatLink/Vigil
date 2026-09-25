@@ -408,7 +408,14 @@ class TestDesktopChannel:
         await channel.send(Message('Nas is failed', 'why', 'failed', PROBLEM, 'nas', 'https://v/monitor/nas'))
         assert socket.sent == [{'t': 'notify', 'title': 'Nas is failed', 'body': 'why',
                                 'urgency': 'critical', 'url': 'https://v/monitor/nas',
-                                'icon': 'vigil', 'key': 'nas'}]
+                                'icon': 'vigil', 'key': 'nas', 'timeout': 30}]
+
+    async def test_the_timeout_can_be_changed_or_turned_off(self):
+        for setting, expected in (('2m', 120), (0, None)):
+            registry, socket = _registry()
+            channel = DesktopChannel('desk', {'agent': 'desktop', 'timeout': setting}, registry)
+            await channel.send(Message('t', 'b', 'failed', PROBLEM, 'nas'))
+            assert socket.sent[0].get('timeout') == expected
 
     async def test_a_recovery_dismisses_the_monitors_notification(self):
         registry, socket = _registry(caps=('notify', 'dismiss'))

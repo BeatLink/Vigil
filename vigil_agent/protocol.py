@@ -121,7 +121,8 @@ def event(stream_id: str, payload: Dict[str, Any], timestamp: float) -> Dict[str
 
 
 def notify(title: str, body: str, urgency: str = "normal", url: Optional[str] = None,
-           icon: Optional[str] = None, key: Optional[str] = None) -> Dict[str, Any]:
+           icon: Optional[str] = None, key: Optional[str] = None,
+           timeout: float = 0) -> Dict[str, Any]:
     """Build a server NOTIFY frame; `url` opens on a click, and `key` lets a later frame replace or dismiss it."""
     frame = {'t': NOTIFY, 'title': title, 'body': body, 'urgency': urgency}
     if url:
@@ -130,6 +131,8 @@ def notify(title: str, body: str, urgency: str = "normal", url: Optional[str] = 
         frame['icon'] = icon
     if key:
         frame['key'] = key
+    if timeout:
+        frame['timeout'] = timeout
     return frame
 
 
