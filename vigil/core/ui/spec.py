@@ -151,6 +151,10 @@ kind 'edit'     Loads content via ``load_action_id``/``load_params`` into an edi
                 via ``save_action_id``/``save_params`` with the edited text passed under
                 ``save_content_kwarg`` (default ``'content'``), and notifies
                 ``success_message`` on success.
+kind 'form'     Shows one text input per ``fields`` entry (``{'name', 'label',
+                'placeholder', 'default'}``); ``submit_label`` (default ``'Run'``) runs
+                ``action_id`` with ``params`` plus each field's value under its name, and
+                shows the returned content below the inputs, so it can be resubmitted.
 
 Formatters (FORMATTERS)
 =======================

@@ -134,6 +134,9 @@ class DialogSpec(TypedDict, total=False):
     save_params: Dict[str, str]
     save_content_kwarg: str        # default 'content'
     success_message: str
+    # kind == 'form' (also uses action_id / params):
+    fields: List[Dict[str, str]]   # {'name', 'label', 'placeholder', 'default'}; values pass as kwargs by name
+    submit_label: str
 
 
 class JobPanelSpec(TypedDict, total=False):

@@ -52,6 +52,22 @@ def register_api(app: Any, engine: EngineLike) -> None:
         total = sum(counts.values())
         return JSONResponse({'total': total, **counts, 'unhealthy': total - counts['online']})
 
+    @app.get('/api/backups')
+    def backups():
+        """Every backup monitor's health in one list, stalest first, for a dashboard tile or a daily digest."""
+        statuses = db.latest_statuses()
+        rows = []
+        for p in _flatten(engine.plugins):
+            summarize = getattr(p, 'backup_summary', None)
+            if p.children or not callable(summarize):
+                continue
+            rows.append({'id': p.id, 'name': p.name, 'target': getattr(p, 'target', None),
+                         'status': statuses.get(p.id, 'unavailable'), **summarize()})
+        rows.sort(key=lambda r: -(r['newest_archive_age'] if r['newest_archive_age'] is not None else float('inf')))
+        healthy = sum(1 for r in rows if r['status'] == 'online')
+        return JSONResponse({'total': len(rows), 'healthy': healthy, 'unhealthy': len(rows) - healthy,
+                             'repositories': rows})
+
     @app.get('/api/monitors')
     def monitors():
         return JSONResponse(_monitor_summary(db.latest_statuses()))

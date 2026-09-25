@@ -423,6 +423,35 @@ async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None)
         dialog.open()
         return
 
+    if spec['kind'] == 'form':
+        with ui.dialog() as dialog, card('w-full'):
+            ui.label(title).classes('halon-title-section mb-4')
+            inputs = {
+                field['name']: ui.input(field.get('label', field['name']),
+                                        value=field.get('default', ''),
+                                        placeholder=field.get('placeholder', '')
+                                        ).props('outlined dense').classes('w-full')
+                for field in spec.get('fields', [])
+            }
+            output = ui.textarea().props('readonly autogrow outlined').classes('w-full font-mono')
+            output.set_visibility(False)
+            with ui.row().classes('justify-end gap-2 mt-4'):
+                action_button('Close', on_click=dialog.close, icon=None, weight='flat')
+
+                async def submit():
+                    kwargs = _resolve_params(spec.get('params'))
+                    kwargs.update({name: (field.value or '').strip() for name, field in inputs.items()})
+                    ok, content = await plugin.run_action(spec['action_id'], **kwargs)
+                    if not ok:
+                        ui.notify(content or 'Action failed', type='negative')
+                    if content:
+                        output.value = content
+                        output.set_visibility(True)
+
+                action_button(spec.get('submit_label', 'Run'), on_click=submit, icon=None, weight='filled')
+        dialog.open()
+        return
+
 
 def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optional[dict] = None):
     """Render a data table with optional per-row action buttons, cell coloring and filtering."""

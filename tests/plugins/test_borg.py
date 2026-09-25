@@ -866,3 +866,233 @@ class TestArchiveCache:
         archives, _ = plugin.cached_archives()
         assert [a["name"] for a in archives] == ["archive-0"]
         assert "original" not in archives[0]
+
+
+CANARY_CFG = {**BASE_CFG, "canary_path": "/Storage/System/.vigil-canary", "collect_stats": False}
+
+
+def _cycle_with(plugin, run_cycle, **extra):
+    """Drives one poll, answering each planned call from `extra` by name and the listing with a fresh archive."""
+    listing = CmdResult(0, _list_json(int(time.time()) - 60), "")
+    answers = {'list': listing, 'info': CmdResult(0, "{}", ""), **extra}
+    return run_cycle(plugin, lambda c: _framed(plugin, *[answers[n] for n in plugin._poll_calls]))
+
+
+class TestRestoreCanary:
+    async def test_no_canary_before_an_archive_is_known(self, make_plugin):
+        p = make_plugin(Borg, CANARY_CFG)
+        p.commands()
+        assert p._poll_calls == ['list']
+
+    async def test_canary_runs_once_the_newest_archive_is_known(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CANARY_CFG)
+        _cycle_with(p, run_cycle)
+        cmd = p.commands()[0].text
+        assert p._poll_calls == ['list', 'canary', 'canary_live']
+        assert "extract --stdout" in cmd
+        assert "host-2024 Storage/System/.vigil-canary" in cmd.replace("'", "")
+
+    async def test_matching_canary_passes(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CANARY_CFG)
+        _cycle_with(p, run_cycle)
+        p.commands()
+        _cycle_with(p, run_cycle, canary=CmdResult(0, "token", ""), canary_live=CmdResult(0, "token\n", ""))
+        assert _latest_metric("test-borg", "canary_ok") == 1.0
+        assert _latest_status("test-borg") == "online"
+
+    async def test_differing_canary_fails_the_monitor(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CANARY_CFG)
+        _cycle_with(p, run_cycle)
+        p.commands()
+        _cycle_with(p, run_cycle, canary=CmdResult(0, "old", ""), canary_live=CmdResult(0, "new", ""))
+        assert _latest_metric("test-borg", "canary_ok") == 0.0
+        assert _latest_status("test-borg") == "failed"
+
+    async def test_a_failed_canary_keeps_the_monitor_failed_until_it_passes(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CANARY_CFG)
+        _cycle_with(p, run_cycle)
+        p.commands()
+        _cycle_with(p, run_cycle, canary=CmdResult(1, "", "Include pattern 'x' never matched."),
+                    canary_live=CmdResult(0, "t", ""))
+        p.commands()
+        assert 'canary' not in p._poll_calls
+        _cycle_with(p, run_cycle)
+        assert _latest_status("test-borg") == "failed"
+
+    async def test_a_locked_repo_reaches_no_verdict(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CANARY_CFG)
+        _cycle_with(p, run_cycle)
+        p.commands()
+        _cycle_with(p, run_cycle, canary=CmdResult(2, "", "Failed to create/acquire the lock /r/lock (timeout)."),
+                    canary_live=CmdResult(0, "t", ""))
+        assert _latest_metric("test-borg", "canary_ok") is None
+        assert _latest_status("test-borg") == "online"
+
+    async def test_verify_restore_action_records_the_verdict(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CANARY_CFG)
+        _cycle_with(p, run_cycle)
+        plan = p.plan_action("verify_restore")
+        assert "extract --stdout" in plan.command
+        outcome = p.interpret_action("verify_restore", _framed(p, CmdResult(0, "t", ""), CmdResult(0, "t", "")))
+        p.storage.apply(outcome)
+        assert outcome.success is True
+        assert outcome.status is None
+        assert _latest_metric("test-borg", "canary_ok") == 1.0
+
+
+CHECK_CFG = {**BASE_CFG, "repo": "/srv/local", "check_units": ["borgmatic-check.service"], "collect_stats": False}
+
+
+def _checks_out(ok=None, end=None, start=None, errs=()):
+    def line(epoch, text):
+        return f"{epoch}.000000 host systemd[1]: {text}" if epoch else ""
+    lines = ["unit=borgmatic-check.service",
+             "ok=" + line(ok, "Finished Checks."),
+             "end=" + (line(end, "borgmatic-check.service: Failed with result 'exit-code'.") if end else line(ok, "Finished Checks.")),
+             "start=" + line(start, "Starting Checks...")]
+    lines += [f"err={epoch}.0 host borgmatic[9]: Command 'borg check --info {repo}' returned non-zero exit status 1." for epoch, repo in errs]
+    return CmdResult(0, "\n".join(lines), "")
+
+
+class TestCheckFreshness:
+    async def test_recent_success_passes(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CHECK_CFG)
+        p.commands()
+        _cycle_with(p, run_cycle, checks=_checks_out(ok=int(time.time()) - 3600))
+        assert _latest_metric("test-borg", "checks_ok") == 1.0
+        assert _latest_status("test-borg") == "online"
+
+    async def test_stale_success_fails(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CHECK_CFG)
+        p.commands()
+        _cycle_with(p, run_cycle, checks=_checks_out(ok=int(time.time()) - 10 * 86400))
+        assert _latest_status("test-borg") == "failed"
+
+    async def test_no_record_fails(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CHECK_CFG)
+        p.commands()
+        _cycle_with(p, run_cycle, checks=_checks_out())
+        assert _latest_status("test-borg") == "failed"
+
+    async def test_a_failure_naming_this_repo_fails(self, make_plugin, run_cycle):
+        now = int(time.time())
+        p = make_plugin(Borg, CHECK_CFG)
+        p.commands()
+        _cycle_with(p, run_cycle, checks=_checks_out(ok=now - 86400, end=now - 60, start=now - 600,
+                                                     errs=[(now - 70, "/srv/local")]))
+        assert _latest_status("test-borg") == "failed"
+
+    async def test_a_failure_naming_only_another_repo_counts_as_a_pass(self, make_plugin, run_cycle):
+        now = int(time.time())
+        p = make_plugin(Borg, CHECK_CFG)
+        p.commands()
+        _cycle_with(p, run_cycle, checks=_checks_out(end=now - 60, start=now - 600,
+                                                     errs=[(now - 70, "ssh://borg@far/srv/local")]))
+        assert _latest_metric("test-borg", "checks_ok") == 1.0
+        assert _latest_status("test-borg") == "online"
+
+    async def test_a_rotated_journal_keeps_the_last_success(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CHECK_CFG)
+        p.commands()
+        _cycle_with(p, run_cycle, checks=_checks_out(ok=int(time.time()) - 3600))
+        p.commands()
+        _cycle_with(p, run_cycle, checks=_checks_out())
+        assert _latest_status("test-borg") == "online"
+
+    async def test_the_probe_reads_only_systemds_own_lines(self, make_plugin):
+        p = make_plugin(Borg, CHECK_CFG)
+        p.commands()
+        assert "_PID=1" in p._poll_command()
+
+
+PRUNE_OUTPUT = """Keeping archive (rule: daily #1):            backup-2026-09-23T00:00:00           Tue, 2026-09-22 19:00:00 [d0e5]
+Would prune:                                 backup-2026-09-22T00:00:00           Mon, 2026-09-21 19:00:00 [43a8]
+Keeping archive (rule: weekly #1):           backup-2026-09-21T00:00:00           Sun, 2026-09-20 19:00:00 [c598]"""
+
+
+class TestPrunePreview:
+    async def test_refused_without_retention(self, plugin):
+        outcome = plugin.plan_action("prune_preview")
+        assert outcome.success is False and outcome.status is None
+
+    async def test_is_a_dry_run_with_the_configured_policy(self, make_plugin):
+        p = make_plugin(Borg, {**BASE_CFG, "keep_daily": 7, "keep_within": "6H", "archive_prefix": "odin"})
+        cmd = p.plan_action("prune_preview").command
+        assert "prune --dry-run --list" in cmd
+        assert "--keep-daily 7" in cmd and "--keep-within 6H" in cmd
+        assert "--glob-archives 'odin-*'" in cmd
+
+    async def test_lists_what_would_go(self, make_plugin):
+        p = make_plugin(Borg, {**BASE_CFG, "keep_daily": 1})
+        outcome = p.interpret_action("prune_preview", _framed(p, CmdResult(0, "", PRUNE_OUTPUT)))
+        content = outcome.metadata['content']
+        assert "Would prune 1 of 3" in content
+        assert "backup-2026-09-22T00:00:00" in content.split("Keeping")[0]
+
+    async def test_failure_leaves_the_status_alone(self, make_plugin):
+        p = make_plugin(Borg, {**BASE_CFG, "keep_daily": 1})
+        outcome = p.interpret_action("prune_preview", _framed(p, CmdResult(2, "", "Failed to create/acquire the lock")))
+        assert outcome.success is False and outcome.status is None
+        assert "locked" in outcome.metadata['content']
+
+
+class TestBrowse:
+    async def test_lists_one_level_below_the_path(self, plugin):
+        cmd = plugin.plan_action("browse_archive", archive="a1", path="/Storage/System/").command
+        assert "::a1 Storage/System" in cmd.replace("'", "")
+        assert "re:^Storage/System/[^/]+/." in cmd
+
+    async def test_top_level_when_no_path(self, plugin):
+        assert "re:^[^/]+/." in plugin.plan_action("browse_archive", archive="a1", path="").command
+
+    async def test_output_is_capped(self, make_plugin):
+        p = make_plugin(Borg, {**BASE_CFG, "browse_limit": 2})
+        assert "head -n 3" in p.plan_action("browse_archive", archive="a1", path="").command
+        outcome = p.interpret_action("browse_archive", _framed(p, CmdResult(0, "a\nb\nc", "")), archive="a1", path="")
+        assert "first 2 entries" in outcome.metadata['content']
+        assert "\nc" not in outcome.metadata['content']
+
+    async def test_climbing_paths_are_refused(self, plugin):
+        assert plugin.plan_action("browse_archive", archive="a1", path="x/../../etc").success is False
+
+
+RESTORE_CFG = {**BASE_CFG, "restore_dir": "/var/tmp/r", "require_sudo": True}
+
+
+class TestRestore:
+    async def test_extracts_into_a_new_folder_under_restore_dir(self, make_plugin):
+        p = make_plugin(Borg, RESTORE_CFG)
+        plan = p.plan_action("restore_archive", archive="a1", path="/Storage/System/x")
+        assert "sudo -n mkdir -p /var/tmp/r/a1-" in plan.command
+        assert "extract" in plan.command and "::a1 Storage/System/x" in plan.command.replace("'", "")
+
+    async def test_launch_records_a_restore_job(self, make_plugin):
+        p = make_plugin(Borg, RESTORE_CFG)
+        p.plan_action("restore_archive", archive="a1", path="etc")
+        outcome = p.interpret_action("restore_archive", CmdResult(0, "77\n", ""))
+        p.storage.apply(outcome)
+        assert p.jobs.running()['kind'] == 'restore'
+        assert "/var/tmp/r/a1-" in outcome.metadata['content']
+
+    async def test_whole_archive_restores_are_refused(self, plugin):
+        assert plugin.plan_action("restore_archive", archive="a1", path="/").success is False
+
+    async def test_refused_while_a_job_runs(self, make_plugin):
+        p = make_plugin(Borg, RESTORE_CFG)
+        p.plan_action("restore_archive", archive="a1", path="etc")
+        p.storage.apply(p.interpret_action("restore_archive", CmdResult(0, "77\n", "")))
+        assert p.plan_action("restore_archive", archive="a1", path="etc").success is False
+
+    async def test_extract_progress_becomes_the_summary(self):
+        line = json.dumps({"type": "progress_percent", "message": " 50.0% Extracting: etc/x", "finished": False})
+        assert Borg._progress_from_lines([line]) == "50.0% Extracting: etc/x"
+
+
+class TestBackupSummary:
+    async def test_reports_freshness_and_extras(self, make_plugin, run_cycle):
+        p = make_plugin(Borg, CANARY_CFG)
+        _cycle_with(p, run_cycle)
+        summary = p.backup_summary()
+        assert summary['fresh'] is True
+        assert summary['restore_check'] is None
+        assert summary['repo_checks'] is None

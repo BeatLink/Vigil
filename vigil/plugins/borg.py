@@ -10,7 +10,12 @@ lock_wait / backup_lock_wait, and the backup set (source_paths, exclude*,
 one_file_system, compression, archive_prefix). A borg error, an empty repo, or
 a newest archive older than max_age is failed; an unreachable host, a missing
 borg binary, a repo the SSH user cannot read, a lock borg gave up waiting for,
-or unparseable output is unavailable. This monitor has no warning tier."""
+or unparseable output is unavailable. This monitor has no warning tier.
+Optional extras: a restore canary (canary_path, canary_interval) extracted from
+the newest archive and compared with the live file; check freshness
+(check_units, check_max_age) read from those units' journal; and actions to
+preview a prune (keep_*, prune_match), browse an archive (browse_limit) and
+restore a path from one into restore_dir."""
 
 import json
 import re
@@ -18,7 +23,7 @@ import shlex
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
@@ -35,9 +40,24 @@ _POLL_RC_VAR = "__vigil_poll_rc"
 _FRAME = "__VIGIL_BORG__"
 _CUT_SHORT = "no output: the poll ended before this call ran"
 
+_KEEP_OPTIONS = ('keep_within', 'keep_last', 'keep_secondly', 'keep_minutely', 'keep_hourly',
+                 'keep_daily', 'keep_weekly', 'keep_monthly', 'keep_yearly')
+
+# systemd's own lines for a unit run; borgmatic also logs messages starting "Finished", so these are read from PID 1 only.
+_UNIT_FINISHED, _UNIT_FAILED = 'Finished ', 'Failed with result'
+
+# A check unit's previous run is looked for at most this far before its outcome when its start has scrolled out of the journal.
+_CHECK_RUN_WINDOW = 86400
+
+_PRUNE_LINE = re.compile(
+    r'^(?:Keeping archive \(rule: (?P<rule>[^)]+)\)|(?P<prune>Would prune)):\s+'
+    r'(?P<name>\S+)\s+(?P<date>.+?)\s+\[[0-9a-f]+\]\s*$')
+
 _DEFAULT_LAYOUT = [
     ['host_card', 'repo_card', 'maxage_card', 'state_card'],
     ['size_card', 'dedup_card', 'count_card', 'age_card'],
+    ['canary_card', 'checks_card'],
+    ['tools'],
     ['archives'],
     ['jobs'],
     ['events'],
@@ -160,6 +180,110 @@ def _list_unavailable(exit_code: int, detail: str) -> bool:
             or "failed to create/acquire the lock" in text)
 
 
+def _journal_epoch(line: str) -> Optional[int]:
+    """Read the epoch off a journalctl `-o short-unix` line."""
+    stamp = line.split(' ', 1)[0] if line else ''
+    try:
+        return int(float(stamp))
+    except ValueError:
+        return None
+
+
+def _journal_message(line: str) -> str:
+    """Strip the timestamp, host and process prefix off a journalctl line."""
+    _, _, message = line.partition(': ')
+    return (message or line).strip()[:300]
+
+
+def _archive_member(path: str) -> Optional[str]:
+    """A path as borg stores it inside an archive, or None when it could climb out of the restore dir."""
+    member = (path or '').strip().strip('/')
+    if any(part in ('..', '.') for part in member.split('/')):
+        return None
+    return member
+
+
+def _canary_verdict(extracted: CmdResult, live: CmdResult) -> Tuple[Optional[bool], str]:
+    """Pure: (True/False, detail) once the restore check reached a verdict, (None, reason) when it could not run."""
+    detail = (extracted.stderr or extracted.stdout or '').strip()
+    if extracted.exit_code != 0:
+        if 'never matched' in detail:
+            return False, "the canary is not in the newest archive — is it inside the backup set?"
+        if detail == _CUT_SHORT or _list_unavailable(extracted.exit_code, detail):
+            return None, f"could not extract the canary: {detail[:200]}"
+        return False, f"extracting the canary failed (exit {extracted.exit_code}): {detail[:200]}"
+    if live.exit_code != 0:
+        return False, f"the live canary is unreadable: {(live.stderr or live.stdout).strip()[:200]}"
+    if extracted.stdout.strip() != live.stdout.strip():
+        return False, "the restored canary differs from the live file"
+    return True, "the restored canary matches the live file"
+
+
+def _check_unit_script(units: List[str]) -> str:
+    """One brace group printing, per unit, its last success, last outcome, last start and any borgmatic command failures."""
+    journal = "journalctl -o short-unix --no-pager -q"
+    parts = []
+    for unit in units:
+        u = shlex.quote(unit)
+        parts += [
+            f'echo "unit={unit}"',
+            f"echo \"ok=$({journal} -u {u} _PID=1 -g '^{_UNIT_FINISHED}' -n 1 2>/dev/null | grep -v '^-- ' | tail -1)\"",
+            f"echo \"end=$({journal} -u {u} _PID=1 -g '^{_UNIT_FINISHED}|{_UNIT_FAILED}' -n 1 2>/dev/null | grep -v '^-- ' | tail -1)\"",
+            f"echo \"start=$({journal} -u {u} _PID=1 -g '^Starting ' -n 1 2>/dev/null | grep -v '^-- ' | tail -1)\"",
+            f"{journal} -u {u} -g 'returned non-zero exit status' -n 20 2>/dev/null | grep -v '^-- ' | sed 's/^/err=/'",
+        ]
+    return "{ " + "; ".join(parts) + "; }"
+
+
+def _parse_check_units(stdout: str) -> Dict[str, Dict[str, Any]]:
+    """Group the check script's key=value lines by unit."""
+    units: Dict[str, Dict[str, Any]] = {}
+    current = None
+    for line in (stdout or '').splitlines():
+        key, sep, value = line.partition('=')
+        if not sep:
+            continue
+        if key == 'unit':
+            current = units.setdefault(value.strip(), {'err': []})
+        elif current is not None and key == 'err':
+            current['err'].append(value.strip())
+        elif current is not None:
+            current[key] = value.strip()
+    return units
+
+
+def _observed_unit(fields: Dict[str, Any], repo: str) -> Dict[str, Any]:
+    """Pure: one unit's last success and last outcome, where a failed run that names only other repositories counts as a success for this one."""
+    ok = _journal_epoch(fields.get('ok', ''))
+    end_line = fields.get('end', '')
+    end = _journal_epoch(end_line)
+    start = _journal_epoch(fields.get('start', ''))
+    state = {'ok': ok, 'end': end, 'failed': False, 'error': None}
+    if end is None or _UNIT_FAILED not in end_line:
+        return state
+
+    since = start if start is not None and start <= end else end - _CHECK_RUN_WINDOW
+    run_errors = [e for e in fields.get('err', []) if since <= (_journal_epoch(e) or -1) <= end]
+    names_repo = re.compile(r"\s" + re.escape(repo) + r"(?:::\S*)?'")
+    ours = [e for e in run_errors if names_repo.search(e)]
+    if run_errors and not ours:
+        state['ok'] = max(ok or 0, end)
+        return state
+    state['failed'] = True
+    state['error'] = _journal_message(ours[-1]) if ours else _journal_message(end_line)
+    return state
+
+
+def _merge_unit(stored: Dict[str, Any], seen: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold this poll's reading into the stored one, so a rotated journal forgets nothing already seen."""
+    merged = dict(stored)
+    oks = [v for v in (stored.get('ok'), seen.get('ok')) if v]
+    merged['ok'] = max(oks) if oks else None
+    if (seen.get('end') or 0) >= (stored.get('end') or 0):
+        merged.update(end=seen.get('end'), failed=seen.get('failed', False), error=seen.get('error'))
+    return merged
+
+
 def _parse_archive_time(value: str) -> int:
     if not value:
         return 0
@@ -261,7 +385,16 @@ class Borg(Plugin):
         # Only an explicitly configured dir is known-writable on a monitor-only target, so polls fall back to mktemp under the default
         self.cache_dir_configured = bool(config.get('cache_dir'))
         self.backup_lock_wait = config.get('backup_lock_wait', 600)
+        self.canary_path = config.get('canary_path')
+        self.canary_interval = parse_duration(config.get('canary_interval', '1d'))
+        self.check_units = _as_list(config.get('check_units'))
+        self.check_max_age = parse_duration(config.get('check_max_age', '8d'))
+        self.restore_dir = config.get('restore_dir', '/var/tmp/vigil-restore')
+        self.browse_limit = max(1, int(config.get('browse_limit', 2000)))
+        self.retention = {key: config[key] for key in _KEEP_OPTIONS if config.get(key) not in (None, '', 0)}
+        self.prune_match = config.get('prune_match', f"{self.archive_prefix}-*")
         self._polling_job = None
+        self._poll_calls: List[str] = []
 
     def _read_passphrase_file(self) -> Optional[str]:
         try:
@@ -318,12 +451,24 @@ class Borg(Plugin):
             return []
         return ["timeout", "-k", str(KILL_GRACE_SECONDS), f'"$({_POLL_LEFT_FN})"']
 
+    def _poll_plan(self) -> List[Tuple[str, str]]:
+        """The named calls this poll makes, in the order they run."""
+        calls = [('list', self._list_command())]
+        if self.collect_stats:
+            calls.append(('info', self._info_command()))
+        archive = self._canary_archive()
+        if archive and self._canary_due():
+            calls += self._canary_calls(archive)
+        if self.check_units:
+            calls.append(('checks', _check_unit_script(self.check_units)))
+        return calls
+
     def _poll_command(self) -> str:
         """The poll as one command: run as separate commands the calls below would be dispatched concurrently and contend for this repo's chunks cache lock."""
-        calls = [self._list_command()]
-        if self.collect_stats:
-            calls.append(self._info_command())
+        return self._sequence_command([command for _, command in self._poll_plan()])
 
+    def _sequence_command(self, calls: List[str], limits: Optional[Dict[int, int]] = None) -> str:
+        """Runs calls one after another under one deadline and frames each one's output; `limits` caps a call's stdout at that many lines."""
         base = f"${_POLL_BASE_DIR_VAR}"
         # The trap is what keeps the throwaway dir throwaway, since borg builds a full chunks cache in it on every poll
         parts = [
@@ -345,7 +490,9 @@ class Borg(Plugin):
                 marker = _frame_line(index, stream, f"${_POLL_RC_VAR}")
                 # The closing newline is what keeps output with no trailing one from running into the next marker.
                 parts.append(f'printf \'%s\\n\' "{marker}"')
-                parts.append(f'cat "{base}/{index}.{stream}"')
+                limit = (limits or {}).get(index) if stream == "out" else None
+                reader = f"head -n {int(limit)}" if limit else "cat"
+                parts.append(f'{reader} "{base}/{index}.{stream}"')
                 parts.append("printf '\\n'")
         return "; ".join(parts)
 
@@ -410,7 +557,9 @@ class Borg(Plugin):
             return [Command(detached.poll_command(job['workdir'], job['pid'], job['output_seq']))]
         if not self.repo:
             return []
-        return [Command(self._poll_command())]
+        plan = self._poll_plan()
+        self._poll_calls = [name for name, _ in plan]
+        return [Command(self._sequence_command([command for _, command in plan]))]
 
     def _running_job(self) -> Optional[dict]:
         job = self.jobs.running() if self.jobs else None
@@ -427,8 +576,9 @@ class Borg(Plugin):
             return CollectResult.failed("No 'repo' configured for borg monitor")
 
         # One command carried the whole poll, so unpack its transcript before reading the calls back.
-        results = _split_poll(results[0], 2 if self.collect_stats else 1)
-        list_result = results[0]
+        names = self._poll_calls or (['list', 'info'] if self.collect_stats else ['list'])
+        by_name = dict(zip(names, _split_poll(results[0], len(names))))
+        list_result = by_name['list']
         stdout, stderr, ret = list_result.stdout, list_result.stderr, list_result.exit_code
         logs = [(f"Running: {_redact(self._list_command())}", "INFO")]
 
@@ -473,9 +623,9 @@ class Borg(Plugin):
             logs.append((f"Last archive {format_age(age)}", "INFO"))
             status = 'online'
 
-        if self.collect_stats and len(results) > 1:
+        if self.collect_stats and 'info' in by_name:
             stats_metrics, stats_metadata, stats_logs, merged_archives = self._parse_repo_stats(
-                results[1], view.archives,
+                by_name['info'], view.archives,
             )
             metrics.update(stats_metrics)
             metadata.update(stats_metadata)
@@ -484,7 +634,99 @@ class Borg(Plugin):
                 metrics['archive_list'] = float(len(merged_archives))
                 metadata['archive_list'] = json.dumps({'archives': merged_archives, 'repository': view.info})
 
+        extra = [self._fold_canary(by_name, metrics, metadata, logs),
+                 self._fold_checks(by_name, metrics, metadata, logs)]
+        if 'failed' in extra:
+            status = 'failed'
         return CollectResult(metrics=metrics, metadata=metadata, logs=logs, status=status)
+
+    # --- Restore canary ---------------------------------------------------
+
+    def _canary_archive(self) -> Optional[str]:
+        """The newest archive the last poll saw, which the canary is restored from."""
+        if not self.canary_path or self.data is None:
+            return None
+        archives, _ = self.cached_archives()
+        return archives[0].get('name') if archives else None
+
+    def _canary_due(self) -> bool:
+        checked = self.data.latest_metric('canary_checked_epoch') if self.data is not None else None
+        return checked is None or time.time() - checked.value >= self.canary_interval
+
+    def _canary_calls(self, archive: str) -> List[Tuple[str, str]]:
+        """Extracts the canary from `archive` to stdout, then reads the live file it should match."""
+        extract = self._build([
+            self.borg_bin, "extract", "--stdout",
+            "--bypass-lock",
+            "--lock-wait", str(self.lock_wait),
+            f"{self.repo}::{archive}",
+            _archive_member(self.canary_path) or self.canary_path,
+        ], persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)
+        live = ("sudo -n " if self.require_sudo else "") + "cat " + shlex.quote(self.canary_path)
+        return [('canary', extract), ('canary_live', live)]
+
+    def _fold_canary(self, by_name: Dict[str, CmdResult], metrics: Dict[str, float],
+                     metadata: Dict[str, str], logs: List[tuple]) -> Optional[str]:
+        """Records this poll's restore check if one ran, and returns 'failed' while the last verdict stands failed."""
+        if 'canary' in by_name:
+            verdict, detail = _canary_verdict(by_name['canary'], by_name.get('canary_live', CmdResult(1, '', _CUT_SHORT)))
+            if verdict is None:
+                logs.append((f"Restore check skipped: {detail}", "WARNING"))
+            else:
+                metrics['canary_ok'] = 1.0 if verdict else 0.0
+                metrics['canary_checked_epoch'] = float(int(time.time()))
+                metadata['canary_ok'] = detail
+                logs.append((f"Restore check {'passed' if verdict else 'failed'}: {detail}",
+                             "INFO" if verdict else "ERROR"))
+                return None if verdict else 'failed'
+        if not self.canary_path or self.data is None:
+            return None
+        last = self.data.latest_metric('canary_ok')
+        return 'failed' if last is not None and last.value < 0.5 else None
+
+    # --- Check freshness --------------------------------------------------
+
+    def _stored_checks(self) -> Dict[str, Dict[str, Any]]:
+        metric = self.data.latest_metric('check_ok_epoch') if self.data is not None else None
+        try:
+            data = json.loads(metric.metadata) if metric is not None and metric.metadata else {}
+        except (json.JSONDecodeError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _fold_checks(self, by_name: Dict[str, CmdResult], metrics: Dict[str, float],
+                     metadata: Dict[str, str], logs: List[tuple]) -> Optional[str]:
+        """Folds the check units' journal into the stored record and returns 'failed' when any is failed or stale."""
+        if 'checks' not in by_name:
+            return None
+        result = by_name['checks']
+        seen = _parse_check_units(result.stdout)
+        if not seen:
+            logs.append((f"Could not read the check units' journal: {(result.stderr or 'no output').strip()[:200]}", "WARNING"))
+            return None
+        stored = self._stored_checks()
+        states = {unit: _merge_unit(stored.get(unit, {}), _observed_unit(seen.get(unit, {}), self.repo))
+                  for unit in self.check_units}
+
+        now = int(time.time())
+        problems = []
+        for unit, state in states.items():
+            if state.get('failed'):
+                problems.append(f"{unit} last run failed: {state.get('error') or 'see its journal'}")
+            elif not state.get('ok'):
+                problems.append(f"{unit} has no successful run on record")
+            elif now - state['ok'] > self.check_max_age:
+                problems.append(f"{unit} last succeeded {format_age(now - state['ok'])}, "
+                                f"exceeds check_max_age of {format_duration(self.check_max_age)}")
+        oks = [state.get('ok') or 0 for state in states.values()]
+        metrics['check_ok_epoch'] = float(min(oks)) if oks else 0.0
+        metrics['checks_ok'] = 0.0 if problems else 1.0
+        metadata['check_ok_epoch'] = json.dumps(states)
+        for problem in problems:
+            logs.append((f"Repository check: {problem}", "ERROR"))
+        if not problems:
+            logs.append((f"Repository checks passed, oldest {format_age(now - min(oks))}", "INFO"))
+        return 'failed' if problems else None
 
     def _repo_detail_logs(self, view: RepoView) -> List[tuple]:
         archives, info = view.archives, view.info
@@ -603,16 +845,28 @@ class Borg(Plugin):
         return data.get('archives') or [], data.get('repository') or {}
 
     def get_actions(self) -> List[Dict[str, str]]:
-        if not self.source_paths:
-            return []
-        return [
-            {'name': 'Run Backup', 'action_id': 'run_backup',
-             'variant': 'primary', 'icon': 'backup'},
-            {'name': 'Dry Run', 'action_id': 'dry_run_backup',
-             'variant': 'secondary', 'icon': 'fact_check'},
-        ]
+        actions = []
+        if self.source_paths:
+            actions += [
+                {'name': 'Run Backup', 'action_id': 'run_backup',
+                 'variant': 'primary', 'icon': 'backup'},
+                {'name': 'Dry Run', 'action_id': 'dry_run_backup',
+                 'variant': 'secondary', 'icon': 'fact_check'},
+            ]
+        if self.canary_path:
+            actions.append({'name': 'Verify Restore', 'action_id': 'verify_restore',
+                            'variant': 'secondary', 'icon': 'verified'})
+        return actions
 
     def plan_action(self, action_id: str, **kwargs):
+        planners = {
+            'prune_preview': self._plan_prune_preview,
+            'verify_restore': self._plan_verify_restore,
+            'browse_archive': self._plan_browse,
+            'restore_archive': self._plan_restore,
+        }
+        if action_id in planners:
+            return planners[action_id](**kwargs)
         if action_id not in ('run_backup', 'dry_run_backup'):
             return None
 
@@ -635,7 +889,14 @@ class Borg(Plugin):
         return ActionPlan(detached.launch_command(command, workdir))
 
     def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
-        if action_id not in ('run_backup', 'dry_run_backup'):
+        interpreters = {
+            'prune_preview': self._interpret_prune_preview,
+            'verify_restore': self._interpret_verify_restore,
+            'browse_archive': self._interpret_browse,
+        }
+        if action_id in interpreters:
+            return interpreters[action_id](result, **kwargs)
+        if action_id not in ('run_backup', 'dry_run_backup', 'restore_archive'):
             return result.exit_code == 0
 
         kind, redacted, workdir = getattr(self, '_pending_launch', ('backup', '', ''))
@@ -648,10 +909,165 @@ class Borg(Plugin):
 
         job_id = self.jobs.create(kind, redacted, workdir)
         self.jobs.set_pid(job_id, pid)
+        started = f"{kind.capitalize()} started (pid {pid})"
+        if action_id == 'restore_archive':
+            started += f" into {self._pending_restore_dest}"
         return CollectResult(
-            logs=[(f"{kind.capitalize()} started (pid {pid})", "INFO")],
+            logs=[(started, "INFO")],
+            metadata={'content': started},
             success=True,
         )
+
+    @staticmethod
+    def _refused(message: str) -> CollectResult:
+        """An action outcome that reports a problem without touching the monitor's status."""
+        return CollectResult(logs=[(message, "WARNING")], metadata={'content': message}, success=False)
+
+    def _run_one(self, call: str) -> ActionPlan:
+        """A single framed borg call as an action, bounded like a poll."""
+        return ActionPlan(self._sequence_command([call]), timeout=self.timeout or None)
+
+    # --- Prune preview ----------------------------------------------------
+
+    def _prune_command(self) -> str:
+        args = [
+            self.borg_bin, "prune", "--dry-run", "--list",
+            "--lock-wait", str(self.lock_wait),
+            "--glob-archives", self.prune_match,
+        ]
+        for key, value in self.retention.items():
+            args += ["--" + key.replace('_', '-'), str(value)]
+        args.append(self.repo)
+        return self._build(args, persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)
+
+    def _plan_prune_preview(self, **_):
+        if not self.repo:
+            return self._refused("Cannot preview a prune: no 'repo' configured")
+        if not self.retention:
+            return self._refused("Cannot preview a prune: no keep_* retention configured")
+        return self._run_one(self._prune_command())
+
+    def _interpret_prune_preview(self, result: CmdResult, **_):
+        call = _split_poll(result, 1)[0]
+        text = "\n".join(part for part in (call.stdout, call.stderr) if part)
+        if call.exit_code != 0:
+            hint = _failure_hint(text)
+            return self._refused(f"borg prune --dry-run failed (exit {call.exit_code}): {text.strip()[:300]}"
+                                 + (f"\n{hint}" if hint else ""))
+        keep, prune = [], []
+        for line in text.splitlines():
+            match = _PRUNE_LINE.match(line.strip())
+            if not match:
+                continue
+            if match.group('prune'):
+                prune.append(f"  {match.group('name')}  {match.group('date')}")
+            else:
+                keep.append(f"  {match.group('name')}  {match.group('date')}  ({match.group('rule')})")
+        policy = " ".join(f"--{k.replace('_', '-')} {v}" for k, v in self.retention.items())
+        lines = [f"Policy: {policy}", f"Archives matching: {self.prune_match}", ""]
+        lines.append(f"Would prune {len(prune)} of {len(prune) + len(keep)} archive(s):")
+        lines += prune or ["  (none)"]
+        lines += ["", f"Keeping {len(keep)}:"] + (keep or ["  (none)"])
+        content = "\n".join(lines)
+        return CollectResult(
+            logs=[(f"Prune preview: would prune {len(prune)}, keep {len(keep)}", "INFO")],
+            metadata={'content': content}, success=True,
+        )
+
+    # --- Verify restore ---------------------------------------------------
+
+    def _plan_verify_restore(self, **_):
+        if not self.canary_path:
+            return self._refused("Cannot verify a restore: no 'canary_path' configured")
+        archive = self._canary_archive()
+        if not archive:
+            return self._refused("Cannot verify a restore: no archive has been listed yet")
+        return ActionPlan(self._sequence_command([command for _, command in self._canary_calls(archive)]),
+                          timeout=self.timeout or None)
+
+    def _interpret_verify_restore(self, result: CmdResult, **_):
+        by_name = dict(zip(('canary', 'canary_live'), _split_poll(result, 2)))
+        metrics: Dict[str, float] = {}
+        metadata: Dict[str, str] = {}
+        logs: List[tuple] = []
+        self._fold_canary(by_name, metrics, metadata, logs)
+        message = logs[-1][0] if logs else "Restore check reached no verdict"
+        return CollectResult(metrics=metrics, metadata={**metadata, 'content': message}, logs=logs,
+                             success=metrics.get('canary_ok') == 1.0)
+
+    # --- Browse -----------------------------------------------------------
+
+    def _plan_browse(self, archive: Optional[str] = None, path: Optional[str] = None, **_):
+        member = _archive_member(path or '')
+        if not self.repo or not archive:
+            return self._refused("Cannot browse: no archive given")
+        if member is None:
+            return self._refused("A path may not contain '.' or '..' components")
+        # One level at a time: everything deeper than the path's own children is excluded, since borg has no depth limit.
+        prefix = re.escape(member) + "/" if member else ""
+        args = [
+            self.borg_bin, "list",
+            "--format", "{mode} {user:8} {size:>12} {mtime} {path}{NL}",
+            "--bypass-lock",
+            "--lock-wait", str(self.lock_wait),
+            f"{self.repo}::{archive}",
+        ]
+        if member:
+            args.append(member)
+        args += ["--exclude", f"re:^{prefix}[^/]+/."]
+        call = self._build(args, persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)
+        return ActionPlan(self._sequence_command([call], limits={0: self.browse_limit + 1}),
+                          timeout=self.timeout or None)
+
+    def _interpret_browse(self, result: CmdResult, archive: Optional[str] = None,
+                          path: Optional[str] = None, **_):
+        call = _split_poll(result, 1)[0]
+        if call.exit_code != 0:
+            detail = (call.stderr or call.stdout).strip()
+            hint = _failure_hint(detail)
+            return self._refused(f"borg list failed (exit {call.exit_code}): {detail[:300]}"
+                                 + (f"\n{hint}" if hint else ""))
+        entries = [line for line in call.stdout.splitlines() if line.strip()]
+        where = f"{archive}:/{_archive_member(path or '') or ''}"
+        if not entries:
+            return CollectResult(metadata={'content': f"{where} — nothing at that path"}, success=True)
+        header = f"{where} — {len(entries)} entries"
+        if len(entries) > self.browse_limit:
+            entries = entries[:self.browse_limit]
+            header = f"{where} — first {self.browse_limit} entries (raise browse_limit for more)"
+        return CollectResult(metadata={'content': "\n".join([header, ""] + entries)}, success=True)
+
+    # --- Restore ----------------------------------------------------------
+
+    def _restore_command(self, archive: str, member: str, dest: str) -> str:
+        """Creates a fresh directory under restore_dir and extracts the path into it, never over live files."""
+        extract = self._build([
+            self.borg_bin, "extract",
+            "--log-json",
+            "--progress",
+            "--lock-wait", str(self.backup_lock_wait),
+            f"{self.repo}::{archive}",
+            member,
+        ], persistent_cache=True)
+        mkdir = ("sudo -n " if self.require_sudo else "") + "mkdir -p " + shlex.quote(dest)
+        return f"{mkdir} && cd {shlex.quote(dest)} && {extract}"
+
+    def _plan_restore(self, archive: Optional[str] = None, path: Optional[str] = None, **_):
+        member = _archive_member(path or '')
+        if not self.repo or not archive:
+            return self._refused("Cannot restore: no archive given")
+        if not member:
+            return self._refused("Give the path to restore — a whole archive is not restored from here")
+        if self._running_job() is not None:
+            return self._refused("A job is already running for this monitor")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        dest = f"{self.restore_dir.rstrip('/')}/{archive}-{stamp}"
+        command = self._restore_command(archive, member, dest)
+        token = f"{self.id}-{int(time.time())}"
+        workdir = detached.workdir_for(token)
+        self._pending_launch = ('restore', _redact(command), workdir)
+        self._pending_restore_dest = dest
+        return ActionPlan(detached.launch_command(command, workdir))
 
     def _parse_poll(self, job: dict, result: CmdResult) -> CollectResult:
         """Advance a running detached backup from one poll's output. Appends
@@ -708,6 +1124,10 @@ class Borg(Plugin):
                 record = json.loads(text)
             except (json.JSONDecodeError, ValueError):
                 continue
+            if isinstance(record, dict) and record.get('type') == 'progress_percent':
+                if record.get('message') and not record.get('finished'):
+                    summary = record['message'].strip()
+                continue
             if not isinstance(record, dict) or record.get('type') != 'archive_progress':
                 continue
             if record.get('finished'):
@@ -763,6 +1183,66 @@ class Borg(Plugin):
     def _last_archive_age_color(self) -> Optional[str]:
         return self._age_pair()[1]
 
+    def _canary_pair(self) -> (str, Optional[str]):
+        """Returns the (text, color) pair for the restore-check card."""
+        if not self.canary_path:
+            return 'Not configured', None
+        ok = self.data.latest_metric('canary_ok')
+        checked = self.data.latest_metric('canary_checked_epoch')
+        if ok is None or checked is None:
+            return 'Pending', 'unavailable'
+        when = format_age(int(time.time()) - int(checked.value))
+        return (f'Passed {when}', 'online') if ok.value >= 0.5 else (f'Failed {when}', 'failed')
+
+    def _checks_pair(self) -> (str, Optional[str]):
+        """Returns the (text, color) pair for the repository-checks card."""
+        if not self.check_units:
+            return 'Not configured', None
+        ok = self.data.latest_metric('checks_ok')
+        oldest = self.data.latest_metric('check_ok_epoch')
+        if ok is None or oldest is None:
+            return 'Pending', 'unavailable'
+        if ok.value < 0.5:
+            return 'Failed' if any(s.get('failed') for s in self._stored_checks().values()) else 'Stale', 'failed'
+        return f'Passed {format_age(int(time.time()) - int(oldest.value))}', 'online'
+
+    @property
+    def _canary_text(self) -> str:
+        return self._canary_pair()[0]
+
+    @property
+    def _canary_color(self) -> Optional[str]:
+        return self._canary_pair()[1]
+
+    @property
+    def _checks_text(self) -> str:
+        return self._checks_pair()[0]
+
+    @property
+    def _checks_color(self) -> Optional[str]:
+        return self._checks_pair()[1]
+
+    def backup_summary(self) -> Dict[str, Any]:
+        """This repository's backup health in one flat record, for the /api/backups roll-up."""
+        now = int(time.time())
+        epoch = self._epoch()
+        newest = int(epoch) if epoch else None
+        canary_ok = self.data.latest_metric('canary_ok') if self.canary_path else None
+        canary_at = self.data.latest_metric('canary_checked_epoch') if self.canary_path else None
+        checks_ok = self.data.latest_metric('checks_ok') if self.check_units else None
+        check_at = self.data.latest_metric('check_ok_epoch') if self.check_units else None
+        return {
+            'repo': self.repo,
+            'newest_archive_epoch': newest,
+            'newest_archive_age': now - newest if newest else None,
+            'max_age': self.max_age,
+            'fresh': bool(newest) and now - newest <= self.max_age,
+            'restore_check': None if canary_ok is None else canary_ok.value >= 0.5,
+            'restore_checked_epoch': int(canary_at.value) if canary_at else None,
+            'repo_checks': None if checks_ok is None else checks_ok.value >= 0.5,
+            'repo_checked_epoch': int(check_at.value) if check_at and check_at.value else None,
+        }
+
     @property
     def UI_SPEC(self):
         return {
@@ -777,6 +1257,30 @@ class Borg(Plugin):
                 'count_card': {'metric': 'archive_count', 'title': 'ARCHIVES', 'format': 'int'},
                 'age_card': {'title': 'LAST ARCHIVE', 'value_attr': '_last_archive_age_text',
                             'color_attr': '_last_archive_age_color'},
+                'canary_card': {'title': 'RESTORE CHECK', 'value_attr': '_canary_text',
+                                'color_attr': '_canary_color'},
+                'checks_card': {'title': 'REPO CHECKS', 'value_attr': '_checks_text',
+                                'color_attr': '_checks_color'},
+            },
+            'buttons': {
+                'tools': [
+                    {'id': 'prune_preview', 'label': 'Prune Preview', 'icon': 'content_cut',
+                     'kind': 'dialog', 'dialog': 'prune_preview', 'visible_if': lambda p: bool(p.retention)},
+                    {'id': 'verify_restore', 'label': 'Verify Restore', 'icon': 'verified',
+                     'visible_if': lambda p: bool(p.canary_path)},
+                ],
+            },
+            'dialogs': {
+                'prune_preview': {'kind': 'read', 'title': 'Prune Preview: {plugin.name}',
+                                  'action_id': 'prune_preview', 'render': 'textarea_readonly'},
+                'browse': {'kind': 'form', 'title': 'Browse {row[name]}', 'action_id': 'browse_archive',
+                           'params': {'archive': 'name'}, 'submit_label': 'List',
+                           'fields': [{'name': 'path', 'label': 'Path inside the archive',
+                                       'placeholder': 'Empty for the top level, e.g. Storage/System'}]},
+                'restore': {'kind': 'form', 'title': 'Restore from {row[name]}', 'action_id': 'restore_archive',
+                            'params': {'archive': 'name'}, 'submit_label': 'Restore',
+                            'fields': [{'name': 'path', 'label': 'Path to restore',
+                                        'placeholder': f'Extracted into a new folder under {self.restore_dir}'}]},
             },
             'tables': {
                 'archives': {
@@ -789,6 +1293,10 @@ class Borg(Plugin):
                         {'name': 'size', 'label': 'Size', 'field': 'size', 'align': 'right', 'sortable': True},
                         {'name': 'added', 'label': 'Added', 'field': 'added', 'align': 'right', 'sortable': True},
                         {'name': 'files', 'label': 'Files', 'field': 'files', 'align': 'right', 'sortable': True},
+                    ],
+                    'row_actions': [
+                        {'id': 'browse', 'icon': 'folder_open', 'tooltip': 'Browse', 'kind': 'dialog', 'dialog': 'browse'},
+                        {'id': 'restore', 'icon': 'restore', 'tooltip': 'Restore', 'kind': 'dialog', 'dialog': 'restore'},
                     ],
                 },
             },
