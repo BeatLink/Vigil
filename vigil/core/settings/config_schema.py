@@ -93,6 +93,7 @@ class NotifySettings(TypedDict, total=False):
     channels: List[str]
     on: List[str]               # statuses that count as a problem: failed, warning, unavailable
     after: int                  # problem cycles in a row before the first notification
+    # `for`: a duration the problem must last unbroken before the first notification (a keyword, so not declared here)
     repeat: Any                 # duration between reminders while the problem lasts; 0 is off
     recovery: bool
 

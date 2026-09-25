@@ -45,6 +45,10 @@ class TestResolveRules:
                                                     'on': ['failed', 'bogus']})], {}, ['desk'])
         assert rules['a'] == Rule(('desk',), frozenset({'failed'}))
 
+    def test_for_takes_a_duration(self):
+        rules = resolve_rules([_plugin('a')], {'for': '1h'}, ['desk'])
+        assert rules['a'].hold == 3600
+
     def test_repeat_takes_a_duration(self):
         rules = resolve_rules([_plugin('a')], {'repeat': '1h'}, ['desk'])
         assert rules['a'].repeat == 3600
@@ -91,6 +95,21 @@ class TestTracker:
         assert t.observe('m', 'failed', 3) is None
         assert t.observe('m', 'failed', 4) is None
         assert t.observe('m', 'failed', 5) == Alert(PROBLEM, 'failed', 3)
+
+    def test_for_waits_until_the_problem_has_lasted_that_long(self):
+        t = self._tracker(hold=3600)
+        assert t.observe('m', 'failed', 0) is None
+        assert t.observe('m', 'failed', 1800) is None
+        assert t.observe('m', 'online', 1900) is None  # one good reading restarts the clock
+        assert t.observe('m', 'failed', 2000) is None
+        assert t.observe('m', 'failed', 5599) is None
+        assert t.observe('m', 'failed', 5600) == Alert(PROBLEM, 'failed', 2000)
+
+    def test_for_and_after_must_both_be_met(self):
+        t = self._tracker(hold=60, after=3)
+        assert t.observe('m', 'failed', 0) is None
+        assert t.observe('m', 'failed', 120) is None
+        assert t.observe('m', 'failed', 121).kind == PROBLEM
 
     def test_repeat_reminds_while_the_problem_lasts(self):
         t = self._tracker(repeat=60)

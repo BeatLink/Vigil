@@ -51,6 +51,7 @@ off. A child can turn itself back on with its own mapping.
 | `channels` | every channel    | The channel ids to send to |
 | `on`       | `[failed]`       | Statuses that count as a problem: `failed`, `warning`, `unavailable` |
 | `after`    | `1`              | Problem cycles in a row before the first notification, so a single blip is ignored |
+| `for`      | `0` (off)        | How long a problem must last, with no good reading in between, before the first notification, e.g. `1h`. Suits load and usage monitors that spike |
 | `repeat`   | `0` (off)        | How often to remind while the problem lasts, e.g. `1h` |
 | `recovery` | `true`           | Also notify when the monitor stops having a problem |
 

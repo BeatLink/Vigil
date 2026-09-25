@@ -28,6 +28,8 @@ class Rule:
     after: int = 1
     repeat: int = 0
     recovery: bool = True
+    hold: int = 0
+    """Seconds a problem must last, unbroken, before the first notification: the `for` setting."""
 
 
 def _status(value: str) -> Status:
@@ -73,10 +75,11 @@ def _rule(settings: Dict[str, Any], channel_ids: List[str], where: str) -> Optio
     try:
         after = max(1, int(settings.get('after', 1)))
         repeat = parse_duration(settings.get('repeat', 0) or 0)
+        hold = parse_duration(settings.get('for', 0) or 0)
     except ValueError as e:
         logging.error(f"{where}: bad notify setting ({e}); notifications for it are off")
         return None
-    return Rule(tuple(known), statuses, after, repeat, bool(settings.get('recovery', True)))
+    return Rule(tuple(known), statuses, after, repeat, bool(settings.get('recovery', True)), hold)
 
 
 def resolve_rules(roots: Iterable[Any], defaults: Mapping[str, Any],
@@ -163,7 +166,7 @@ class Tracker:
         if state.problem_cycles == 1:
             state.since = now
         if not state.alerting:
-            if state.problem_cycles < rule.after:
+            if state.problem_cycles < rule.after or now - state.since < rule.hold:
                 return None
             state.alerting, state.status, state.last_sent = True, current, now
             return Alert(PROBLEM, current.value, state.since)
