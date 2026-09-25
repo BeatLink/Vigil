@@ -76,3 +76,4 @@ include = ["vigil*", "vigil_agent*"]
 
 [tool.setuptools.package-data]
 vigil = ["core/ui/static/*"]
+vigil_agent = ["icon.svg"]

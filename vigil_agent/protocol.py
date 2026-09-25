@@ -19,6 +19,9 @@ Two channels share the one socket:
   agent watches a source locally and sends a frame the moment something
   happens, with no poll interval involved.
 
+A third, one-way frame (``notify``) asks the agent to show a desktop
+notification in the session it runs in.
+
 Frames are deliberately small and self-describing rather than positional, so
 an older agent talking to a newer server (or the reverse) can ignore fields
 it does not know instead of failing to parse.
@@ -49,6 +52,9 @@ SUBSCRIBE = "subscribe"
 
 EVENT = "event"
 """Agent -> server: something happened on a subscribed stream, right now."""
+
+NOTIFY = "notify"
+"""Server -> agent: show one desktop notification. Fire and forget; no reply."""
 
 PING = "ping"
 PONG = "pong"
@@ -109,6 +115,17 @@ def subscribe(streams: List[Dict[str, Any]]) -> Dict[str, Any]:
 def event(stream_id: str, payload: Dict[str, Any], timestamp: float) -> Dict[str, Any]:
     """Build the agent's EVENT frame reporting activity on one stream."""
     return {'t': EVENT, 'stream': stream_id, 'ts': timestamp, 'payload': payload}
+
+
+def notify(title: str, body: str, urgency: str = "normal",
+           url: Optional[str] = None, icon: Optional[str] = None) -> Dict[str, Any]:
+    """Build a server NOTIFY frame; `url` is opened when the notification is clicked."""
+    frame = {'t': NOTIFY, 'title': title, 'body': body, 'urgency': urgency}
+    if url:
+        frame['url'] = url
+    if icon:
+        frame['icon'] = icon
+    return frame
 
 
 @dataclass(frozen=True)

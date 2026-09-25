@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from vigil.core.settings.config_schema import (
-    AuthSettings, DatabaseSettings, ExporterSettings, PluginConfig, SSHConfig,
-    ThemeSettings, VigilConfig,
+    AuthSettings, DatabaseSettings, ExporterSettings, NotificationSettings, PluginConfig,
+    SSHConfig, ThemeSettings, VigilConfig,
 )
 from vigil.core.state import BufferSizes
 
@@ -16,7 +16,7 @@ from vigil.core.state import BufferSizes
 _SECTION_SHAPES: Dict[str, type] = {
     'agents': list,
     'plugins': list,
-    'alerting': list,
+    'notifications': dict,
     'control': list,
     'database': dict,
     'theme': dict,
@@ -116,8 +116,8 @@ class ConfigFileManager:
         return self.data.get('agents', [])
 
     @property
-    def alert_handlers(self) -> List[Dict[str, Any]]:
-        return self.data.get('alerting', [])
+    def notifications(self) -> NotificationSettings:
+        return self.data.get('notifications') or {}
 
     @property
     def theme_settings(self) -> ThemeSettings:

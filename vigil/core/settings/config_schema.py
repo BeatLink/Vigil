@@ -87,6 +87,29 @@ class ExporterSettings(TypedDict, total=False):
     influxdb: InfluxDBExporterSettings
 
 
+class NotifySettings(TypedDict, total=False):
+    """When a monitor notifies: `notifications.defaults`, or a monitor's or
+    group's own `notify:` mapping layered over what it inherits."""
+    channels: List[str]
+    on: List[str]               # statuses that count as a problem: failed, warning, unavailable
+    after: int                  # problem cycles in a row before the first notification
+    repeat: Any                 # duration between reminders while the problem lasts; 0 is off
+    recovery: bool
+
+
+class NotificationChannelSettings(TypedDict, total=False):
+    """One entry in `notifications.channels`. The other keys depend on `type`."""
+    id: str
+    type: str
+    agent: str                  # desktop: the agent that shows the notification
+
+
+class NotificationSettings(TypedDict, total=False):
+    base_url: str               # the dashboard's address, for links to a monitor's page
+    channels: List[NotificationChannelSettings]
+    defaults: NotifySettings
+
+
 class ThemeSettings(TypedDict, total=False):
     """Consumed by core/ui/theme.py's configure(); kept as Dict[str, Any]
     at that call site since theme keys are a flat mapping onto Halon tokens,
@@ -116,13 +139,14 @@ class PluginConfig(TypedDict, total=False):
     ssh_config: SSHConfig
     children: List["PluginConfig"]  # group plugins only
     layout: Any                 # List[LayoutRow] | Dict[str, dict] — see spec_types.UISpec['layout']
+    notify: Any                 # bool | NotifySettings; passed down to a group's children
 
 
 class VigilConfig(TypedDict, total=False):
     agents: List[AgentSettings]
     database: DatabaseSettings
     plugins: List[PluginConfig]
-    alerting: List[Dict[str, Any]]
+    notifications: NotificationSettings
     theme: ThemeSettings
     exporters: ExporterSettings
     logging: LoggingSettings

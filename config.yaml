@@ -91,6 +91,21 @@ theme:
   # status_failed:    "#dc2626" # --status-danger
   # status_unavailable: "#64748b" # --text-tertiary
 
+# Notifications (optional) — see docs/notifications.md.
+# notifications:
+#   base_url: "https://vigil.lan"   # the dashboard's address, for links to a monitor
+#   channels:
+#     - id: laptop
+#       type: desktop               # shown by a notify-only agent in your desktop session
+#       agent: laptop-desktop
+#       icon: vigil                 # or an icon theme name, or an image path on that computer
+#       urgency: {failed: critical, recovered: low}
+#   defaults:                       # every monitor's rule; a monitor's `notify:` overrides it
+#     on: [failed]                  # failed, warning, unavailable
+#     after: 1                      # problem cycles in a row before notifying
+#     repeat: 0                     # remind this often while it lasts, e.g. 1h; 0 is off
+#     recovery: true
+
 # Domain-based Plugins
 plugins:
   - name: "Devices"

@@ -19,20 +19,21 @@ from typing import Any, Dict, List, Optional
 
 import websockets
 
-from vigil_agent import __version__, executor, protocol as proto, watchers
+from vigil_agent import __version__, desktop, executor, protocol as proto, watchers
 
 _BACKOFF_INITIAL = 1.0
 _BACKOFF_MAX = 60.0
 
-CAPABILITIES = sorted(watchers.WATCHERS)
+CAPABILITIES = sorted([*watchers.WATCHERS, proto.NOTIFY])
 """What this agent can do, sent in the hello so a server can tell an older
 agent apart from a newer one without a version comparison."""
 
 
 class AgentClient:
     def __init__(self, url: str, agent_id: str, token: str,
-                 hostname: Optional[str] = None):
+                 hostname: Optional[str] = None, notify_only: bool = False):
         self.url = url
+        self.notify_only = notify_only
         self.agent_id = agent_id
         self.token = token
         self.hostname = hostname or socket.gethostname()
@@ -40,6 +41,8 @@ class AgentClient:
         self._send_lock = asyncio.Lock()
         self._streams: Dict[str, asyncio.Task] = {}
         self._execs: set = set()
+        # Kept across reconnects, so a notification can still be clicked after a network drop.
+        self._notifications: set = set()
 
     # --- Connection lifecycle ---
 
@@ -52,6 +55,8 @@ class AgentClient:
                 backoff = _BACKOFF_INITIAL
             except asyncio.CancelledError:
                 await self._stop_streams()
+                for task in list(self._notifications):
+                    task.cancel()
                 raise
             # Any session failure becomes a redial; a network blip must not end the agent.
             except Exception as e:
@@ -68,7 +73,8 @@ class AgentClient:
         """One connection, from hello to disconnect."""
         async with websockets.connect(self.url, ping_interval=20, ping_timeout=20) as socket_:
             self._socket = socket_
-            hello = proto.hello(self.agent_id, self.hostname, __version__, CAPABILITIES)
+            caps = [proto.NOTIFY] if self.notify_only else CAPABILITIES
+            hello = proto.hello(self.agent_id, self.hostname, __version__, caps)
             hello['token'] = self.token
             await socket_.send(proto.encode(hello))
 
@@ -77,7 +83,8 @@ class AgentClient:
                 raise ConnectionError("server did not accept the agent (check the token)")
             logging.info(f"connected to {self.url} as {self.agent_id!r}")
 
-            await self._apply_streams(welcome.get('streams') or [])
+            if not self.notify_only:
+                await self._apply_streams(welcome.get('streams') or [])
             try:
                 await self._receive_loop(socket_)
             finally:
@@ -94,7 +101,11 @@ class AgentClient:
                 task = asyncio.create_task(self._handle_exec(frame))
                 self._execs.add(task)
                 task.add_done_callback(self._execs.discard)
-            elif tag == proto.SUBSCRIBE:
+            elif tag == proto.NOTIFY:
+                task = asyncio.create_task(desktop.show(frame))
+                self._notifications.add(task)
+                task.add_done_callback(self._notifications.discard)
+            elif tag == proto.SUBSCRIBE and not self.notify_only:
                 await self._apply_streams(frame.get('streams') or [])
             elif tag == proto.PING:
                 await self._send({'t': proto.PONG, 'id': frame.get('id')})
@@ -105,9 +116,12 @@ class AgentClient:
         request_id = frame.get('id')
         if not isinstance(request_id, int):
             return
-        command = str(frame.get('cmd', ''))
-        timeout = float(frame.get('timeout') or executor.DEFAULT_TIMEOUT)
-        code, out, err = await executor.run(command, timeout=timeout)
+        if self.notify_only:
+            code, out, err = -1, "", "This agent only shows notifications; it runs no commands"
+        else:
+            command = str(frame.get('cmd', ''))
+            timeout = float(frame.get('timeout') or executor.DEFAULT_TIMEOUT)
+            code, out, err = await executor.run(command, timeout=timeout)
         try:
             await self._send(proto.exec_result(request_id, code, out, err))
         except Exception as e:

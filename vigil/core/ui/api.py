@@ -82,6 +82,18 @@ def register_api(app: Any, engine: EngineLike) -> None:
         limit = max(1, min(int(limit), 2000))
         return JSONResponse(db.recent_events(limit=limit, level=level, target=target, search=search))
 
+    @app.post('/api/notifications/{channel_id}/test')
+    async def notification_test(channel_id: str):
+        """Send a test notification through one channel."""
+        if channel_id not in engine.notifications.channels:
+            return JSONResponse({'error': 'no such channel'}, status_code=404)
+        # A failed delivery is the answer the caller asked for, not a server error.
+        try:
+            await engine.notifications.send_test(channel_id)
+        except Exception as e:
+            return JSONResponse({'sent': False, 'error': str(e)}, status_code=502)
+        return JSONResponse({'sent': True})
+
     @app.get('/metrics')
     def prometheus_metrics():
         return PlainTextResponse(prometheus.render(db),

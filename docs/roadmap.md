@@ -25,7 +25,8 @@
 - [x] REST API for monitors, metrics, and events
 - [x] Prometheus `/metrics` export endpoint (pull)
 - [x] InfluxDB export (push, 1.x and 2.x)
-- [ ] Basic alerting (Email, Slack, or Webhook)
+- [x] Notification engine with per-monitor rules, and desktop notifications through the agent
+- [ ] More notification channels (webhook, ntfy, email, Apprise, …) — see [notifications-plan.md](notifications-plan.md)
 - [x] Authentication for the dashboard and REST API (HTTP Basic Auth)
 - [ ] HTTPS for the dashboard and REST API
 - [ ] Boot-uptime monitor (`uptime -p` — how long the host has been up, distinct from ping reachability)

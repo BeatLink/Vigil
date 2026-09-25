@@ -35,6 +35,8 @@ class AgentConfig:
     """Must match an `id` in the server's `agents:` list."""
     token: str
     hostname: Optional[str] = None
+    notify_only: bool = False
+    """Refuse commands and event streams, and only show desktop notifications."""
 
     @staticmethod
     def load(path: Optional[str] = None) -> "AgentConfig":
@@ -58,6 +60,9 @@ class AgentConfig:
         agent_id = os.environ.get('VIGIL_AGENT_ID') or data.get('id')
         token = os.environ.get('VIGIL_AGENT_TOKEN') or data.get('token')
         hostname = os.environ.get('VIGIL_AGENT_HOSTNAME') or data.get('hostname')
+        notify_only = os.environ.get('VIGIL_AGENT_NOTIFY_ONLY', data.get('notify_only', False))
+        if isinstance(notify_only, str):
+            notify_only = notify_only.strip().lower() in ('1', 'true', 'yes', 'on')
 
         # token_file is the deployment-friendly form: the token stays in a file
         # the secret manager owns, so it never enters a config file, a unit's
@@ -73,4 +78,4 @@ class AgentConfig:
                 f"(set them in {config_path} or as VIGIL_AGENT_* environment variables)"
             )
         return AgentConfig(str(url), str(agent_id), str(token),
-                           str(hostname) if hostname else None)
+                           str(hostname) if hostname else None, bool(notify_only))

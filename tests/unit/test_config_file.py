@@ -39,7 +39,8 @@ class TestStructureWarnings:
     def test_a_known_config_warns_about_nothing(self, write_yaml, caplog):
         path = write_yaml({"database": {"path": "my.db"},
                            "plugins": [{"name": "cpu", "type": "cpu"}],
-                           "agents": [{"id": "host", "token": "t"}]})
+                           "agents": [{"id": "host", "token": "t"}],
+                           "notifications": {"channels": []}})
         with caplog.at_level("WARNING"):
             ConfigFileManager(path)
         assert caplog.records == []
@@ -184,11 +185,11 @@ class TestMetricRetentionConfig:
         assert cfg.metric_retention_days == 15
 
 
-class TestAlertAndControlProperties:
-    def test_alert_handlers_empty_when_missing(self, write_yaml):
+class TestNotificationAndControlProperties:
+    def test_notifications_empty_when_missing(self, write_yaml):
         path = write_yaml({"plugins": []})
         cfg = ConfigFileManager(path)
-        assert cfg.alert_handlers == []
+        assert cfg.notifications == {}
 
     def test_controllers_empty_when_missing(self, write_yaml):
         path = write_yaml({"plugins": []})

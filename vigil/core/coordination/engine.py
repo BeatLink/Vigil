@@ -36,6 +36,7 @@ from vigil.core.coordination.jobs import JobsGateway
 from vigil.core.settings.config_file import ConfigFileManager as VigilConfig
 from vigil.core.database.database import DatabaseManager as VigilDatabase
 from vigil.core.exporters import ExporterEngine
+from vigil.core.notifications import NotificationEngine
 from vigil.core.connectors import ConnectorEngine, ExecContext
 
 STARTUP_JITTER_SECONDS = 3.0
@@ -115,6 +116,9 @@ class VigilEngine:
         self.connectors.agents.configure(self.config_loader.agents)
         self.connectors.agents.set_event_sink(self._on_agent_event)
         self.connectors.agents.set_connect_sink(self._on_agent_connected)
+        self.notifications = NotificationEngine(
+            self.db, self.config_loader.notifications, self.connectors.agents
+        )
 
     def _wire_plugin(self, plugin: Plugin, plugin_cfg: Dict) -> None:
         """Build the engine-owned IO for a plugin and hand it the read-only data
@@ -481,6 +485,7 @@ class VigilEngine:
         writes to SQLite; registered as the UI server's shutdown hook."""
         for task in list(self._tasks):
             task.cancel()
+        self.notifications.stop()
         self.connectors.close()
         self.db.flush()
         logging.info("Vigil Engine shut down cleanly.")
@@ -491,6 +496,11 @@ class VigilEngine:
         self.db.insert_event("INFO", "Vigil Engine started polling loop.", "vigil_core")
 
         self._start_exporters()
+        # Broken notification settings must not stop monitoring.
+        try:
+            self.notifications.start(self.plugins)
+        except Exception as e:
+            logging.error(f"Failed to start notifications — none will be sent: {e}")
 
         monitors = list(self._flatten(self.plugins))
         polled = [p for p in monitors if not self._is_event_driven(p)]

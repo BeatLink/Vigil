@@ -29,18 +29,28 @@ let
     literalExpression
     ;
 
-  settings =
-    {
-      url = cfg.url;
-      id = cfg.id;
-    }
-    // lib.optionalAttrs (cfg.tokenFile != null) { token_file = toString cfg.tokenFile; }
-    // lib.optionalAttrs (cfg.hostname != null) { hostname = cfg.hostname; }
-    // cfg.extraSettings;
+  settings = {
+    url = cfg.url;
+    id = cfg.id;
+  }
+  // lib.optionalAttrs (cfg.tokenFile != null) { token_file = toString cfg.tokenFile; }
+  // lib.optionalAttrs (cfg.hostname != null) { hostname = cfg.hostname; }
+  // cfg.extraSettings;
 
   # Only the token's *path* reaches this file, so the generated YAML is safe to
   # live in the world-readable Nix store; the agent reads the secret at runtime.
   configFile = (pkgs.formats.yaml { }).generate "vigil-agent.yaml" settings;
+
+  desktopConfigFile = (pkgs.formats.yaml { }).generate "vigil-agent-desktop.yaml" (
+    {
+      url = cfg.url;
+      id = cfg.desktop.id;
+      notify_only = true;
+    }
+    // lib.optionalAttrs (cfg.desktop.tokenFile != null) {
+      token_file = toString cfg.desktop.tokenFile;
+    }
+  );
 
 in
 {
@@ -149,99 +159,158 @@ in
       default = { };
       description = "Additional keys merged into the generated agent config.";
     };
-  };
 
-  config = mkIf cfg.enable {
-    assertions = [
-      {
-        assertion = cfg.tokenFile != null || cfg.extraSettings ? token;
-        message = ''
-          services.vigil-agent: set tokenFile (preferred) or extraSettings.token.
-          Without a token the agent cannot authenticate and the server will
-          refuse every connection.
+    desktop = {
+      enable = mkEnableOption ''
+        a second, notify-only agent in each user's graphical session, to show
+        Vigil's desktop notifications. The system agent cannot: it runs as its
+        own user and has no access to a desktop session. This one runs no
+        commands, so it gives the server no access to the user's account
+      '';
+
+      id = mkOption {
+        type = types.str;
+        example = "laptop-desktop";
+        description = ''
+          This agent's identity, separate from the system agent's `id`. Must
+          match an `id` in the server's `agents:` list, and is what a desktop
+          notification channel's `agent:` refers to.
         '';
-      }
-    ];
+      };
 
-    systemd.services.vigil-agent = {
-      description = "Vigil agent (monitored-host companion)";
-      wantedBy = [ "multi-user.target" ];
-      after = [ "network-online.target" ];
-      wants = [ "network-online.target" ];
-
-      # The agent runs whatever shell the server sends, so the tools those
-      # commands invoke must be on PATH. systemd and coreutils cover the common
-      # monitors; anything else comes from `path`, which sits ahead of them so
-      # a deployment's own system profile is what a command resolves to. That
-      # order matters for sudo: it matches the resolved path, so a `systemctl`
-      # taken from this module's systemd would never match a rule written for
-      # /run/current-system/sw/bin/systemctl.
-      #
-      # /run/wrappers comes first and is not optional: NixOS's setuid binaries
-      # live in its bin/, and the plain `sudo` in the system profile is not
-      # setuid. Without this, every monitor that runs `sudo` (smartctl, borg,
-      # systemctl actions) fails with "must be owned by uid 0 and have the
-      # setuid bit set" — a shell over SSH picked this up from the login
-      # profile, but a systemd unit's PATH does not.
-      #
-      # Note the value is the prefix, not the bin/ directory: systemd.services
-      # .<name>.path appends /bin and /sbin to each entry, so "/run/wrappers/bin"
-      # would yield the non-existent /run/wrappers/bin/bin and silently leave
-      # the non-setuid sudo first on PATH.
-      path = [
-        "/run/wrappers"
-      ]
-      ++ cfg.path
-      ++ [
-        pkgs.coreutils
-        pkgs.systemd
-        pkgs.procps
-        pkgs.util-linux
-        pkgs.gnugrep
-        pkgs.gnused
-        pkgs.gawk
-        pkgs.bash
-      ];
-
-      serviceConfig = {
-        ExecStart = "${cfg.package}/bin/vigil-agent --config ${configFile}";
-        User = cfg.user;
-        Group = cfg.group;
-
-        # The server restarts, the network flaps, the agent redials on its own
-        # with backoff; Restart here only covers the agent itself dying.
-        Restart = "always";
-        RestartSec = "10s";
-
-        # Detached jobs (a backup, a `nixos-rebuild switch`) live in this unit's
-        # cgroup. Killing only the main process on stop/restart lets them run to
-        # completion — otherwise a switch that restarts the agent kills itself
-        # mid-activation.
-        KillMode = "process";
-
-        # Deliberately mild hardening. The agent's whole job is to run the
-        # commands the server sends, so sandboxing it away from the system it
-        # monitors would defeat the point — ProtectSystem="strict" would hide
-        # the very paths disk and filesystem monitors read. Confinement comes
-        # from running unprivileged with narrow sudo rules, not from here.
-        NoNewPrivileges = false; # sudo rules for smartctl/systemctl need this
-        PrivateTmp = true;
-        ProtectHome = true;
-        RestrictRealtime = true;
-        LockPersonality = true;
+      tokenFile = mkOption {
+        type = types.path;
+        example = "/run/secrets/vigil_agent_desktop_token";
+        description = ''
+          Path to the file holding this agent's token. It runs as the logged-in
+          user, so that user must be able to read it.
+        '';
       };
     };
-
-    users.users.${cfg.user} = lib.mkIf (cfg.user == "vigil-agent") {
-      isSystemUser = true;
-      group = cfg.group;
-      description = "Vigil agent service user";
-      extraGroups = cfg.extraGroups;
-      # Commands arrive as shell strings and are run through a shell, so this
-      # account needs a real one.
-      shell = pkgs.bashInteractive;
-    };
-
-    users.groups.${cfg.group} = lib.mkIf (cfg.group == "vigil-agent") { };
   };
+
+  config = lib.mkMerge [
+    (mkIf cfg.desktop.enable {
+      systemd.user.services.vigil-agent-desktop = {
+        description = "Vigil agent (desktop notifications)";
+        wantedBy = [ "graphical-session.target" ];
+        partOf = [ "graphical-session.target" ];
+        after = [ "graphical-session.target" ];
+
+        # notify-send shows the notification and xdg-open follows its link. The
+        # user's own profile stays on PATH so xdg-open finds their browser; %u is
+        # a systemd specifier for the user's name.
+        environment.PATH = lib.mkForce (
+          lib.concatStringsSep ":" [
+            (lib.makeBinPath [
+              pkgs.libnotify
+              pkgs.xdg-utils
+            ])
+            "/run/wrappers/bin"
+            "/etc/profiles/per-user/%u/bin"
+            "/run/current-system/sw/bin"
+          ]
+        );
+
+        serviceConfig = {
+          ExecStart = "${cfg.package}/bin/vigil-agent --config ${desktopConfigFile}";
+          Restart = "always";
+          RestartSec = "10s";
+        };
+      };
+    })
+    (mkIf cfg.enable {
+      assertions = [
+        {
+          assertion = cfg.tokenFile != null || cfg.extraSettings ? token;
+          message = ''
+            services.vigil-agent: set tokenFile (preferred) or extraSettings.token.
+            Without a token the agent cannot authenticate and the server will
+            refuse every connection.
+          '';
+        }
+      ];
+
+      systemd.services.vigil-agent = {
+        description = "Vigil agent (monitored-host companion)";
+        wantedBy = [ "multi-user.target" ];
+        after = [ "network-online.target" ];
+        wants = [ "network-online.target" ];
+
+        # The agent runs whatever shell the server sends, so the tools those
+        # commands invoke must be on PATH. systemd and coreutils cover the common
+        # monitors; anything else comes from `path`, which sits ahead of them so
+        # a deployment's own system profile is what a command resolves to. That
+        # order matters for sudo: it matches the resolved path, so a `systemctl`
+        # taken from this module's systemd would never match a rule written for
+        # /run/current-system/sw/bin/systemctl.
+        #
+        # /run/wrappers comes first and is not optional: NixOS's setuid binaries
+        # live in its bin/, and the plain `sudo` in the system profile is not
+        # setuid. Without this, every monitor that runs `sudo` (smartctl, borg,
+        # systemctl actions) fails with "must be owned by uid 0 and have the
+        # setuid bit set" — a shell over SSH picked this up from the login
+        # profile, but a systemd unit's PATH does not.
+        #
+        # Note the value is the prefix, not the bin/ directory: systemd.services
+        # .<name>.path appends /bin and /sbin to each entry, so "/run/wrappers/bin"
+        # would yield the non-existent /run/wrappers/bin/bin and silently leave
+        # the non-setuid sudo first on PATH.
+        path = [
+          "/run/wrappers"
+        ]
+        ++ cfg.path
+        ++ [
+          pkgs.coreutils
+          pkgs.systemd
+          pkgs.procps
+          pkgs.util-linux
+          pkgs.gnugrep
+          pkgs.gnused
+          pkgs.gawk
+          pkgs.bash
+        ];
+
+        serviceConfig = {
+          ExecStart = "${cfg.package}/bin/vigil-agent --config ${configFile}";
+          User = cfg.user;
+          Group = cfg.group;
+
+          # The server restarts, the network flaps, the agent redials on its own
+          # with backoff; Restart here only covers the agent itself dying.
+          Restart = "always";
+          RestartSec = "10s";
+
+          # Detached jobs (a backup, a `nixos-rebuild switch`) live in this unit's
+          # cgroup. Killing only the main process on stop/restart lets them run to
+          # completion — otherwise a switch that restarts the agent kills itself
+          # mid-activation.
+          KillMode = "process";
+
+          # Deliberately mild hardening. The agent's whole job is to run the
+          # commands the server sends, so sandboxing it away from the system it
+          # monitors would defeat the point — ProtectSystem="strict" would hide
+          # the very paths disk and filesystem monitors read. Confinement comes
+          # from running unprivileged with narrow sudo rules, not from here.
+          NoNewPrivileges = false; # sudo rules for smartctl/systemctl need this
+          PrivateTmp = true;
+          ProtectHome = true;
+          RestrictRealtime = true;
+          LockPersonality = true;
+        };
+      };
+
+      users.users.${cfg.user} = lib.mkIf (cfg.user == "vigil-agent") {
+        isSystemUser = true;
+        group = cfg.group;
+        description = "Vigil agent service user";
+        extraGroups = cfg.extraGroups;
+        # Commands arrive as shell strings and are run through a shell, so this
+        # account needs a real one.
+        shell = pkgs.bashInteractive;
+      };
+
+      users.groups.${cfg.group} = lib.mkIf (cfg.group == "vigil-agent") { };
+    })
+  ];
 }

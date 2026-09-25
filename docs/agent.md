@@ -102,6 +102,12 @@ needs no action on the host. A monitor whose agent is not currently connected re
 failed with an explicit message — the same way a refused SSH dial behaves — and recovers
 by itself.
 
+## Desktop notifications
+
+An agent running in your graphical session can show Vigil's notifications on your desktop. It runs
+as a separate agent with `notify_only: true`, which refuses commands. See
+[notifications.md](notifications.md#desktop-notifications).
+
 ## Event streams
 
 A plugin declares the streams it wants via `subscriptions()`; the server sends that set to

@@ -6,7 +6,7 @@ keeps the server-side import path alongside the rest of the transport code.
 """
 
 from vigil_agent.protocol import (  # noqa: F401
-    EVENT, EXEC, HELLO, PING, PONG, PROTOCOL_VERSION, RESULT, SUBSCRIBE,
+    EVENT, EXEC, HELLO, NOTIFY, PING, PONG, PROTOCOL_VERSION, RESULT, SUBSCRIBE,
     WELCOME, StreamSpec, decode, encode, event, exec_request, exec_result,
-    hello, subscribe, welcome,
+    hello, notify, subscribe, welcome,
 )

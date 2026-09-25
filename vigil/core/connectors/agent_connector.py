@@ -148,6 +148,19 @@ class AgentConnection:
         async with self._send_lock:
             await socket.send_text(proto.encode(frame))
 
+    # --- Desktop notifications ---
+
+    async def notify(self, title: str, body: str, urgency: str = "normal",
+                     url: Optional[str] = None, icon: Optional[str] = None) -> None:
+        """Ask the agent to show a desktop notification. Raises if it cannot be handed over."""
+        if self._socket is None:
+            raise ConnectionError(f"agent {self.agent_id!r} is not connected")
+        if proto.NOTIFY not in self.capabilities:
+            raise RuntimeError(
+                f"agent {self.agent_id!r} does not support desktop notifications (upgrade it)"
+            )
+        await self._send(proto.notify(title, body, urgency, url, icon))
+
     # --- Event streams ---
 
     def register_stream(self, spec: StreamSpec) -> None:
