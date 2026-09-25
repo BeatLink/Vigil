@@ -24,7 +24,7 @@ from vigil_agent import __version__, desktop, executor, protocol as proto, watch
 _BACKOFF_INITIAL = 1.0
 _BACKOFF_MAX = 60.0
 
-CAPABILITIES = sorted([*watchers.WATCHERS, proto.NOTIFY])
+CAPABILITIES = sorted([*watchers.WATCHERS, proto.NOTIFY, proto.DISMISS])
 """What this agent can do, sent in the hello so a server can tell an older
 agent apart from a newer one without a version comparison."""
 
@@ -41,7 +41,8 @@ class AgentClient:
         self._send_lock = asyncio.Lock()
         self._streams: Dict[str, asyncio.Task] = {}
         self._execs: set = set()
-        # Kept across reconnects, so a notification can still be clicked after a network drop.
+        # Kept across reconnects, so a notification can still be clicked or dismissed after a network drop.
+        self._desktop = desktop.Notifier()
         self._notifications: set = set()
 
     # --- Connection lifecycle ---
@@ -55,6 +56,7 @@ class AgentClient:
                 backoff = _BACKOFF_INITIAL
             except asyncio.CancelledError:
                 await self._stop_streams()
+                self._desktop.cancel_all()
                 for task in list(self._notifications):
                     task.cancel()
                 raise
@@ -73,7 +75,7 @@ class AgentClient:
         """One connection, from hello to disconnect."""
         async with websockets.connect(self.url, ping_interval=20, ping_timeout=20) as socket_:
             self._socket = socket_
-            caps = [proto.NOTIFY] if self.notify_only else CAPABILITIES
+            caps = [proto.DISMISS, proto.NOTIFY] if self.notify_only else CAPABILITIES
             hello = proto.hello(self.agent_id, self.hostname, __version__, caps)
             hello['token'] = self.token
             await socket_.send(proto.encode(hello))
@@ -101,8 +103,9 @@ class AgentClient:
                 task = asyncio.create_task(self._handle_exec(frame))
                 self._execs.add(task)
                 task.add_done_callback(self._execs.discard)
-            elif tag == proto.NOTIFY:
-                task = asyncio.create_task(desktop.show(frame))
+            elif tag in (proto.NOTIFY, proto.DISMISS):
+                handler = self._desktop.show if tag == proto.NOTIFY else self._desktop.dismiss
+                task = asyncio.create_task(handler(frame))
                 self._notifications.add(task)
                 task.add_done_callback(self._notifications.discard)
             elif tag == proto.SUBSCRIBE and not self.notify_only:

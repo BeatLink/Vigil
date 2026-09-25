@@ -85,6 +85,12 @@ Every monitor has its own dashboard address, `/monitor/<id>`, and the events fee
 A `desktop` channel shows a notification on a computer that runs a Vigil agent. Clicking it opens
 the monitor's page in the browser.
 
+Each monitor has at most one notification on screen. A reminder or a worse status replaces it,
+and when the monitor recovers the notification closes itself instead of a "recovered" one
+appearing. Set `dismiss_on_recovery: false` on the channel to get the recovery notification
+instead. A notification is still cleared if you mute the monitor after it appeared. Closing uses
+`busctl` (part of systemd) to reach the desktop's notification service.
+
 The agent must run **inside your graphical session, as you**. Desktop notifications travel over
 your session's message bus, and a system service, such as the regular Vigil agent, cannot reach
 it. Run a second agent for this, with its own `id` and token, and set `notify_only: true`. That
@@ -109,6 +115,7 @@ channels:
   - id: laptop
     type: desktop
     agent: laptop-desktop
+    dismiss_on_recovery: true        # the default: close the notification when the monitor recovers
     icon: vigil                      # the default: Vigil's own icon, shipped with the agent
     urgency:                         # one value for everything, or per status as here
       failed: critical
@@ -128,6 +135,8 @@ Either setting can be one value for every notification, or a mapping by status: 
 | `warning`     | `normal`        |
 | `unavailable` | `normal`        |
 | `recovered`   | `low`           |
+
+`recovered` only applies when `dismiss_on_recovery` is off.
 
 On NixOS the agent module sets this up as a user service that starts with the graphical session:
 

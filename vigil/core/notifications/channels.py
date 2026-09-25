@@ -32,6 +32,9 @@ class Channel:
     """A configured destination for notifications."""
     TYPE = ""
 
+    dismisses_on_recovery = False
+    """Whether a recovery only clears the problem's notification, which is sent even while muted."""
+
     def __init__(self, channel_id: str, config: Dict[str, Any], agents: Any = None):
         self.id = channel_id
         self.config = config
@@ -90,10 +93,18 @@ class DesktopChannel(Channel):
         if bad:
             raise ValueError(f"`urgency` must be low, normal or critical, not {sorted(bad)}")
         self.icon = per_status(config.get('icon'), self.DEFAULT_ICON, 'icon')
+        self.dismisses_on_recovery = bool(config.get('dismiss_on_recovery', True))
 
     async def send(self, message: Message) -> None:
-        await self._agents.get(self.agent_id).notify(
+        agent = self._agents.get(self.agent_id)
+        if message.kind == "recovered" and self.dismisses_on_recovery and message.monitor_id:
+            # An agent too old to dismiss shows the recovery instead.
+            if "dismiss" in agent.capabilities:
+                await agent.dismiss(message.monitor_id)
+                return
+        await agent.notify(
             message.title, message.body,
             self.urgency.get(message.key, 'normal'), message.url,
             str(self.icon.get(message.key, self.DEFAULT_ICON['failed'])),
+            message.monitor_id or None,
         )

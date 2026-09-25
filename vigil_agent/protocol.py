@@ -19,8 +19,8 @@ Two channels share the one socket:
   agent watches a source locally and sends a frame the moment something
   happens, with no poll interval involved.
 
-A third, one-way frame (``notify``) asks the agent to show a desktop
-notification in the session it runs in.
+Two more one-way frames ask the agent to show a desktop notification in the
+session it runs in (``notify``), and to close the one shown for a key (``dismiss``).
 
 Frames are deliberately small and self-describing rather than positional, so
 an older agent talking to a newer server (or the reverse) can ignore fields
@@ -55,6 +55,9 @@ EVENT = "event"
 
 NOTIFY = "notify"
 """Server -> agent: show one desktop notification. Fire and forget; no reply."""
+
+DISMISS = "dismiss"
+"""Server -> agent: close the desktop notification shown for a key. No reply."""
 
 PING = "ping"
 PONG = "pong"
@@ -117,15 +120,22 @@ def event(stream_id: str, payload: Dict[str, Any], timestamp: float) -> Dict[str
     return {'t': EVENT, 'stream': stream_id, 'ts': timestamp, 'payload': payload}
 
 
-def notify(title: str, body: str, urgency: str = "normal",
-           url: Optional[str] = None, icon: Optional[str] = None) -> Dict[str, Any]:
-    """Build a server NOTIFY frame; `url` is opened when the notification is clicked."""
+def notify(title: str, body: str, urgency: str = "normal", url: Optional[str] = None,
+           icon: Optional[str] = None, key: Optional[str] = None) -> Dict[str, Any]:
+    """Build a server NOTIFY frame; `url` opens on a click, and `key` lets a later frame replace or dismiss it."""
     frame = {'t': NOTIFY, 'title': title, 'body': body, 'urgency': urgency}
     if url:
         frame['url'] = url
     if icon:
         frame['icon'] = icon
+    if key:
+        frame['key'] = key
     return frame
+
+
+def dismiss(key: str) -> Dict[str, Any]:
+    """Build a server DISMISS frame closing the notification shown for `key`."""
+    return {'t': DISMISS, 'key': key}
 
 
 @dataclass(frozen=True)

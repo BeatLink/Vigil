@@ -141,19 +141,22 @@ class NotificationEngine:
         if alert is None:
             return
         muted = self.muted_by(plugin_id) is not None
+        channels = [self.channels[c] for c in self._tracker.rules[plugin_id].channels]
         if alert.kind == RECOVERED:
             announced = plugin_id in self._announced
             self._announced.discard(plugin_id)
-            # A recovery is only news if its problem was announced.
-            if muted or not announced:
+            # A recovery is only news if its problem was announced; muted, it only clears that notification.
+            if not announced:
                 return
+            if muted:
+                channels = [c for c in channels if getattr(c, 'dismisses_on_recovery', False)]
         elif muted:
             return
         else:
             self._announced.add(plugin_id)
         message = self.message(plugin_id, alert, now)
-        for channel_id in self._tracker.rules[plugin_id].channels:
-            self._spawn(self._deliver(self.channels[channel_id], message))
+        for channel in channels:
+            self._spawn(self._deliver(channel, message))
 
     def message(self, plugin_id: str, alert: Alert, now: float) -> Message:
         """The notification for one alert on one monitor."""

@@ -205,6 +205,17 @@ class TestEngine:
         await self._set(db_manager, 'online')
         assert self._titles(engine) == ['Nas is failed']
 
+    async def test_a_dismissing_channel_still_clears_after_a_mute(self, engine, db_manager):
+        clearing = RecordingChannel('clear')
+        clearing.dismisses_on_recovery = True
+        engine.channels['clear'] = clearing
+        engine.start([_plugin('nas')])
+        await self._set(db_manager, 'failed')
+        engine.set_muted('nas', True)
+        await self._set(db_manager, 'online')
+        assert self._titles(engine) == ['Nas is failed']
+        assert [m.kind for m in clearing.sent] == ['problem', 'recovered']
+
     async def test_muting_a_group_mutes_everything_in_it(self, engine, db_manager):
         group = _plugin('storage', [_plugin('nas')], type_='group')
         engine.start([group])
@@ -254,7 +265,21 @@ class TestDesktopChannel:
         await channel.send(Message('Nas is failed', 'why', 'failed', PROBLEM, 'nas', 'https://v/monitor/nas'))
         assert socket.sent == [{'t': 'notify', 'title': 'Nas is failed', 'body': 'why',
                                 'urgency': 'critical', 'url': 'https://v/monitor/nas',
-                                'icon': 'vigil'}]
+                                'icon': 'vigil', 'key': 'nas'}]
+
+    async def test_a_recovery_dismisses_the_monitors_notification(self):
+        registry, socket = _registry(caps=('notify', 'dismiss'))
+        channel = DesktopChannel('desk', {'agent': 'desktop'}, registry)
+        await channel.send(Message('Nas recovered', 'b', 'online', RECOVERED, 'nas'))
+        assert socket.sent == [{'t': 'dismiss', 'key': 'nas'}]
+
+    async def test_a_recovery_is_shown_when_dismissal_is_off_or_unsupported(self):
+        for caps, config in ((('notify', 'dismiss'), {'dismiss_on_recovery': False}),
+                             (('notify',), {})):
+            registry, socket = _registry(caps=caps)
+            channel = DesktopChannel('desk', {'agent': 'desktop', **config}, registry)
+            await channel.send(Message('Nas recovered', 'b', 'online', RECOVERED, 'nas'))
+            assert [(f['t'], f['title']) for f in socket.sent] == [('notify', 'Nas recovered')]
 
     async def test_icon_and_urgency_can_be_set_once_or_per_status(self):
         registry, socket = _registry()

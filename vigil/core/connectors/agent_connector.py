@@ -151,15 +151,23 @@ class AgentConnection:
     # --- Desktop notifications ---
 
     async def notify(self, title: str, body: str, urgency: str = "normal",
-                     url: Optional[str] = None, icon: Optional[str] = None) -> None:
+                     url: Optional[str] = None, icon: Optional[str] = None,
+                     key: Optional[str] = None) -> None:
         """Ask the agent to show a desktop notification. Raises if it cannot be handed over."""
+        self._require(proto.NOTIFY, "desktop notifications")
+        await self._send(proto.notify(title, body, urgency, url, icon, key))
+
+    async def dismiss(self, key: str) -> None:
+        """Ask the agent to close the desktop notification it shows for `key`."""
+        self._require(proto.DISMISS, "dismissing notifications")
+        await self._send(proto.dismiss(key))
+
+    def _require(self, capability: str, what: str) -> None:
+        """Raise unless the agent is connected and supports `capability`."""
         if self._socket is None:
             raise ConnectionError(f"agent {self.agent_id!r} is not connected")
-        if proto.NOTIFY not in self.capabilities:
-            raise RuntimeError(
-                f"agent {self.agent_id!r} does not support desktop notifications (upgrade it)"
-            )
-        await self._send(proto.notify(title, body, urgency, url, icon))
+        if capability not in self.capabilities:
+            raise RuntimeError(f"agent {self.agent_id!r} does not support {what} (upgrade it)")
 
     # --- Event streams ---
 
