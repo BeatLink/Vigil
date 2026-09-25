@@ -149,6 +149,9 @@ class Tracker:
         state = self._states.setdefault(plugin_id, _State())
         current = _status(status)
 
+        if current == Status.UNAVAILABLE and current.value not in rule.on:
+            # Not measuring says nothing about the problem: it neither ends it nor counts toward one.
+            return None
         if current.value not in rule.on:
             state.problem_cycles = 0
             if not state.alerting:

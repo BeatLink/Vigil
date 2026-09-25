@@ -61,6 +61,9 @@ their notifications.
 once. An availability monitor (`uptime`, `http`) reports that host as failed, which gives one
 notification instead of one per monitor.
 
+While it is off, `unavailable` is neutral. A monitor that turns unavailable during a problem has
+not recovered, and the problem carries on once it measures again.
+
 If Vigil restarts while a monitor has a problem, it is not announced again. Its recovery still
 is.
 

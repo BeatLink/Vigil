@@ -65,6 +65,19 @@ class TestTracker:
         assert t.observe('m', 'online', 30) == Alert(RECOVERED, 'online', 10)
         assert t.observe('m', 'online', 40) is None
 
+    def test_unavailable_neither_recovers_nor_interrupts_a_problem(self):
+        t = self._tracker(after=2)
+        assert t.observe('m', 'failed', 0) is None
+        assert t.observe('m', 'unavailable', 1) is None
+        assert t.observe('m', 'failed', 2) == Alert(PROBLEM, 'failed', 0)
+        assert t.observe('m', 'unavailable', 3) is None
+        assert t.observe('m', 'online', 4) == Alert(RECOVERED, 'online', 0)
+
+    def test_unavailable_counts_when_it_is_in_on(self):
+        t = self._tracker(on=frozenset({'failed', 'unavailable'}))
+        assert t.observe('m', 'unavailable', 0) == Alert(PROBLEM, 'unavailable', 0)
+        assert t.observe('m', 'online', 1) == Alert(RECOVERED, 'online', 0)
+
     def test_statuses_outside_on_are_ignored(self):
         t = self._tracker()
         assert t.observe('m', 'warning', 0) is None
