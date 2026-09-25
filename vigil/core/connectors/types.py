@@ -52,15 +52,20 @@ class Status(str, Enum):
         return _LOG_LEVEL[self]
 
     @classmethod
+    def of(cls, value: str) -> "Status":
+        """The status a stored string means, with an unrecognised value ranking as unavailable."""
+        try:
+            return cls(value)
+        except ValueError:
+            return cls.UNAVAILABLE
+
+    @classmethod
     def worst(cls, statuses: Iterable[str]) -> "Status":
         """The most severe of the given statuses, defaulting to online; an
         unrecognised value ranks as unavailable."""
         worst = cls.ONLINE
         for value in statuses:
-            try:
-                candidate = cls(value)
-            except ValueError:
-                candidate = cls.UNAVAILABLE
+            candidate = cls.of(value)
             if candidate.severity > worst.severity:
                 worst = candidate
         return worst

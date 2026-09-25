@@ -44,6 +44,7 @@ from vigil.core.state import (
     StatusRecord,
 )
 from vigil.core.state import changes
+from vigil.core.connectors.types import Status
 
 from .models import (
     ALL_MODELS,
@@ -308,7 +309,7 @@ class DatabaseManager:
             {
                 row.plugin_id: StatusRecord(
                     plugin_id=row.plugin_id,
-                    state=row.state,
+                    state=str(Status.of(row.state)), # history written under an old status name reads as its current one
                     timestamp=row.timestamp,
                 )
                 for row in rows
@@ -491,7 +492,7 @@ class DatabaseManager:
     # ------------------------------------------------------------------
     def insert_status(self, plugin_id: str, state: str):
         record = StatusRecord(
-            plugin_id=plugin_id, state=state, timestamp=datetime.now()
+            plugin_id=plugin_id, state=str(Status.of(state)), timestamp=datetime.now()
         )
         self.store.statuses[plugin_id] = record
         _writer.submit(

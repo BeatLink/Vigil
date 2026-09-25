@@ -497,6 +497,16 @@ class TestHydration:
         m2 = self._restart(mgr)
         assert m2.latest_statuses() == {"cpu": "failed", "disk": "online"}
 
+    def test_a_status_stored_under_its_old_name_is_restored_as_unavailable(self, mgr):
+        with db.connection_context():
+            StatusHistory.create(plugin_id="zfs", state="offline")
+        m2 = self._restart(mgr)
+        assert m2.latest_statuses()["zfs"] == "unavailable"
+
+    def test_an_old_status_name_is_written_as_the_current_one(self, mgr):
+        mgr.insert_status("zfs", "offline")
+        assert mgr.latest_status("zfs") == "unavailable"
+
     def test_events_survive_restart_newest_first(self, mgr):
         for i in range(3):
             mgr.insert_event("INFO", f"m{i}")
