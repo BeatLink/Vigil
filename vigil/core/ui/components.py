@@ -480,9 +480,20 @@ async def open_dialog_impl(plugin, dialog_name: str, row: Optional[dict] = None)
         return
 
 
+def _color_rules(columns: list) -> list:
+    """Each column that colors its cells, paired with the rule that picks the color."""
+    from vigil.core.ui.spec import ITEM_COLOR_RULES, resolve
+    pairs = []
+    for col in columns:
+        rule = resolve(ITEM_COLOR_RULES, col['cell_color_by']) if col.get('cell_color_by') else None
+        if rule is not None:
+            pairs.append((col, rule))
+    return pairs
+
+
 def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optional[dict] = None):
     """Render a data table with optional per-row action buttons, cell coloring and filtering."""
-    from vigil.core.ui.spec import ENABLED_PREDICATES, ITEM_COLOR_RULES, resolve
+    from vigil.core.ui.spec import ENABLED_PREDICATES, resolve
     from vigil.core.ui.theme import STATUS_COLORS
 
     row_key = table_spec.get('row_key', 'id')
@@ -505,13 +516,8 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
                 'outlined dense clearable').classes('w-full mb-4')
         table = ui.table(columns=render_columns, rows=[], row_key=row_key).classes('w-full')
 
-    for col in columns:
-        color_rule_name = col.get('cell_color_by')
-        if not color_rule_name:
-            continue
-        rule = resolve(ITEM_COLOR_RULES, color_rule_name)
-        if rule is None:
-            continue
+    color_rules = _color_rules(columns)
+    for col, _ in color_rules:
         table.add_slot(f'body-cell-{col["name"]}', f'''
             <q-td :props="props">
                 <span :style="{{ color: props.row._color_{col['name']} }}">{{{{ props.row.{col['field']} }}}}</span>
@@ -563,13 +569,7 @@ def render_table_with_actions(plugin, page, table_spec: dict, filter_spec: Optio
             rows = list(getattr(plugin, rows_attr))
         else:
             rows = _resolve_repeat_items(plugin, {'source': table_spec.get('source', 'snapshot')})
-        for col in columns:
-            color_rule_name = col.get('cell_color_by')
-            if not color_rule_name:
-                continue
-            rule = resolve(ITEM_COLOR_RULES, color_rule_name)
-            if rule is None:
-                continue
+        for col, rule in color_rules:
             for row in rows:
                 state = rule(row)
                 row[f"_color_{col['name']}"] = STATUS_COLORS.get(state, STATUS_COLORS['online']) if state else STATUS_COLORS['online']
