@@ -74,7 +74,7 @@ of one per monitor.
    `POST /api/notifications/<channel>/test`.
 2. **Generic channels:** webhook and ntfy are done: a JSON body or a payload template for the
    webhook, and a tap link, priority and tags for ntfy. Every secret can be given as `*_file`.
-   Still to do: smtp, and Apprise as the optional extra `vigil[apprise]`.
+   smtp and Apprise (the optional extra `vigil[apprise]`) are done too.
 3. **More providers and UI:** the dashboard part is done: a mute switch on each monitor's page,
    and a header dialog that tests channels and lists mutes. Still to do: telegram, discord,
    slack, gotify, pushover, matrix, home-assistant and signal built in.

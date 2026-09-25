@@ -27,6 +27,10 @@
                                 doCheck = false;
                                 pytestCheckPhase = "true";
                             });
+                            # The overlay moves apprise off the binary cache, and its own test suite takes over 20 minutes to build.
+                            apprise = pyprev.apprise.overridePythonAttrs (old: {
+                                doCheck = false;
+                            });
                         };
                     };
                     python312Packages = final.python312.pkgs;
@@ -50,6 +54,8 @@
                     # vigil/core/connectors/ssh_connector.py) — the agentless
                     # way of reaching a monitored host.
                     asyncssh
+                    # The apprise notification channel (vigil/core/notifications/mail.py).
+                    apprise
                     # The agent transport's client half (vigil_agent/client.py).
                     # The server side needs nothing extra: nicegui already
                     # brings FastAPI/uvicorn, which serve the agent WebSocket.

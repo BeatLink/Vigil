@@ -13,6 +13,7 @@ from urllib.parse import quote
 
 from vigil.core.notifications.channels import Channel, DesktopChannel, Message
 from vigil.core.notifications.http import NtfyChannel, WebhookChannel
+from vigil.core.notifications.mail import AppriseChannel, SmtpChannel
 from vigil.core.notifications.rules import PROBLEM, RECOVERED, Alert, Tracker, resolve_rules
 from vigil.core.state import changes
 from vigil.core.state.changes import CHANGES
@@ -25,7 +26,8 @@ MUTE_SETTING = "notifications.muted:{}"
 """The setting that mutes one monitor, and everything beneath it when it is a group."""
 
 
-CHANNEL_TYPES = {cls.TYPE: cls for cls in (DesktopChannel, WebhookChannel, NtfyChannel)}
+CHANNEL_TYPES = {cls.TYPE: cls for cls in (DesktopChannel, WebhookChannel, NtfyChannel,
+                                           SmtpChannel, AppriseChannel)}
 
 
 def build_channels(entries: List[Dict[str, Any]], agents: Any) -> Dict[str, Channel]:

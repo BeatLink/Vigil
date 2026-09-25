@@ -27,7 +27,7 @@
 - [x] InfluxDB export (push, 1.x and 2.x)
 - [x] Notification engine with per-monitor rules, and desktop notifications through the agent
 - [x] Webhook and ntfy notification channels
-- [ ] More notification channels (email, Apprise, …) — see [notifications-plan.md](notifications-plan.md)
+- [x] Email (SMTP) and Apprise notification channels
 - [x] Authentication for the dashboard and REST API (HTTP Basic Auth)
 - [ ] HTTPS for the dashboard and REST API
 - [ ] Boot-uptime monitor (`uptime -p` — how long the host has been up, distinct from ping reachability)

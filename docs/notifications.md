@@ -4,8 +4,9 @@ Vigil sends a notification when a monitor's status changes in a way you care abo
 failing, it is still failing, or it recovers. Notifications go to **channels**. Each monitor
 follows a **rule** that sets which channels it uses and which changes count.
 
-Three channel types exist: [`desktop`](#desktop-notifications), [`webhook`](#webhook) and
-[`ntfy`](#ntfy). More are planned; see [notifications-plan.md](notifications-plan.md).
+Five channel types exist: [`desktop`](#desktop-notifications), [`webhook`](#webhook),
+[`ntfy`](#ntfy), [`smtp`](#email) and [`apprise`](#apprise). See
+[notifications-plan.md](notifications-plan.md) for what is planned.
 
 ## Config
 
@@ -232,6 +233,44 @@ settings, either one can be one value or set per status:
 | `warning`     | `default`        | `warning`          |
 | `unavailable` | `default`        | `grey_question`    |
 | `recovered`   | `low`            | `white_check_mark` |
+
+## Email
+
+An `smtp` channel emails each notification. The subject is the notification's title, and the body
+is its text followed by the monitor's link.
+
+```yaml
+channels:
+  - id: mail
+    type: smtp
+    host: smtp.example.com
+    security: starttls           # starttls (default, port 587), tls (port 465) or none (port 25)
+    # port: 587                  # only when the server uses another port
+    username: vigil@example.com
+    password_file: /run/secrets/smtp_password   # or `password:`
+    from: vigil@example.com      # defaults to `username`
+    to: [me@example.com, oncall@example.com]    # or one address, or a comma-separated string
+    subject_prefix: "[Vigil] "   # optional
+```
+
+## Apprise
+
+An `apprise` channel sends each notification through [Apprise](https://github.com/caronc/apprise),
+which reaches most chat, push and SMS services: Discord, Slack, Telegram, Matrix, Pushover,
+Gotify, Teams, Signal and around a hundred more. Each service is one Apprise URL; see
+[Apprise's list](https://github.com/caronc/apprise/wiki) for the format.
+
+```yaml
+channels:
+  - id: chat
+    type: apprise
+    urls_file: /run/secrets/apprise_urls   # one URL per line; lines starting with # are skipped
+    # urls: ["tgram://bottoken/ChatID"]    # or inline, as a list or a single URL
+```
+
+Apprise URLs usually carry the service's token, so prefer `urls_file`. The channel needs the
+`apprise` Python package, which the Nix package includes; with pip, install `vigil[apprise]`. Apprise
+shows failures, warnings and recoveries with the service's own colors or icons where it has them.
 
 ## Checking a channel
 
