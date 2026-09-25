@@ -29,9 +29,11 @@ def _rows(entries: List[Dict[str, Any]], limit: int) -> List[Dict[str, Any]]:
 def render_browser(plugin):
     """An archive picker, a breadcrumb trail, the current folder's entries with tick boxes, and a restore button."""
     from nicegui import ui
-    from vigil.core.ui.components import LABEL_CLASS, action_button, card, confirmed, on_data_event
+    from nicegui import context
+    from vigil.core.ui.components import LABEL_CLASS, action_button, card, confirmed, notify_client, on_data_event
 
     state = {'archive': None, 'path': ''}
+    client = context.client
 
     async def open_folder(archive, path: str):
         if not archive:
@@ -89,7 +91,8 @@ def render_browser(plugin):
                                f"{plugin.restore_dir}? Live files are not touched.\n\n{shown}"):
             return
         ok, content = await plugin.run_action('restore_archive', archive=state['archive'], paths=paths)
-        ui.notify(content or ('Restore started' if ok else 'Restore failed'), type='positive' if ok else 'negative')
+        notify_client(client, content or ('Restore started' if ok else 'Restore failed'),
+                      type='positive' if ok else 'negative')
         if ok:
             table.selected = []
             count_selected()

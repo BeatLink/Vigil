@@ -4,7 +4,7 @@ import asyncio
 from typing import Any, Callable
 from nicegui import ui
 from vigil.core.contracts import EngineLike
-from ..components import action_button
+from ..components import action_button, notify_client
 from .notifications import render_mute_button
 
 
@@ -23,10 +23,12 @@ def render_plugin_detail(engine: EngineLike, switch_view: Callable, plugin: Any)
 
 async def _render_actions(engine: EngineLike, plugin: Any, actions_row: Any):
     """Renders the Poll Now button, the mute switch and the plugin's declared action buttons."""
+    # A poll or action can outlast the view it was started from, so its notice goes through the client instead of the view's slot.
+    client = actions_row.client
     with actions_row:
         async def poll_now():
             await plugin.run_cycle()
-            ui.notify(f'{plugin.name} polled', type='positive')
+            notify_client(client, f'{plugin.name} polled', type='positive')
         # The one filled button on the view; everything else is a bordered ghost so the accent keeps meaning "the action".
         action_button('Poll Now', on_click=poll_now, icon='refresh', weight='filled')
         render_mute_button(engine, plugin)
@@ -35,8 +37,8 @@ async def _render_actions(engine: EngineLike, plugin: Any, actions_row: Any):
         for action in info.get('actions', []):
             async def do_action(aid=action['action_id']):
                 success, _ = await plugin.run_action(aid)
-                ui.notify('Action completed successfully' if success else 'Action failed',
-                          type='positive' if success else 'negative')
+                notify_client(client, 'Action completed successfully' if success else 'Action failed',
+                              type='positive' if success else 'negative')
 
             action_button(action['name'], on_click=do_action,
                           icon=action.get('icon', 'play_arrow'),

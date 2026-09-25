@@ -362,6 +362,15 @@ def render_buttons(plugin, button_specs: list):
             )
 
 
+def notify_client(client, message: str, **kwargs) -> None:
+    """Notifies the viewer an action started from, even after their view changed while it ran; a closed tab gets nothing."""
+    from nicegui import Client
+    if Client.instances.get(client.id) is not client:
+        return
+    with client:
+        ui.notify(message, **kwargs)
+
+
 async def confirmed(text: str) -> bool:
     """Asks the user to confirm `text` and resolves True only on an explicit yes."""
     with ui.dialog() as dialog, card('w-full'):
