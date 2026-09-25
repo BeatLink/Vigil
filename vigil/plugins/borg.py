@@ -1,14 +1,16 @@
 """Borg backup repository freshness and size, collected by running borg over
 SSH on the target: `borg list --json` each cycle, `borg info --json` when
 collect_stats is on, and a detached `borg create` job that actions launch and
-later cycles poll to completion. Config: repo, max_age, passphrase /
-passphrase_file / passphrase_command, borg_bin, ssh_key / rsh, require_sudo,
-list_archives, collect_stats, cache_dir, lock_wait / backup_lock_wait, and the
-backup set (source_paths, exclude*, one_file_system, compression,
-archive_prefix). A borg error, an empty repo, or a newest archive older than
-max_age is failed; an unreachable host, a missing borg binary, a repo the SSH
-user cannot read, or unparseable output is unavailable. This monitor has no
-warning tier."""
+later cycles poll to completion. The two poll calls go out as one command that
+runs them in sequence and frames their output, because separate commands are
+dispatched concurrently and would contend for the repo's chunks cache lock.
+Config: repo, max_age, passphrase / passphrase_file / passphrase_command,
+borg_bin, ssh_key / rsh, require_sudo, list_archives, collect_stats, cache_dir,
+lock_wait / backup_lock_wait, and the backup set (source_paths, exclude*,
+one_file_system, compression, archive_prefix). A borg error, an empty repo, or
+a newest archive older than max_age is failed; an unreachable host, a missing
+borg binary, a repo the SSH user cannot read, a lock borg gave up waiting for,
+or unparseable output is unavailable. This monitor has no warning tier."""
 
 import json
 import re
@@ -22,11 +24,16 @@ from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import ActionPlan, CmdResult, Command, CollectResult
 from vigil.core.connectors import ssh_connector as detached
 from vigil.plugins.base.plugin_helpers import (
-    deadline_prefix, format_age, format_duration, parse_duration,
+    KILL_GRACE_SECONDS, format_age, format_duration, parse_duration,
 )
 
 
 _POLL_BASE_DIR_VAR = "__vigil_poll_base"
+_POLL_DEADLINE_VAR = "__vigil_poll_end"
+_POLL_LEFT_FN = "__vigil_poll_left"
+_POLL_RC_VAR = "__vigil_poll_rc"
+_FRAME = "__VIGIL_BORG__"
+_CUT_SHORT = "no output: the poll ended before this call ran"
 
 _DEFAULT_LAYOUT = [
     ['host_card', 'repo_card', 'maxage_card', 'state_card'],
@@ -62,6 +69,52 @@ def _redact(command: str) -> str:
     )
 
 
+def _frame_line(index: int, stream: str, code) -> str:
+    """The marker that separates one poll call's captured output from the next."""
+    return f"{_FRAME} {index} {stream} {code}"
+
+
+def _split_poll(result: CmdResult, count: int) -> List[CmdResult]:
+    """Splits a sequential poll's framed transcript back into one CmdResult per borg call."""
+    streams: Dict[int, Dict[str, str]] = {}
+    codes: Dict[int, int] = {}
+    key = None
+    buf: List[str] = []
+
+    def flush() -> None:
+        if key is not None:
+            streams.setdefault(key[0], {})[key[1]] = "\n".join(buf).strip()
+
+    for line in (result.stdout or "").splitlines():
+        if not line.startswith(_FRAME + " "):
+            buf.append(line)
+            continue
+        flush()
+        buf = []
+        fields = line.split()
+        try:
+            index, stream, code = int(fields[1]), fields[2], int(fields[3])
+        except (IndexError, ValueError):
+            key = None
+            continue
+        key = (index, stream)
+        codes[index] = code
+    flush()
+
+    # No frame arrived at all, so the shell or sudo failed before the first borg call and the whole transcript is that failure.
+    if not codes:
+        return [result] + [CmdResult(result.exit_code, "", result.stderr)] * (count - 1)
+
+    results = []
+    for index in range(count):
+        if index not in codes:
+            results.append(CmdResult(result.exit_code or 1, "", _CUT_SHORT))
+            continue
+        captured = streams.get(index, {})
+        results.append(CmdResult(codes[index], captured.get('out', ''), captured.get('err', '')))
+    return results
+
+
 def _failure_hint(stderr: str) -> Optional[str]:
     text = (stderr or "").lower()
     if "permission denied (publickey)" in text or "publickey" in text:
@@ -87,6 +140,12 @@ def _failure_hint(stderr: str) -> Optional[str]:
     if "does not exist" in text or "no such file" in text:
         return "Hint: the `repo` path does not exist on that host."
     if "failed to create/acquire the lock" in text:
+        # borg locks its local chunks cache under <base dir>/.cache/borg as well as the repo, and the two mean different things.
+        if "/.cache/borg/" in text:
+            return ("Hint: the lock is on borg's local chunks cache on this host, "
+                    "not on the repo — another borg process is using the same "
+                    "`cache_dir`. Give it a cache_dir of its own, or raise "
+                    "`lock_wait` past the time that process needs.")
         return ("Hint: the repo is locked by another borg process — a backup may "
                 "be running.")
     return None
@@ -95,7 +154,10 @@ def _failure_hint(stderr: str) -> Optional[str]:
 def _list_unavailable(exit_code: int, detail: str) -> bool:
     """True when the listing could not be gathered at all, as opposed to borg reporting a repo problem."""
     text = detail.lower()
-    return exit_code == -1 or "command not found" in text or "permission denied" in text
+    # A lock borg gave up waiting for says only that something else held the repo or its cache, which leaves the archives unread rather than bad.
+    return (exit_code == -1 or "command not found" in text
+            or "permission denied" in text
+            or "failed to create/acquire the lock" in text)
 
 
 def _parse_archive_time(value: str) -> int:
@@ -238,14 +300,14 @@ class Borg(Plugin):
         return env
 
     def _build(self, args: List[str], persistent_cache: bool = False,
-               bounded: bool = False) -> str:
+               bounded: bool = False, wrapped: bool = True) -> str:
         prefix = ["sudo", "-n"] if self.require_sudo else []
         env = self._env_prefix(persistent_cache=persistent_cache)
         # Polls only: a backup is launched detached precisely so it outlives the collect cycle, and must not inherit its deadline.
         # After env, because sudo reads leading VAR=val as assignments and takes the first non-assignment as the command to run.
-        deadline = deadline_prefix(self.timeout) if bounded else []
+        deadline = self._poll_deadline() if bounded else []
         command = " ".join(prefix + env + deadline + [shlex.quote(a) for a in args])
-        if persistent_cache and self.cache_dir:
+        if not wrapped or (persistent_cache and self.cache_dir):
             return command
         # The trap is what keeps the throwaway dir throwaway, since borg builds a full chunks cache in it on every poll
         return (
@@ -253,6 +315,43 @@ class Borg(Plugin):
             f"trap 'rm -rf \"${_POLL_BASE_DIR_VAR}\"' EXIT; "
             f"{command}"
         )
+
+    def _poll_deadline(self) -> List[str]:
+        """Argv bounding a poll call by what is left of the whole poll's deadline, which _poll_command sets."""
+        if not self.timeout or self.timeout <= 0:
+            return []
+        return ["timeout", "-k", str(KILL_GRACE_SECONDS), f'"$({_POLL_LEFT_FN})"']
+
+    def _poll_command(self) -> str:
+        """The poll as one command: run as separate commands the calls below would be dispatched concurrently and contend for this repo's chunks cache lock."""
+        calls = [self._list_command()]
+        if self.collect_stats:
+            calls.append(self._info_command())
+
+        base = f"${_POLL_BASE_DIR_VAR}"
+        # The trap is what keeps the throwaway dir throwaway, since borg builds a full chunks cache in it on every poll
+        parts = [
+            f"{_POLL_BASE_DIR_VAR}=$(mktemp -d)",
+            f"trap 'rm -rf \"{base}\"' EXIT",
+        ]
+        if self.timeout and self.timeout > 0:
+            # One deadline for the poll rather than one per call, so that running them in sequence cannot outlast the monitor's interval.
+            parts.append(f"{_POLL_DEADLINE_VAR}=$(( $(date +%s) + {int(self.timeout)} ))")
+            parts.append(
+                f"{_POLL_LEFT_FN}() {{ __vigil_left=$(( {_POLL_DEADLINE_VAR} - $(date +%s) )); "
+                f'[ "$__vigil_left" -lt 1 ] && __vigil_left=1; printf %s "$__vigil_left"; }}'
+            )
+        for index, call in enumerate(calls):
+            parts.append(
+                f'{call} >"{base}/{index}.out" 2>"{base}/{index}.err"; {_POLL_RC_VAR}=$?'
+            )
+            for stream in ("out", "err"):
+                marker = _frame_line(index, stream, f"${_POLL_RC_VAR}")
+                # The closing newline is what keeps output with no trailing one from running into the next marker.
+                parts.append(f'printf \'%s\\n\' "{marker}"')
+                parts.append(f'cat "{base}/{index}.{stream}"')
+                parts.append("printf '\\n'")
+        return "; ".join(parts)
 
     def _list_command(self) -> str:
         return self._build([
@@ -262,7 +361,7 @@ class Borg(Plugin):
             "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             self.repo,
-        ], persistent_cache=self.cache_dir_configured, bounded=True)
+        ], persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)
 
     def _info_command(self) -> str:
         return self._build([
@@ -272,7 +371,7 @@ class Borg(Plugin):
             "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             self.repo,
-        ], persistent_cache=self.cache_dir_configured, bounded=True)
+        ], persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)
 
     def _backup_command(self, archive_name: Optional[str] = None,
                         dry_run: bool = False) -> str:
@@ -315,10 +414,7 @@ class Borg(Plugin):
             return [Command(detached.poll_command(job['workdir'], job['pid'], job['output_seq']))]
         if not self.repo:
             return []
-        commands = [Command(self._list_command())]
-        if self.collect_stats:
-            commands.append(Command(self._info_command()))
-        return commands
+        return [Command(self._poll_command())]
 
     def _running_job(self) -> Optional[dict]:
         job = self.jobs.running() if self.jobs else None
@@ -334,6 +430,8 @@ class Borg(Plugin):
         if not self.repo:
             return CollectResult.failed("No 'repo' configured for borg monitor")
 
+        # One command carried the whole poll, so unpack its transcript before reading the calls back.
+        results = _split_poll(results[0], 2 if self.collect_stats else 1)
         list_result = results[0]
         stdout, stderr, ret = list_result.stdout, list_result.stderr, list_result.exit_code
         logs = [(f"Running: {_redact(self._list_command())}", "INFO")]

@@ -4,7 +4,7 @@ import time
 from datetime import datetime
 import pytest
 
-from vigil.plugins.borg import Borg
+from vigil.plugins.borg import Borg, _frame_line
 from vigil.core.connectors.types import CmdResult
 from vigil.core.database.database import db, StatusHistory, Metric
 
@@ -49,13 +49,26 @@ def plugin(make_plugin):
     return make_plugin(Borg, BASE_CFG)
 
 
+def _framed(plugin, *results):
+    """The transcript the poll command's shell emits, so parse() is driven through its real input."""
+    lines = []
+    for index, result in enumerate(results):
+        lines += [_frame_line(index, "out", result.exit_code), result.stdout,
+                  _frame_line(index, "err", result.exit_code), result.stderr]
+    # The shell's own exit code is the last printf's, so a borg failure is only visible inside the frames.
+    return CmdResult(0, "\n".join(lines) + "\n", "")
+
+
+def _collect_raw(plugin, run_cycle, result):
+    """Drives a cycle with an unframed result, as a shell that died before the first borg call would give."""
+    return run_cycle(plugin, lambda c: result)
+
+
 def _collect(plugin, run_cycle, list_result, info_result=None):
-    n = len(plugin.commands())
-    if n <= 1:
-        outputs = [list_result]
-    else:
-        outputs = [list_result, info_result if info_result is not None else CmdResult(0, "{}", "")]
-    return run_cycle(plugin, lambda c, _it=iter(outputs): next(_it))
+    outputs = [list_result]
+    if plugin.collect_stats:
+        outputs.append(info_result if info_result is not None else CmdResult(0, "{}", ""))
+    return run_cycle(plugin, lambda c: _framed(plugin, *outputs))
 
 
 class TestFreshness:
@@ -162,6 +175,18 @@ class TestFailures:
         _collect(plugin, run_cycle, CmdResult(2, "", "Permission denied: '/srv/repo/config'"))
         assert _latest_status("test-borg") == "unavailable"
 
+    async def test_a_lock_timeout_is_unavailable(self, plugin, run_cycle):
+        # Nothing was read, so nothing is known to be wrong with the backups themselves
+        _collect(plugin, run_cycle, CmdResult(
+            2, "", "Failed to create/acquire the lock /srv/repo/lock.exclusive (timeout)."))
+        assert _latest_status("test-borg") == "unavailable"
+
+    async def test_a_cache_lock_timeout_is_unavailable(self, plugin, run_cycle):
+        _collect(plugin, run_cycle, CmdResult(
+            2, "", "Failed to create/acquire the lock "
+                   "/var/cache/vigil-borg/.cache/borg/abc/lock.exclusive (timeout)."))
+        assert _latest_status("test-borg") == "unavailable"
+
     async def test_missing_repo_config_is_failed(self, make_plugin, run_cycle):
         cfg = {k: v for k, v in BASE_CFG.items() if k != "repo"}
         p = make_plugin(Borg, cfg)
@@ -200,9 +225,9 @@ class TestCommand:
         assert "--bypass-lock" in p._list_command()
 
     def test_command_sets_writable_borg_base_dir(self, make_plugin):
-        cmd = make_plugin(Borg, BASE_CFG)._list_command()
-        assert "BORG_BASE_DIR=" in cmd
-        assert "$(mktemp -d)" in cmd
+        p = make_plugin(Borg, BASE_CFG)
+        assert 'BORG_BASE_DIR="$__vigil_poll_base"' in p._list_command()
+        assert "__vigil_poll_base=$(mktemp -d)" in p._poll_command()
 
     def test_passphrase_passed_as_env_not_argv(self, make_plugin):
         p = make_plugin(Borg, {**BASE_CFG, "passphrase": "s3cret"})
@@ -314,6 +339,73 @@ class TestCommand:
         assert "--lock-wait 30" in cmd
 
 
+class TestSequentialPoll:
+    """Both poll calls read the same repo, so they share borg's local chunks
+    cache. Dispatched as two commands the engine would run them concurrently
+    and one would sit on the other's cache lock until lock_wait ran out, which
+    on a slow repo failed the monitor while the backups themselves were fine."""
+
+    def test_the_poll_is_a_single_command(self, plugin):
+        assert len(plugin.commands()) == 1
+
+    def test_list_runs_before_info(self, plugin):
+        cmd = plugin._poll_command()
+        assert cmd.index("borg list") < cmd.index("borg info")
+
+    def test_the_calls_are_sequenced_not_backgrounded(self, plugin):
+        assert " & " not in plugin._poll_command()
+
+    def test_stats_off_polls_once(self, make_plugin):
+        cmd = make_plugin(Borg, {**BASE_CFG, "collect_stats": False})._poll_command()
+        assert "borg info" not in cmd
+
+    async def test_each_call_keeps_its_own_exit_code(self, plugin, run_cycle):
+        now = int(time.time())
+        result = _collect(plugin, run_cycle, CmdResult(0, _multi_json(now - 60), ""),
+                          CmdResult(2, "", "borg info exploded"))
+        assert result.status == "online"
+        assert any("borg info failed (exit 2)" in m for m, _ in result.logs)
+
+    async def test_each_call_keeps_its_own_streams(self, plugin, run_cycle):
+        # A borg warning on stderr must not reach the JSON parser on stdout
+        now = int(time.time())
+        result = _collect(plugin, run_cycle,
+                          CmdResult(0, _multi_json(now - 60), "Remote: Replaying segments..."))
+        assert result.status == "online"
+
+    async def test_a_failure_before_the_first_frame_fails_the_listing(self, plugin, run_cycle):
+        # sudo refusing, or the shell dying, leaves no transcript to unpack
+        result = _collect_raw(plugin, run_cycle,
+                              CmdResult(1, "", "sudo: a terminal is required"))
+        assert result.status == "failed"
+        assert any("NOPASSWD" in m for m, _ in result.logs)
+
+    async def test_a_poll_cut_short_reports_the_call_that_never_ran(self, plugin, run_cycle):
+        now = int(time.time())
+        transcript = _framed(plugin, CmdResult(0, _multi_json(now - 60), ""))
+        result = run_cycle(plugin, lambda c: transcript)
+        assert result.status == "online"
+        assert any("borg info failed" in m for m, _ in result.logs)
+
+
+class TestLockHints:
+    async def test_a_repo_lock_points_at_a_running_backup(self, plugin, run_cycle):
+        result = _collect(plugin, run_cycle, CmdResult(
+            2, "", "Failed to create/acquire the lock /srv/repo/lock.exclusive (timeout)."))
+        messages = " | ".join(m for m, _ in result.logs)
+        assert "a backup may be running" in messages
+        assert "chunks cache" not in messages
+
+    async def test_a_cache_lock_points_at_the_shared_cache_dir(self, plugin, run_cycle):
+        result = _collect(plugin, run_cycle, CmdResult(
+            2, "", "Failed to create/acquire the lock "
+                   "/var/cache/vigil-borg/.cache/borg/abc123/lock.exclusive (timeout)."))
+        messages = " | ".join(m for m, _ in result.logs)
+        assert "chunks cache" in messages
+        assert "cache_dir" in messages
+        assert "a backup may be running" not in messages
+
+
 class TestPollDeadline:
     """A sudo'd poll must carry its own deadline, because the agent cannot
     enforce one on it: the agent runs unprivileged, so killpg reaches only the
@@ -321,8 +413,14 @@ class TestPollDeadline:
 
     def test_a_sudo_poll_is_bounded_by_a_root_side_timeout(self, make_plugin):
         p = make_plugin(Borg, {**BASE_CFG, "require_sudo": True, "timeout": "30m"})
-        assert "timeout -k 5 1800" in p._list_command()
-        assert "timeout -k 5 1800" in p._info_command()
+        assert 'timeout -k 5 "$(__vigil_poll_left)"' in p._list_command()
+        assert 'timeout -k 5 "$(__vigil_poll_left)"' in p._info_command()
+
+    def test_one_deadline_covers_the_whole_poll(self, make_plugin):
+        # Given the full timeout each, two calls run in sequence could together outlast the monitor's interval
+        cmd = make_plugin(Borg, {**BASE_CFG, "timeout": "30m"})._poll_command()
+        assert cmd.count("+ 1800 ))") == 1
+        assert cmd.count('timeout -k 5 "$(__vigil_poll_left)"') == 2
 
     def test_the_deadline_sits_after_sudo_so_root_owns_it(self, make_plugin):
         p = make_plugin(Borg, {**BASE_CFG, "require_sudo": True, "timeout": "30m"})
@@ -433,7 +531,14 @@ class TestBackupCommand:
         assert "BORG_BASE_DIR=/srv/borgcache" in p._backup_command()
 
     def test_poll_still_uses_throwaway_base_dir(self, make_plugin):
-        assert "$(mktemp -d)" in make_plugin(Borg, BACKUP_CFG)._list_command()
+        assert "$(mktemp -d)" in make_plugin(Borg, BACKUP_CFG)._poll_command()
+
+    def test_a_configured_cache_dir_still_gets_a_scratch_dir(self, make_plugin):
+        # The scratch dir also holds each call's captured output, so it is needed either way
+        cmd = make_plugin(Borg, {**BASE_CFG, "cache_dir": "/srv/borgcache"})._poll_command()
+        assert "$(mktemp -d)" in cmd
+        assert "BORG_BASE_DIR=/srv/borgcache" in cmd
+        assert 'BORG_BASE_DIR="$__vigil_poll_base"' not in cmd
 
     def test_configured_cache_dir_applies_to_polls(self, make_plugin):
         p = make_plugin(Borg, {**BASE_CFG, "cache_dir": "/srv/borgcache"})
@@ -443,10 +548,9 @@ class TestBackupCommand:
             assert "rm -rf" not in cmd
 
     def test_poll_removes_throwaway_base_dir(self, make_plugin):
-        for cmd in (make_plugin(Borg, BACKUP_CFG)._list_command(),
-                    make_plugin(Borg, BACKUP_CFG)._info_command()):
-            assert "trap 'rm -rf" in cmd
-            assert cmd.index("mktemp -d") < cmd.index("BORG_BASE_DIR=")
+        cmd = make_plugin(Borg, BACKUP_CFG)._poll_command()
+        assert "trap 'rm -rf" in cmd
+        assert cmd.index("mktemp -d") < cmd.index("BORG_BASE_DIR=")
 
     def test_backup_does_not_remove_persistent_cache_dir(self, make_plugin):
         assert "rm -rf" not in make_plugin(Borg, BACKUP_CFG)._backup_command()
