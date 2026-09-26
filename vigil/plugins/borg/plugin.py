@@ -227,11 +227,11 @@ class Borg(Plugin):
         return "; ".join(parts)
 
     def _list_command(self) -> str:
+        # Never add --bypass-lock to a read: borg rewrites the index on open, and unlocked mid-compaction that corrupts it.
         return self._build([
             self.borg_bin, "list",
             "--last", str(self.list_archives),
             "--json",
-            "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             self.repo,
         ], persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)
@@ -241,7 +241,6 @@ class Borg(Plugin):
             self.borg_bin, "info",
             "--json",
             "--last", str(self.list_archives),
-            "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             self.repo,
         ], persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)
@@ -392,7 +391,6 @@ class Borg(Plugin):
         """Extracts the canary from `archive` to stdout, then reads the live file it should match."""
         extract = self._build([
             self.borg_bin, "extract", "--stdout",
-            "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             f"{self.repo}::{archive}",
             _archive_member(self.canary_path) or self.canary_path,
@@ -772,7 +770,6 @@ class Borg(Plugin):
         args = [
             self.borg_bin, "list",
             "--format", _LIST_FORMAT,
-            "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             f"{self.repo}::{archive}",
         ]
@@ -949,7 +946,6 @@ class Borg(Plugin):
             return self._refused(f"{archive} is the oldest listed archive — there is nothing before it to compare")
         call = self._build([
             self.borg_bin, "diff",
-            "--bypass-lock",
             "--lock-wait", str(self.lock_wait),
             f"{self.repo}::{older}", archive,
         ], persistent_cache=self.cache_dir_configured, bounded=True, wrapped=False)

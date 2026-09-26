@@ -220,9 +220,11 @@ class TestCommand:
         assert "--json" in cmd
         assert "ssh://borg@host/srv/repo" in cmd
 
-    def test_command_bypasses_lock(self, make_plugin):
+    def test_reads_honour_the_repo_lock(self, make_plugin):
         p = make_plugin(Borg, BASE_CFG)
-        assert "--bypass-lock" in p._list_command()
+        reads = [p._list_command(), p._info_command(), *(c for _, c in p._canary_calls("a1"))]
+        assert not any("--bypass-lock" in c for c in reads)
+        assert "--lock-wait 30" in p._list_command()
 
     def test_command_sets_writable_borg_base_dir(self, make_plugin):
         p = make_plugin(Borg, BASE_CFG)
