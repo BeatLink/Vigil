@@ -40,7 +40,8 @@ def _latest_metric(plugin_id: str, metric: str):
 
 
 def _probe(current=CURRENT, booted=None, switched=None, generation=210,
-           version="26.11.20260826.9fbb54b", kernels=(KERNEL, KERNEL)) -> CmdResult:
+           version="26.11.20260826.9fbb54b", kernels=(KERNEL, KERNEL),
+           created=None) -> CmdResult:
     """The stdout the probe script produces on a NixOS target."""
     booted_kernel, current_kernel = kernels
     switched = int(time.time()) - 3600 if switched is None else switched
@@ -50,6 +51,7 @@ def _probe(current=CURRENT, booted=None, switched=None, generation=210,
         f"booted={booted or current}",
         f"switched={switched}",
         f"profile=system-{generation}-link",
+        f"profile_created={int(time.time()) - 3 * 86400 if created is None else created}",
         f"version={version}",
         f'version_json={{"nixosVersion":"{version}"}}',
     ]
@@ -464,6 +466,137 @@ class TestJobPolling:
         await _launch(plugin)
         _poll_once(plugin, _poll(20, 0, False, "done\n"))
         assert len(plugin.commands()) == 3
+
+
+AUTO_CFG = {**BASE_CFG, "auto_switch": True, "auto_switch_after": "30m"}
+
+
+def _age_drift(plugin, seconds: int) -> None:
+    """Move the stored start of the current drift `seconds` into the past."""
+    state = json.loads(plugin.data.latest_metric("flake_eval_epoch").metadata)
+    state["drift_since"] -= seconds
+    plugin.storage.apply(CollectResult(
+        metrics={"flake_eval_epoch": float(state["evaluated_epoch"])},
+        metadata={"flake_eval_epoch": json.dumps(state)},
+    ))
+
+
+def _launch_auto(plugin, pid=5151, result=None):
+    """Run the cycle that launches the automatic switch, returning its command."""
+    cmds = plugin.commands()
+    assert len(cmds) == 1 and "setsid" in cmds[0].text
+    outcome = plugin.parse([result if result is not None else CmdResult(0, f"{pid}\n", "")])
+    plugin.storage.apply(outcome)
+    return outcome
+
+
+class TestAutoSwitch:
+    async def test_off_by_default(self, plugin):
+        _collect(plugin)
+        _age_drift(plugin, 7200)
+        _collect(plugin)
+        assert plugin._auto_switch_due is None
+
+    async def test_waits_out_the_grace_period(self, make_plugin):
+        p = make_plugin(NixosUpgrade, AUTO_CFG)
+        result = _collect(p)
+        assert p._auto_switch_due is None
+        assert any("once the drift has lasted" in m for m, _ in result.logs)
+
+    async def test_launches_after_the_grace_period(self, make_plugin):
+        p = make_plugin(NixosUpgrade, AUTO_CFG)
+        _collect(p)
+        _age_drift(p, 1801)
+        _collect(p)
+        assert p._auto_switch_due == TARGET
+        _launch_auto(p, pid=5151)
+        job = p.jobs.running()
+        assert job["kind"] == "switch" and job["pid"] == 5151
+        assert "nixos-rebuild switch --flake /etc/nixos" in job["command"]
+
+    async def test_same_target_is_never_retried(self, make_plugin):
+        p = make_plugin(NixosUpgrade, AUTO_CFG)
+        _collect(p)
+        _age_drift(p, 1801)
+        _collect(p)
+        _launch_auto(p)
+        _poll_once(p, _poll(5, 1, False, "error: build failed\n"))
+        _collect(p)
+        assert p._auto_switch_due is None
+
+    async def test_a_new_target_restarts_the_grace_period(self, make_plugin):
+        p = make_plugin(NixosUpgrade, AUTO_CFG)
+        _collect(p)
+        _age_drift(p, 1801)
+        _collect(p)
+        _launch_auto(p)
+        _poll_once(p, _poll(5, 1, False, ""))
+        newer = "/nix/store/ffffffffffffffffffffffffffffffff-nixos-system-host-26.11"
+        _collect(p, eval_result=CmdResult(0, newer + "\n", ""))
+        assert p._auto_switch_due is None
+        _age_drift(p, 1801)
+        _rewind_eval(p, 0)
+        _collect(p)
+        assert p._auto_switch_due == newer
+
+    async def test_generation_newer_than_the_flake_is_left_alone(self, make_plugin):
+        p = make_plugin(NixosUpgrade, AUTO_CFG)
+        result = _collect(p, probe=_probe(created=int(time.time()) - 60))
+        _age_drift(p, 7200)
+        result = _collect(p, probe=_probe(created=int(time.time()) - 60))
+        assert p._auto_switch_due is None
+        assert any("newer than the flake" in m for m, _ in result.logs)
+
+    async def test_failed_evaluation_never_switches(self, make_plugin):
+        p = make_plugin(NixosUpgrade, AUTO_CFG)
+        _collect(p)
+        _age_drift(p, 7200)
+        _rewind_eval(p, 7200)
+        _collect(p, eval_result=CmdResult(1, "", "error: undefined variable"))
+        assert p._auto_switch_due is None
+
+    async def test_matching_closure_clears_the_drift(self, make_plugin):
+        p = make_plugin(NixosUpgrade, AUTO_CFG)
+        _collect(p)
+        _collect(p, probe=_probe(current=TARGET))
+        _rewind_eval(p, 7200)
+        _collect(p, probe=_probe(current=TARGET), eval_result=CmdResult(0, TARGET + "\n", ""))
+        state = json.loads(p.data.latest_metric("flake_eval_epoch").metadata)
+        assert state["drift_since"] is None
+
+    async def test_unreachable_agent_retries_the_launch(self, make_plugin):
+        p = make_plugin(NixosUpgrade, AUTO_CFG)
+        _collect(p)
+        _age_drift(p, 1801)
+        _collect(p)
+        _launch_auto(p, result=CmdResult(-1, "", "Agent 'x' is not connected"))
+        assert p.jobs.running() is None
+        _collect(p)
+        assert p._auto_switch_due == TARGET
+
+    async def test_failed_launch_is_not_retried(self, make_plugin):
+        p = make_plugin(NixosUpgrade, AUTO_CFG)
+        _collect(p)
+        _age_drift(p, 1801)
+        _collect(p)
+        outcome = _launch_auto(p, result=CmdResult(1, "", "setsid: not found"))
+        assert outcome.status == "failed"
+        _collect(p)
+        assert p._auto_switch_due is None
+
+
+class TestSwitchWrapping:
+    def test_wrapper_runs_outside_sudo(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "switch_wrapper": ["systemd-inhibit", "--what=sleep"]})
+        assert p._switch_command().startswith("systemd-inhibit --what=sleep sudo -n nixos-rebuild switch")
+
+    def test_post_switch_keeps_the_switch_exit_status(self, make_plugin):
+        import subprocess
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "rebuild_bin": "false", "require_sudo": False,
+                                       "post_switch": "echo after"})
+        run = subprocess.run(["sh", "-c", "{ " + p._switch_command() + "; }"],
+                             capture_output=True, text=True)
+        assert run.stdout == "after\n" and run.returncode == 1
 
 
 class TestUI:

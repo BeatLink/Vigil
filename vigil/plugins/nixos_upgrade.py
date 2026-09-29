@@ -12,9 +12,13 @@ or an evaluation that never ran is unavailable; an evaluation that ran and
 errored is failed. `eval_agent` runs the two expensive commands on another agent's
 host, for a target too small to evaluate its own flake. Actions launch
 detached jobs on the target: `nix flake update` on the flake, and
-`nixos-rebuild switch --flake`. Config: flake, configuration, eval_agent,
-eval_interval, retry_interval, eval_timeout, max_input_age, drift_status,
-reboot_status, require_sudo, nix_bin, rebuild_bin, nix_args, rebuild_args."""
+`nixos-rebuild switch --flake`. With `auto_switch`, drift that outlasts
+`auto_switch_after` launches the switch itself, once per target closure, and
+only when the flake changed after the running generation was made. Config:
+flake, configuration, eval_agent, eval_interval, retry_interval, eval_timeout,
+max_input_age, drift_status, reboot_status, require_sudo, nix_bin,
+rebuild_bin, nix_args, rebuild_args, auto_switch, auto_switch_after,
+switch_wrapper, post_switch."""
 
 import json
 import shlex
@@ -59,6 +63,7 @@ def _probe_script() -> str:
         'echo "booted=$(readlink -f /run/booted-system 2>/dev/null)"',
         'echo "switched=$(stat -c %Y /run/current-system 2>/dev/null)"',
         'echo "profile=$(readlink /nix/var/nix/profiles/system 2>/dev/null)"',
+        'echo "profile_created=$(stat -c %Y "/nix/var/nix/profiles/$(readlink /nix/var/nix/profiles/system)" 2>/dev/null)"',
         'echo "version=$(cat /run/current-system/nixos-version 2>/dev/null)"',
         "echo \"version_json=$(nixos-version --json 2>/dev/null | tr -d '\\n')\"",
         f'for part in {" ".join(_BOOT_PARTS)}; do',
@@ -167,11 +172,18 @@ class NixosUpgrade(Plugin):
         self.nix_args = list(config.get(
             'nix_args', ['--extra-experimental-features', 'nix-command flakes']))
         self.rebuild_args = list(config.get('rebuild_args', []))
+        self.auto_switch = bool(config.get('auto_switch', False))
+        self.auto_switch_after = parse_duration(config.get('auto_switch_after', '30m'))
+        self.switch_wrapper = list(config.get('switch_wrapper', []))
+        self.post_switch = config.get('post_switch') or None
         # Set by a finished job so the next cycle re-evaluates immediately
         # instead of waiting out eval_interval.
         self._force_eval = False
         self._pending_launch = None
         self._polling_job = None
+        # The target an automatic switch is due for, and the launch the current cycle sent for it.
+        self._auto_switch_due = None
+        self._auto_launch = None
 
     # --- flake reference ---
 
@@ -224,6 +236,14 @@ class NixosUpgrade(Plugin):
         if job is not None:
             return [Command(detached.poll_command(job['workdir'], job['pid'], job['output_seq']))]
 
+        self._auto_launch = None
+        if self._auto_switch_due:
+            command = self._switch_command()
+            workdir = detached.workdir_for(f'{self.id}-auto-{int(time.time())}')
+            self._auto_launch = (self._auto_switch_due, command, workdir)
+            self._auto_switch_due = None
+            return [Command(detached.launch_command(command, workdir))]
+
         commands = [Command(_probe_script())]
         # An offloaded evaluation needs the target's attribute name, which the first probe supplies.
         if self._due_for_eval() and not (self.eval_agent and self._attribute() is None):
@@ -274,6 +294,9 @@ class NixosUpgrade(Plugin):
         job, self._polling_job = self._polling_job, None
         if job is not None:
             return self._parse_poll(job, results[0])
+        launch, self._auto_launch = self._auto_launch, None
+        if launch is not None:
+            return self._parse_auto_launch(launch, results[0])
 
         if not results:
             return CollectResult.unavailable('No probe result for this cycle')
@@ -353,6 +376,7 @@ class NixosUpgrade(Plugin):
             logs.append((f"Running NixOS {version}, generation {generation or '?'}", 'INFO'))
 
         target = state.get('target')
+        self._auto_switch_due = None
         if state.get('eval_error'):
             unreachable = bool(state.get('eval_unreachable'))
             acc.escalate('unavailable' if unreachable else 'failed')
@@ -369,11 +393,15 @@ class NixosUpgrade(Plugin):
             up_to_date = target == current
             metrics['up_to_date'] = 1.0 if up_to_date else 0.0
             if up_to_date:
+                state['drift_target'] = state['drift_since'] = None
                 logs.append(('System matches the flake', 'INFO'))
             else:
                 acc.escalate(self.drift_status)
                 logs.append((f"System is out of date: {self.flake} evaluates to {target}, "
                              f"running {current}", Status(self.drift_status).log_level))
+                if state.get('drift_target') != target:
+                    state['drift_target'], state['drift_since'] = target, now
+                logs.extend(self._consider_auto_switch(fields, state, target, now))
 
         if state.get('metadata_error'):
             acc.escalate('unavailable')
@@ -417,6 +445,45 @@ class NixosUpgrade(Plugin):
                       'generation': generation, 'booted': fields.get('booted'),
                       'hostname': fields.get('hostname')},
         )
+
+    def _consider_auto_switch(self, fields: Dict[str, Any], state: Dict[str, Any],
+                              target: str, now: int) -> List[Tuple[str, str]]:
+        """Decide whether this drift should launch a switch on the next cycle, returning any log lines explaining a hold."""
+        if not self.auto_switch or state.get('eval_error') or state.get('auto_switch_target') == target:
+            return []
+        created = fields.get('profile_created') or fields.get('switched') or ''
+        flake_modified = state.get('flake_last_modified')
+        # A generation newer than the flake came from somewhere else, such as an unpushed checkout, and switching would roll it back.
+        if not (created.isdigit() and flake_modified and int(flake_modified) > int(created)):
+            return [('Not switching automatically: the running generation is newer than the flake', 'INFO')]
+        waited = now - int(state.get('drift_since') or now)
+        if waited < self.auto_switch_after:
+            return [(f"Switching automatically once the drift has lasted "
+                     f"{format_duration(self.auto_switch_after)}", 'INFO')]
+        self._auto_switch_due = target
+        return [(f"Drift has lasted {format_age(waited)}; switching automatically", 'WARNING')]
+
+    def _parse_auto_launch(self, launch: Tuple[str, str, str], result: CmdResult) -> CollectResult:
+        """Record the job an automatic switch launched, and the target it was for so it is never retried."""
+        target, command, workdir = launch
+        pid = detached.parse_launch(result.stdout) if result.exit_code == 0 else None
+        # An agent that never answered launched nothing, so the next cycle may try again.
+        if pid is None and result.exit_code == -1:
+            return CollectResult(logs=[(f"Could not launch the automatic switch: "
+                                        f"{(result.stderr or '').strip()[:200]}", 'WARNING')])
+        state = self._state()
+        state['auto_switch_target'] = target
+        written = CollectResult(metrics={_STATE_METRIC: float(state.get('evaluated_epoch') or 0)},
+                                metadata={_STATE_METRIC: json.dumps(state)})
+        if pid is None:
+            written.logs = [(f"Failed to launch the automatic switch: "
+                             f"{(result.stderr or result.stdout).strip()[:200]}", 'ERROR')]
+            written.status = 'failed'
+            return written
+        job_id = self.jobs.create('switch', command, workdir)
+        self.jobs.set_pid(job_id, pid)
+        written.logs = [(f"Automatic switch started (pid {pid})", 'INFO')]
+        return written
 
     @staticmethod
     def _reboot_required(fields: Dict[str, Any]) -> Optional[bool]:
@@ -483,8 +550,13 @@ class NixosUpgrade(Plugin):
     def _switch_command(self) -> str:
         flake_ref = f'{self.flake}#{self.configuration}' if self.configuration else self.flake
         args = ' '.join(shlex.quote(a) for a in self.rebuild_args + self._refresh_args())
-        return (f'{self._sudo()}{self.rebuild_bin} switch --flake {shlex.quote(flake_ref)} '
-                f'{args}').strip()
+        wrapper = ''.join(shlex.quote(a) + ' ' for a in self.switch_wrapper)
+        switch = (f'{wrapper}{self._sudo()}{self.rebuild_bin} switch --flake {shlex.quote(flake_ref)} '
+                  f'{args}').strip()
+        if not self.post_switch:
+            return switch
+        # The job's exit status stays the switch's own, whatever the follow-up command returns.
+        return f'{switch}; rc=$?; {self.post_switch}; (exit $rc)'
 
     def plan_action(self, action_id: str, **kwargs):
         if action_id not in ('update_flake', 'switch'):

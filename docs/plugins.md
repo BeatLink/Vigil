@@ -438,6 +438,10 @@ Both actions launch a **detached** job on the target, polled to completion by th
 | `nix_bin` / `rebuild_bin` | Binaries to invoke (defaults: `nix` / `nixos-rebuild`) |
 | `nix_args` | Extra arguments on every `nix` call (default: `["--extra-experimental-features", "nix-command flakes"]`; set `[]` to drop them) |
 | `rebuild_args` | Extra arguments on `nixos-rebuild switch`, e.g. `["--use-remote-sudo"]` |
+| `auto_switch` | Launch Rebuild & Switch without being asked once drift outlasts `auto_switch_after` (default: `false`) |
+| `auto_switch_after` | How long drift must last before an automatic switch (default: `30m`), so a deploy of your own lands first |
+| `switch_wrapper` | Command the switch runs under, outside `sudo`, e.g. `["systemd-inhibit", "--what=idle:sleep", "--mode=block"]` to keep a laptop or phone awake through it |
+| `post_switch` | Shell run after every switch, whether it succeeded or not, e.g. to restart a session the switch stopped; the job keeps the switch's own exit status |
 | `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
 
 **Metrics**: `up_to_date` (1/0), `reboot_required` (1/0), `flake_reachable` (1/0), `generation`, `last_switch_epoch`, `flake_last_modified_epoch`, `inputs_last_modified_epoch`, `flake_eval_epoch`
@@ -445,6 +449,8 @@ Both actions launch a **detached** job on the target, polled to completion by th
 **Actions**: Update Flake (`nix flake update`), Rebuild & Switch (`nixos-rebuild switch --flake`)
 
 **Status**: `failed` when the flake evaluates and errors — a config that no longer builds is a real failure, and the error is logged; `drift_status` when the two closures differ; `reboot_status` when the booted `initrd`/`kernel`/`kernel-modules`/`systemd` are not the current ones; `warning` when the oldest locked input exceeds `max_input_age`; `unavailable` when the target is unreachable, `/run/current-system` cannot be read, `nix flake metadata` fails, or the evaluation host never answered.
+
+With `auto_switch`, drift that has lasted `auto_switch_after` launches the same job the button does, and the job panel shows it. Each target closure gets one attempt: a switch that fails, or succeeds without converging, is not repeated until the flake evaluates to something new. It never runs off a failed evaluation, and it never runs when the running generation was created after the flake last changed, because that system came from somewhere else (an unpushed checkout, a local test build) and switching would roll it back. That case still reports drift.
 
 Update Flake needs a lock file this host can write, so it is offered only for a local flake path; with a remote ref, update the flake where it lives and Vigil picks up the new revision on its next evaluation. Checking never mutates anything: `--no-write-lock-file` is passed to both commands, and `--refresh` only for a remote ref, where a mutable branch would otherwise be served from Nix's tarball cache.
 
