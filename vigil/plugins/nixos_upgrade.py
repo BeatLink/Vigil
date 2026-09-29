@@ -12,13 +12,15 @@ or an evaluation that never ran is unavailable; an evaluation that ran and
 errored is failed. `eval_agent` runs the two expensive commands on another agent's
 host, for a target too small to evaluate its own flake. Actions launch
 detached jobs on the target: `nix flake update` on the flake, and
-`nixos-rebuild switch --flake`. With `auto_switch`, drift that outlasts
+`nixos-rebuild switch --flake`; a `github:` flake is updated in a fresh clone
+that is committed and pushed back. With `auto_switch`, drift that outlasts
 `auto_switch_after` launches the switch itself, once per target closure, and
 only when the flake changed after the running generation was made. Config:
 flake, configuration, eval_agent, eval_interval, retry_interval, eval_timeout,
 max_input_age, drift_status, reboot_status, require_sudo, nix_bin,
 rebuild_bin, nix_args, rebuild_args, auto_switch, auto_switch_after,
-switch_wrapper, post_switch."""
+switch_wrapper, post_switch, push_token_command, commit_author,
+commit_message."""
 
 import json
 import shlex
@@ -53,6 +55,10 @@ _STATE_METRIC = 'flake_eval_epoch'
 _BOOT_PARTS = ('initrd', 'kernel', 'kernel-modules', 'systemd')
 
 _LOCAL_SCHEMES = ('path:', 'git+file://', 'file://')
+
+# Clears any credential helper the host configures, then answers with the token from the environment so it never appears in argv.
+_TOKEN_HELPER = ("-c credential.helper= -c 'credential.helper=!f() { echo username=x-access-token; "
+                 "echo \"password=$VIGIL_PUSH_TOKEN\"; }; f'")
 
 
 def _probe_script() -> str:
@@ -176,6 +182,9 @@ class NixosUpgrade(Plugin):
         self.auto_switch_after = parse_duration(config.get('auto_switch_after', '30m'))
         self.switch_wrapper = list(config.get('switch_wrapper', []))
         self.post_switch = config.get('post_switch') or None
+        self.push_token_command = config.get('push_token_command') or None
+        self.commit_author = str(config.get('commit_author', 'Vigil <vigil@localhost>'))
+        self.commit_message = str(config.get('commit_message', 'chore(flake): update inputs'))
         # Set by a finished job so the next cycle re-evaluates immediately
         # instead of waiting out eval_interval.
         self._force_eval = False
@@ -201,6 +210,19 @@ class NixosUpgrade(Plugin):
                 return None
         path = ref.split('?', 1)[0].split('#', 1)[0]
         return path or None
+
+    @property
+    def github_repo(self) -> Optional[Tuple[str, Optional[str]]]:
+        """The (clone URL, branch or None) of a `github:owner/repo[/ref]` flake, else None."""
+        if not self.flake.startswith('github:'):
+            return None
+        path, _, query = self.flake[len('github:'):].partition('?')
+        parts = path.split('/')
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            return None
+        params = dict(p.partition('=')[::2] for p in query.split('&') if p)
+        ref = params.get('ref') or ('/'.join(parts[2:]) or None)
+        return f'https://github.com/{parts[0]}/{parts[1]}.git', ref
 
     def _refresh_args(self) -> List[str]:
         """A mutable remote ref is only seen freshly with --refresh; a local
@@ -545,7 +567,40 @@ class NixosUpgrade(Plugin):
 
     def _update_command(self) -> str:
         nix = ' '.join([self.nix_bin] + [shlex.quote(a) for a in self.nix_args])
-        return f'{self._sudo()}{nix} flake update --flake {shlex.quote(self.flake)}'
+        if self.local_path or not self.github_repo:
+            return f'{self._sudo()}{nix} flake update --flake {shlex.quote(self.flake)}'
+        return self._remote_update_command(nix)
+
+    def _remote_update_command(self, nix: str) -> str:
+        """Clone the flake's repo, update its lock, and push a commit back, as the monitoring user rather than root."""
+        url, ref = self.github_repo
+        name, _, email = self.commit_author.partition('<')
+        identity = (f"-c user.name={shlex.quote(name.strip())} "
+                    f"-c user.email={shlex.quote(email.rstrip('>').strip())}")
+        git = f'git {_TOKEN_HELPER}' if self.push_token_command else 'git'
+        branch = f'--branch {shlex.quote(ref)} ' if ref else ''
+        lines = [
+            'set -e',
+            't=$(mktemp -d)',
+            'trap \'rm -rf "$t"\' EXIT',
+            'export GIT_TERMINAL_PROMPT=0',
+        ]
+        if self.push_token_command:
+            lines.append(f'VIGIL_PUSH_TOKEN=$({self.push_token_command}); export VIGIL_PUSH_TOKEN')
+            lines.append('[ -n "$VIGIL_PUSH_TOKEN" ] || { echo "push_token_command printed no token"; exit 1; }')
+        lines += [
+            f'{git} clone --quiet --depth 1 {branch}{shlex.quote(url)} "$t/repo"',
+            f'{nix} flake update --flake "$t/repo" > "$t/log" 2>&1 || {{ cat "$t/log"; exit 1; }}',
+            'cat "$t/log"',
+            'if git -C "$t/repo" diff --quiet -- flake.lock; then echo "Every input is already current"; exit 0; fi',
+            f'printf \'%s\\n\\n\' {shlex.quote(self.commit_message)} > "$t/msg"',
+            "sed -n \"s/.*Updated input '\\([^']*\\)'.*/- \\1/p\" \"$t/log\" >> \"$t/msg\"",
+            f'git -C "$t/repo" {identity} commit --quiet -F "$t/msg" -- flake.lock',
+            f'{git} -C "$t/repo" push origin HEAD',
+            'git -C "$t/repo" log --oneline -1',
+        ]
+        # A subshell, so set -e ends the update and not the launcher that records its exit status.
+        return '(\n' + '\n'.join(lines) + '\n)'
 
     def _switch_command(self) -> str:
         flake_ref = f'{self.flake}#{self.configuration}' if self.configuration else self.flake
@@ -564,10 +619,10 @@ class NixosUpgrade(Plugin):
         if self._running_job() is not None:
             return CollectResult.failed('A job is already running for this monitor',
                                         level='WARNING', status=None)
-        if action_id == 'update_flake' and not self.local_path:
+        if action_id == 'update_flake' and not (self.local_path or self.github_repo):
             return CollectResult.failed(
-                f"Cannot update {self.flake}: only a local flake checkout has a lock file "
-                f"this host can write")
+                f"Cannot update {self.flake}: only a local checkout or a github: flake has a "
+                f"lock file this host can write")
 
         kind = 'update' if action_id == 'update_flake' else 'switch'
         command = self._update_command() if kind == 'update' else self._switch_command()
@@ -692,7 +747,7 @@ class NixosUpgrade(Plugin):
         return [{'label': label, 'value': value} for label, value in rows]
 
     def _update_enabled(self, _plugin) -> bool:
-        return self.local_path is not None
+        return self.local_path is not None or self.github_repo is not None
 
     @property
     def UI_SPEC(self):

@@ -441,6 +441,9 @@ Both actions launch a **detached** job on the target, polled to completion by th
 | `auto_switch` | Launch Rebuild & Switch without being asked once drift outlasts `auto_switch_after` (default: `false`) |
 | `auto_switch_after` | How long drift must last before an automatic switch (default: `30m`), so a deploy of your own lands first |
 | `switch_wrapper` | Command the switch runs under, outside `sudo`, e.g. `["systemd-inhibit", "--what=idle:sleep", "--mode=block"]` to keep a laptop or phone awake through it |
+| `push_token_command` | Shell printing a GitHub token that can push to a `github:` flake's repo, read when Update Flake runs so it never reaches argv or the job log (default: unset, git uses whatever credentials the monitoring user has) |
+| `commit_author` | Author of the commit Update Flake pushes to a `github:` flake (default: `Vigil <vigil@localhost>`) |
+| `commit_message` | Subject of that commit; the updated inputs are listed below it (default: `chore(flake): update inputs`) |
 | `post_switch` | Shell run after every switch, whether it succeeded or not, e.g. to restart a session the switch stopped; the job keeps the switch's own exit status |
 | `ssh_config` | SSH connection details — see [SSH Config](#ssh-config) below |
 
@@ -452,7 +455,7 @@ Both actions launch a **detached** job on the target, polled to completion by th
 
 With `auto_switch`, drift that has lasted `auto_switch_after` launches the same job the button does, and the job panel shows it. Each target closure gets one attempt: a switch that fails, or succeeds without converging, is not repeated until the flake evaluates to something new. It never runs off a failed evaluation, and it never runs when the running generation was created after the flake last changed, because that system came from somewhere else (an unpushed checkout, a local test build) and switching would roll it back. That case still reports drift.
 
-Update Flake needs a lock file this host can write, so it is offered only for a local flake path; with a remote ref, update the flake where it lives and Vigil picks up the new revision on its next evaluation. Checking never mutates anything: `--no-write-lock-file` is passed to both commands, and `--refresh` only for a remote ref, where a mutable branch would otherwise be served from Nix's tarball cache.
+Update Flake works on a local flake path in place, as root. On a `github:owner/repo[/branch]` flake it runs as the monitoring user in a fresh shallow clone: `nix flake update`, a commit of `flake.lock` if anything moved, and a push back to the same branch. A branch that moved in the meantime rejects the push and the job fails, with nothing left behind. The pushed revision is new drift for every monitor on that flake, so with `auto_switch` one button updates the whole fleet. Any other remote ref is not offered the button: update it where it lives and Vigil picks up the new revision on its next evaluation. Checking never mutates anything: `--no-write-lock-file` is passed to both commands, and `--refresh` only for a remote ref, where a mutable branch would otherwise be served from Nix's tarball cache.
 
 > Both actions run as root by default (`require_sudo`), so the SSH user needs passwordless sudo for `nixos-rebuild` and `nix`. Set `require_sudo: false` when Vigil already connects as root, or add `--use-remote-sudo` to `rebuild_args` for the build-locally-activate-remotely arrangement.
 
