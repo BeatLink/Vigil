@@ -11,9 +11,11 @@ measured. No matching cameras is a warning pointing at the 'cameras' list."""
 import json
 from typing import Any, Dict, List, Optional, Tuple
 
+import requests
+
 from vigil.plugins.base.plugin_base import Plugin
 from vigil.core.connectors.types import (
-    CollectResult, HttpRequest, HttpResult, Request, Result, Status
+    CollectResult, HttpRequest, HttpResult, IoActionPlan, Request, Result, Status
 )
 
 # Ordered worst-first, so the lowest rank a survey sees is the one worth showing.
@@ -206,6 +208,49 @@ class Frigate(Plugin):
             logs=[(' | '.join(p for p in parts if p), log_level)],
             status=level,
         )
+
+    def get_actions(self) -> List[Dict[str, str]]:
+        return [
+            {'name': 'Sync Recordings', 'action_id': 'sync_recordings',
+             'variant': 'primary', 'icon': 'sync'},
+        ]
+
+    def plan_action(self, action_id: str, **kwargs):
+        """Reconcile Frigate's recordings database against what is on disk.
+
+        Frigate 0.18 dropped the record.sync_recordings config option and made
+        this an on-demand job, so the recordings tree -- a Syncthing share that
+        Frigate does not own alone -- is only reconciled when something asks."""
+        if action_id != 'sync_recordings':
+            return None
+
+        def _start_sync():
+            if not self.api_url:
+                return {'ok': False, 'log': "Sync Recordings: no 'api_url' configured"}
+            url = f"{self.api_url.rstrip('/')}/api/media/sync"
+            try:
+                response = requests.post(
+                    url, json={'media_types': ['recordings']}, timeout=self.api_timeout
+                )
+            except requests.RequestException as e:
+                return {'ok': False, 'log': f"Sync request failed: {e}"}
+
+            # 202 queues a background job; 409 means one is already running, which
+            # is the job doing its work rather than a fault.
+            if response.status_code == 202:
+                job_id = (response.json().get('job') or {}).get('id', 'unknown')
+                return {'ok': True, 'log': f"Media sync queued (job {job_id})"}
+            if response.status_code == 409:
+                return {'ok': True, 'log': 'Media sync already running'}
+            return {'ok': False,
+                    'log': f"Sync rejected (HTTP {response.status_code}): {response.text[:200]}"}
+
+        return IoActionPlan(_start_sync)
+
+    def interpret_action(self, action_id: str, result: Any, **kwargs):
+        if not result['ok']:
+            return CollectResult.failed(result['log'])
+        return CollectResult(logs=[(result['log'], 'INFO')], success=True)
 
     UI_SPEC = {
         'layout': _DEFAULT_LAYOUT,

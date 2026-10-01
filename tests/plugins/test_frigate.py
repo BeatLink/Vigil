@@ -1,10 +1,11 @@
 import json
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 pytestmark = pytest.mark.asyncio
 from vigil.plugins.frigate import Frigate, _parse_config, _parse_response
-from vigil.core.connectors.types import HttpRequest, HttpResult
+from vigil.core.connectors.types import HttpRequest, HttpResult, IoActionPlan
 from vigil.core.database.database import db, StatusHistory, Metric
 
 
@@ -275,3 +276,62 @@ class TestFrigateCollection:
 class TestFrigateActions:
     async def test_on_action_always_returns_none(self, plugin):
         assert plugin.plan_action("anything") is None
+
+
+class TestSyncRecordingsAction:
+    """Frigate 0.18 made recordings reconciliation an on-demand job, so the
+    action is the only thing that still asks for it."""
+
+    def _response(self, status_code, payload=None, text=""):
+        return MagicMock(status_code=status_code,
+                         json=MagicMock(return_value=payload or {}),
+                         text=text)
+
+    async def test_action_is_listed(self, plugin):
+        assert 'sync_recordings' in [a['action_id'] for a in plugin.get_actions()]
+
+    async def test_unknown_action_is_not_planned(self, plugin):
+        assert plugin.plan_action('anything') is None
+
+    async def test_queued_job_reports_its_id(self, plugin):
+        response = self._response(202, {"job": {"id": "abc123", "status": "queued"}})
+        with patch('vigil.plugins.frigate.requests.post', return_value=response) as post:
+            outcome = plugin.interpret_action(
+                'sync_recordings', plugin.plan_action('sync_recordings').call())
+        assert outcome.success is True
+        assert 'abc123' in outcome.logs[0][0]
+        url, kwargs = post.call_args[0][0], post.call_args[1]
+        assert url == "http://frigate.test:5000/api/media/sync"
+        assert kwargs['json'] == {'media_types': ['recordings']}
+
+    async def test_plan_is_an_io_action(self, plugin):
+        assert isinstance(plugin.plan_action('sync_recordings'), IoActionPlan)
+
+    async def test_job_already_running_is_not_a_fault(self, plugin):
+        response = self._response(409, {"error": "A media sync job is already running"})
+        with patch('vigil.plugins.frigate.requests.post', return_value=response):
+            outcome = plugin.interpret_action(
+                'sync_recordings', plugin.plan_action('sync_recordings').call())
+        assert outcome.success is True
+        assert 'already running' in outcome.logs[0][0]
+
+    async def test_rejected_request_fails(self, plugin):
+        response = self._response(500, text="boom")
+        with patch('vigil.plugins.frigate.requests.post', return_value=response):
+            outcome = plugin.interpret_action(
+                'sync_recordings', plugin.plan_action('sync_recordings').call())
+        assert outcome.success is False
+
+    async def test_unreachable_api_fails(self, plugin):
+        import requests as _requests
+        with patch('vigil.plugins.frigate.requests.post',
+                   side_effect=_requests.RequestException("boom")):
+            outcome = plugin.interpret_action(
+                'sync_recordings', plugin.plan_action('sync_recordings').call())
+        assert outcome.success is False
+
+    async def test_missing_api_url_fails(self, make_plugin):
+        p = make_plugin(Frigate, {"name": "f", "id": "f", "ssh_config": {"host": "h"}})
+        outcome = p.interpret_action(
+            'sync_recordings', p.plan_action('sync_recordings').call())
+        assert outcome.success is False
