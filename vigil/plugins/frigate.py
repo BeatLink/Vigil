@@ -1,6 +1,6 @@
 """Frigate NVR camera health, from one GET each of /api/stats and /api/config
 over HTTP from the Vigil host. Config: api_url (required, Vigil-reachable),
-cameras (the subset to watch, default all), min_fps_ratio, api_timeout. A
+cameras (the subset to watch, default all), min_fps_ratio, api_timeout, sync_timeout. A
 camera Frigate has disarmed is reported as disarmed and never faults the
 monitor; an armed one fails when its capture process is gone or its stream has
 stopped, and warns when it delivers less than min_fps_ratio of its configured
@@ -9,6 +9,7 @@ a malformed payload, or a missing api_url is unavailable, since no camera was
 measured. No matching cameras is a warning pointing at the 'cameras' list."""
 
 import json
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
@@ -128,6 +129,7 @@ class Frigate(Plugin):
         self.cameras: Optional[List[str]] = config.get('cameras') or None
         self.min_fps_ratio = float(config.get('min_fps_ratio', 0.8))
         self.api_timeout = int(config.get('api_timeout', 10))
+        self.sync_timeout = int(config.get('sync_timeout', 300))
 
     def _get(self, path: str) -> HttpRequest:
         base = self.api_url.rstrip('/')
@@ -211,41 +213,66 @@ class Frigate(Plugin):
 
     def get_actions(self) -> List[Dict[str, str]]:
         return [
+            {'name': 'Preview Recordings Sync', 'action_id': 'preview_recordings_sync',
+             'variant': 'secondary', 'icon': 'search'},
             {'name': 'Sync Recordings', 'action_id': 'sync_recordings',
-             'variant': 'primary', 'icon': 'sync'},
+             'variant': 'danger', 'icon': 'sync'},
         ]
 
     def plan_action(self, action_id: str, **kwargs):
         """Reconcile Frigate's recordings database against what is on disk.
 
         Frigate 0.18 dropped the record.sync_recordings config option and made
-        this an on-demand job, so the recordings tree -- a Syncthing share that
-        Frigate does not own alone -- is only reconciled when something asks."""
-        if action_id != 'sync_recordings':
+        this an on-demand job behind /api/media/sync. A real run deletes
+        database rows whose files are gone and files the database does not
+        reference, so the preview runs the same job as a dry run first."""
+        if action_id not in ('preview_recordings_sync', 'sync_recordings'):
             return None
+        dry_run = action_id == 'preview_recordings_sync'
+        return IoActionPlan(lambda: self._run_recordings_sync(dry_run))
 
-        def _start_sync():
-            if not self.api_url:
-                return {'ok': False, 'log': "Sync Recordings: no 'api_url' configured"}
-            url = f"{self.api_url.rstrip('/')}/api/media/sync"
-            try:
-                response = requests.post(
-                    url, json={'media_types': ['recordings']}, timeout=self.api_timeout
-                )
-            except requests.RequestException as e:
-                return {'ok': False, 'log': f"Sync request failed: {e}"}
+    def _run_recordings_sync(self, dry_run: bool) -> Dict[str, Any]:
+        """Start the job, wait for it up to sync_timeout, and summarise its result."""
+        name = 'Preview' if dry_run else 'Sync'
+        if not self.api_url:
+            return {'ok': False, 'log': f"{name}: no 'api_url' configured"}
+        base = self.api_url.rstrip('/')
+        try:
+            response = requests.post(
+                f"{base}/api/media/sync",
+                json={'media_types': ['recordings'], 'dry_run': dry_run, 'force': False},
+                timeout=self.api_timeout,
+            )
+        except requests.RequestException as e:
+            return {'ok': False, 'log': f"{name} request failed: {e}"}
 
-            # 202 queues a background job; 409 means one is already running, which
-            # is the job doing its work rather than a fault.
-            if response.status_code == 202:
-                job_id = (response.json().get('job') or {}).get('id', 'unknown')
-                return {'ok': True, 'log': f"Media sync queued (job {job_id})"}
-            if response.status_code == 409:
-                return {'ok': True, 'log': 'Media sync already running'}
+        # 409 means a job is already running, which is the work under way rather than a fault.
+        if response.status_code == 409:
+            return {'ok': True, 'log': 'A media sync is already running'}
+        if response.status_code != 202:
             return {'ok': False,
-                    'log': f"Sync rejected (HTTP {response.status_code}): {response.text[:200]}"}
+                    'log': f"{name} rejected (HTTP {response.status_code}): {response.text[:200]}"}
+        job_id = (response.json().get('job') or {}).get('id')
+        if not job_id:
+            return {'ok': False, 'log': f"{name}: Frigate queued a job but returned no id"}
 
-        return IoActionPlan(_start_sync)
+        deadline = time.monotonic() + self.sync_timeout
+        while time.monotonic() < deadline:
+            try:
+                status = requests.get(f"{base}/api/media/sync/status/{job_id}",
+                                      timeout=self.api_timeout)
+                job = status.json().get('job') or {}
+            except (requests.RequestException, ValueError) as e:
+                return {'ok': False, 'log': f"{name}: lost track of job {job_id}: {e}"}
+            state = job.get('status')
+            if state == 'success':
+                return _summarise_sync(name, dry_run, job.get('results') or {})
+            if state in ('failed', 'cancelled'):
+                return {'ok': False,
+                        'log': f"{name} job {state}: {job.get('error_message') or 'no reason given'}"}
+            time.sleep(2)
+        return {'ok': True,
+                'log': f"{name} still running after {self.sync_timeout}s (job {job_id}); check Frigate's logs"}
 
     def interpret_action(self, action_id: str, result: Any, **kwargs):
         if not result['ok']:
@@ -276,6 +303,25 @@ class Frigate(Plugin):
         'events': True,
     }
 
+
+
+def _summarise_sync(name: str, dry_run: bool, results: Dict[str, Any]) -> Dict[str, Any]:
+    """One log line from a finished media sync job's recordings result."""
+    rec = results.get('recordings') or {}
+    checked = rec.get('files_checked', 0)
+    found = rec.get('orphans_found', 0)
+    if rec.get('error'):
+        return {'ok': False, 'log': f"{name} failed: {rec['error']}"}
+    if rec.get('aborted'):
+        return {'ok': False,
+                'log': f"{name} aborted by Frigate's safety threshold: {found} orphans "
+                       f"in {checked} checked looks like a misconfiguration, so nothing was removed"}
+    if dry_run:
+        return {'ok': True,
+                'log': f"Preview: {found} orphaned recordings in {checked} checked; nothing changed"}
+    return {'ok': True,
+            'log': f"Sync: removed {rec.get('orphans_deleted', 0)} of {found} orphaned "
+                   f"recordings in {checked} checked"}
 
 from vigil.core.ui.spec import register_formatter, register_color_rule
 

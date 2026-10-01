@@ -278,49 +278,90 @@ class TestFrigateActions:
         assert plugin.plan_action("anything") is None
 
 
-class TestSyncRecordingsAction:
-    """Frigate 0.18 made recordings reconciliation an on-demand job, so the
-    action is the only thing that still asks for it."""
+class TestRecordingsSyncActions:
+    """Frigate 0.18 made recordings reconciliation an on-demand job. Preview runs
+    it as a dry run; Sync runs it for real; both wait for the job's result."""
 
     def _response(self, status_code, payload=None, text=""):
         return MagicMock(status_code=status_code,
-                         json=MagicMock(return_value=payload or {}),
-                         text=text)
+                         json=MagicMock(return_value=payload or {}), text=text)
 
-    async def test_action_is_listed(self, plugin):
-        assert 'sync_recordings' in [a['action_id'] for a in plugin.get_actions()]
+    def _job(self, status, recordings=None, error_message=None):
+        results = {'recordings': recordings} if recordings is not None else None
+        return self._response(200, {'job': {'id': 'abc123', 'status': status,
+                                            'results': results,
+                                            'error_message': error_message}})
+
+    def _run(self, plugin, action_id, post, gets):
+        with patch('vigil.plugins.frigate.requests.post', return_value=post) as p_post, \
+             patch('vigil.plugins.frigate.requests.get', side_effect=gets), \
+             patch('vigil.plugins.frigate.time.sleep'):
+            outcome = plugin.interpret_action(action_id, plugin.plan_action(action_id).call())
+        return outcome, p_post
+
+    _QUEUED = {'job': {'id': 'abc123', 'status': 'queued'}}
+
+    async def test_both_actions_are_listed(self, plugin):
+        ids = [a['action_id'] for a in plugin.get_actions()]
+        assert ids == ['preview_recordings_sync', 'sync_recordings']
 
     async def test_unknown_action_is_not_planned(self, plugin):
         assert plugin.plan_action('anything') is None
 
-    async def test_queued_job_reports_its_id(self, plugin):
-        response = self._response(202, {"job": {"id": "abc123", "status": "queued"}})
-        with patch('vigil.plugins.frigate.requests.post', return_value=response) as post:
-            outcome = plugin.interpret_action(
-                'sync_recordings', plugin.plan_action('sync_recordings').call())
-        assert outcome.success is True
-        assert 'abc123' in outcome.logs[0][0]
-        url, kwargs = post.call_args[0][0], post.call_args[1]
-        assert url == "http://frigate.test:5000/api/media/sync"
-        assert kwargs['json'] == {'media_types': ['recordings']}
-
-    async def test_plan_is_an_io_action(self, plugin):
+    async def test_plans_are_io_actions(self, plugin):
+        assert isinstance(plugin.plan_action('preview_recordings_sync'), IoActionPlan)
         assert isinstance(plugin.plan_action('sync_recordings'), IoActionPlan)
 
+    async def test_preview_is_a_dry_run_and_reports_what_it_found(self, plugin):
+        rec = {'files_checked': 40, 'orphans_found': 3, 'orphans_deleted': 0, 'aborted': False}
+        outcome, post = self._run(plugin, 'preview_recordings_sync',
+                                  self._response(202, self._QUEUED),
+                                  [self._job('running'), self._job('success', rec)])
+        assert outcome.success is True
+        assert '3 orphaned recordings in 40 checked; nothing changed' in outcome.logs[0][0]
+        assert post.call_args[0][0] == "http://frigate.test:5000/api/media/sync"
+        assert post.call_args[1]['json'] == {'media_types': ['recordings'],
+                                             'dry_run': True, 'force': False}
+
+    async def test_sync_is_a_real_run_and_never_forced(self, plugin):
+        rec = {'files_checked': 40, 'orphans_found': 3, 'orphans_deleted': 3, 'aborted': False}
+        outcome, post = self._run(plugin, 'sync_recordings',
+                                  self._response(202, self._QUEUED),
+                                  [self._job('success', rec)])
+        assert outcome.success is True
+        assert 'removed 3 of 3' in outcome.logs[0][0]
+        assert post.call_args[1]['json'] == {'media_types': ['recordings'],
+                                             'dry_run': False, 'force': False}
+
+    async def test_safety_threshold_abort_fails(self, plugin):
+        rec = {'files_checked': 40, 'orphans_found': 39, 'orphans_deleted': 0, 'aborted': True}
+        outcome, _ = self._run(plugin, 'sync_recordings', self._response(202, self._QUEUED),
+                               [self._job('success', rec)])
+        assert outcome.success is False
+        assert 'safety threshold' in outcome.logs[0][0]
+
+    async def test_failed_job_fails_with_its_reason(self, plugin):
+        outcome, _ = self._run(plugin, 'sync_recordings', self._response(202, self._QUEUED),
+                               [self._job('failed', error_message='disk on fire')])
+        assert outcome.success is False
+        assert 'disk on fire' in outcome.logs[0][0]
+
     async def test_job_already_running_is_not_a_fault(self, plugin):
-        response = self._response(409, {"error": "A media sync job is already running"})
-        with patch('vigil.plugins.frigate.requests.post', return_value=response):
-            outcome = plugin.interpret_action(
-                'sync_recordings', plugin.plan_action('sync_recordings').call())
+        outcome, _ = self._run(plugin, 'sync_recordings',
+                               self._response(409, {"error": "already running"}), [])
         assert outcome.success is True
         assert 'already running' in outcome.logs[0][0]
 
     async def test_rejected_request_fails(self, plugin):
-        response = self._response(500, text="boom")
-        with patch('vigil.plugins.frigate.requests.post', return_value=response):
-            outcome = plugin.interpret_action(
-                'sync_recordings', plugin.plan_action('sync_recordings').call())
+        outcome, _ = self._run(plugin, 'sync_recordings', self._response(500, text="boom"), [])
         assert outcome.success is False
+
+    async def test_job_outlasting_the_timeout_is_reported_not_failed(self, plugin):
+        plugin.sync_timeout = 0
+        outcome, _ = self._run(plugin, 'preview_recordings_sync',
+                               self._response(202, self._QUEUED), [])
+        assert outcome.success is True
+        assert 'still running' in outcome.logs[0][0]
 
     async def test_unreachable_api_fails(self, plugin):
         import requests as _requests
