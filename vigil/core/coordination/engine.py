@@ -81,7 +81,8 @@ class VigilEngine:
         self.metric_retention_days = self.config_loader.metric_retention_days
         self.metric_downsample_days = self.config_loader.metric_downsample_days
         self._cycle_timings = self.config_loader.cycle_timings
-        self._last_prune = 0.0
+        # Minus infinity, not 0: time.monotonic() counts from boot, so 0 would hold off the first prune for an hour after a reboot.
+        self._last_prune = float('-inf')
         self._collecting: Dict[str, bool] = {}
         self._last_collected: Dict[str, float] = {}
         # The loop holds only weak references to tasks, so every background

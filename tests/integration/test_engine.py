@@ -224,6 +224,20 @@ class TestLogRetention:
         assert engine.db.prune_logs.call_count == 1
         engine.db.prune_logs.assert_called_with(30)
 
+    def test_first_prune_runs_right_after_boot(self, tmp_path):
+        cfg_path = _write_config(tmp_path, {
+            "database": {"path": str(tmp_path / "t.db")},
+            "logging": {"retention_days": 30},
+            "plugins": [],
+        })
+        with patch("vigil.core.connectors.engine.SSHConnection"):
+            engine = VigilEngine(cfg_path)
+        engine.db = MagicMock()
+        # The monotonic clock starts near zero at boot.
+        with patch("vigil.core.coordination.engine.time.monotonic", return_value=10.0):
+            engine._maybe_prune_logs()
+        engine.db.prune_logs.assert_called_once_with(30)
+
     def test_prune_disabled_when_retention_zero(self, tmp_path):
         cfg_path = _write_config(tmp_path, {
             "database": {"path": str(tmp_path / "t.db")},
