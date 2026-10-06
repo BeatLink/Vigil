@@ -31,6 +31,14 @@
                             apprise = pyprev.apprise.overridePythonAttrs (old: {
                                 doCheck = false;
                             });
+                            # anyio 4.14.2 fails its own TLS and LRU-cache tests under Python 3.12.
+                            anyio = pyprev.anyio.overridePythonAttrs (old: {
+                                doCheck = false;
+                            });
+                            # watchfiles' permission-denied test times out in the build sandbox.
+                            watchfiles = pyprev.watchfiles.overridePythonAttrs (old: {
+                                doCheck = false;
+                            });
                         };
                     };
                     python312Packages = final.python312.pkgs;
