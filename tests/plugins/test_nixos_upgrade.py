@@ -334,11 +334,14 @@ class TestCommands:
         assert "flake update --flake /etc/nixos" in plugin._update_command()
 
 
+GITHUB_PUSH = {"flake": "github:owner/config", "push_ssh_key": "/run/secrets/deploy_key"}
+
+
 class TestGithubUpdate:
     @pytest.mark.parametrize("ref,expected", [
-        ("github:owner/config", ("https://github.com/owner/config.git", None)),
-        ("github:owner/config/dev", ("https://github.com/owner/config.git", "dev")),
-        ("github:owner/config?ref=dev", ("https://github.com/owner/config.git", "dev")),
+        ("github:owner/config", ("git@github.com:owner/config.git", None)),
+        ("github:owner/config/dev", ("git@github.com:owner/config.git", "dev")),
+        ("github:owner/config?ref=dev", ("git@github.com:owner/config.git", "dev")),
         ("github:owner", None),
         ("/etc/nixos", None),
     ])
@@ -346,35 +349,27 @@ class TestGithubUpdate:
         assert make_plugin(NixosUpgrade, {**BASE_CFG, "flake": ref}).github_repo == expected
 
     def test_update_runs_unprivileged(self, make_plugin):
-        p = make_plugin(NixosUpgrade, {**BASE_CFG, "flake": "github:owner/config"})
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, **GITHUB_PUSH})
         assert "sudo" not in p._update_command()
 
-    def test_token_stays_out_of_argv(self, make_plugin):
-        p = make_plugin(NixosUpgrade, {**BASE_CFG, "flake": "github:owner/config",
-                                       "push_token_command": "cat /run/secrets/token"})
+    def test_pushes_over_ssh_with_the_key_and_pinned_host_keys(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, **GITHUB_PUSH})
         command = p._update_command()
-        assert "VIGIL_PUSH_TOKEN=$(cat /run/secrets/token)" in command
-        assert '"password=$VIGIL_PUSH_TOKEN"' in command
+        assert "git@github.com:owner/config.git" in command
+        assert "-i /run/secrets/deploy_key" in command and "StrictHostKeyChecking=yes" in command
+        assert "https://" not in command
 
     def test_branch_is_cloned(self, make_plugin):
-        p = make_plugin(NixosUpgrade, {**BASE_CFG, "flake": "github:owner/config/dev"})
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, **GITHUB_PUSH, "flake": "github:owner/config/dev"})
         assert "--branch dev" in p._update_command()
 
     def test_commit_uses_the_configured_author_and_message(self, make_plugin):
-        p = make_plugin(NixosUpgrade, {**BASE_CFG, "flake": "github:owner/config",
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, **GITHUB_PUSH,
                                        "commit_author": "Bot <bot@example.com>",
                                        "commit_message": "build: bump inputs"})
         command = p._update_command()
         assert "user.name=Bot" in command and "user.email=bot@example.com" in command
         assert "'build: bump inputs'" in command
-
-    def test_failure_is_reported_through_the_exit_file(self, make_plugin):
-        import subprocess
-        p = make_plugin(NixosUpgrade, {**BASE_CFG, "flake": "github:owner/config",
-                                       "push_token_command": "true"})
-        run = subprocess.run(["sh", "-c", "{ " + p._update_command() + "; }; echo rc=$?"],
-                             capture_output=True, text=True)
-        assert "printed no token" in run.stdout and "rc=1" in run.stdout
 
 
 class TestLocalPath:
@@ -448,8 +443,13 @@ class TestActions:
         assert any("github: flake" in m for m, _ in refused.logs)
         assert p.jobs.running() is None
 
-    async def test_update_launched_for_a_github_flake(self, make_plugin):
+    async def test_update_refused_for_a_github_flake_without_a_key(self, make_plugin):
         p = make_plugin(NixosUpgrade, {**BASE_CFG, "flake": "github:owner/config"})
+        refused = await _launch(p, "update_flake")
+        assert refused.success is False and any("push_ssh_key" in m for m, _ in refused.logs)
+
+    async def test_update_launched_for_a_github_flake(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, **GITHUB_PUSH})
         assert (await _launch(p, "update_flake")).success is True
         assert "git" in p.jobs.running()['command'] and "push origin HEAD" in p.jobs.running()['command']
 
@@ -690,8 +690,12 @@ class TestUI:
         button = p.UI_SPEC['buttons']['controls'][0]
         assert button['visible_if'](p) is False
 
-    async def test_update_button_shown_for_a_github_flake(self, make_plugin):
+    async def test_update_button_hidden_for_a_github_flake_without_a_key(self, make_plugin):
         p = make_plugin(NixosUpgrade, {**BASE_CFG, "flake": "github:owner/config"})
+        assert p.UI_SPEC['buttons']['controls'][0]['visible_if'](p) is False
+
+    async def test_update_button_shown_for_a_github_flake(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, **GITHUB_PUSH})
         assert p.UI_SPEC['buttons']['controls'][0]['visible_if'](p) is True
 
     async def test_ui_spec_renders_without_data(self, plugin):
