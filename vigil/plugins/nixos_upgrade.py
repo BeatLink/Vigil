@@ -11,7 +11,8 @@ evaluates. An unreachable or non-NixOS target, unreadable flake metadata,
 or an evaluation that never ran is unavailable; an evaluation that ran and
 errored is failed. `eval_agent` runs the two expensive commands on another agent's
 host, for a target too small to evaluate its own flake, and `build_host` sends the
-switch's own compilation to a host that can do it. `switch_agent` runs the switch
+switch's own compilation to a host that can do it. `build_agent` runs the build job
+on another agent's host, so one host can warm the cache for every other. `switch_agent` runs the switch
 and update jobs on another agent's host, which with `target_host` lets one host
 build every other's closure and activate it over SSH; the probe stays on the target,
 so drift is still read from the machine it describes. Actions launch
@@ -24,7 +25,7 @@ only when the flake changed after the running generation was made. `update_at` a
 missed while Vigil was down runs once when it returns, and a restart never repeats one. Config:
 flake, configuration, eval_agent, eval_interval, retry_interval, eval_timeout,
 max_input_age, drift_status, reboot_status, require_sudo, nix_bin,
-rebuild_bin, nix_args, rebuild_args, build_host, switch_agent, target_host,
+rebuild_bin, nix_args, rebuild_args, build_host, build_agent, switch_agent, target_host,
 auto_switch, auto_switch_after, update_at, build_at,
 switch_wrapper, post_switch, push_ssh_key, commit_author,
 commit_message."""
@@ -203,6 +204,7 @@ class NixosUpgrade(Plugin):
         self.rebuild_args = list(config.get('rebuild_args', []))
         self.build_host = config.get('build_host') or None
         self.switch_agent = config.get('switch_agent') or None
+        self.build_agent = config.get('build_agent') or self.switch_agent
         self.build_args = list(config.get('build_args', ['--keep-going', '--print-build-logs']))
         self.target_host = config.get('target_host') or None
         self.auto_switch = bool(config.get('auto_switch', False))
@@ -305,7 +307,7 @@ class NixosUpgrade(Plugin):
         self._polling_job = job
         if job is not None:
             return [Command(detached.poll_command(job['workdir'], job['pid'], job['output_seq']),
-                            agent=self.switch_agent)]
+                            agent=self.job_agent(job))]
 
         self._auto_launch = None
         if self._auto_switch_due:
@@ -322,7 +324,7 @@ class NixosUpgrade(Plugin):
             command = self._build_command() if kind == 'build' else self._update_command()
             workdir = detached.workdir_for(f'{self.id}-{kind}-{int(time.time())}')
             self._scheduled_launch = (kind, slot, command, workdir)
-            return [Command(detached.launch_command(command, workdir), agent=self.switch_agent)]
+            return [Command(detached.launch_command(command, workdir), agent=self._agent_for(kind))]
 
         commands = [Command(_probe_script())]
         # An offloaded evaluation needs the target's attribute name, which the first probe supplies.
@@ -340,6 +342,13 @@ class NixosUpgrade(Plugin):
                 timeout=self.eval_timeout, agent=self.eval_agent,
             ))
         return commands
+
+    def _agent_for(self, kind: str) -> Optional[str]:
+        """The agent a job of this kind launches on: the build may run apart from the switch and update."""
+        return self.build_agent if kind == 'build' else self.switch_agent
+
+    def job_agent(self, job: dict) -> Optional[str]:
+        return self._agent_for(job.get('kind'))
 
     def _running_job(self) -> Optional[dict]:
         job = self.jobs.running() if self.jobs else None
@@ -742,7 +751,7 @@ class NixosUpgrade(Plugin):
         # interpret_action records the pid the launch prints and creates the row.
         workdir = detached.workdir_for(f'{self.id}-{int(time.time())}')
         self._pending_launch = (kind, command, workdir)
-        return ActionPlan(detached.launch_command(command, workdir), agent=self.switch_agent)
+        return ActionPlan(detached.launch_command(command, workdir), agent=self._agent_for(kind))
 
     def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
         if action_id not in ('update_flake', 'switch', 'build'):

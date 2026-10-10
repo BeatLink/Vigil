@@ -213,6 +213,10 @@ class Plugin(PluginConfigMixin, ABC):
         for an unhandled action_id."""
         return None
 
+    def job_agent(self, job: dict) -> Optional[str]:
+        """The agent a launched detached job runs on, when it is not the monitor's own target, so a cancel reaches it."""
+        return None
+
     def interpret_action(self, action_id: str, result: Any, **kwargs) -> ActionOutcome:
         """Pure: given the action's result (a CmdResult for SSH, an
         HttpResult/DnsResult/PingResult for a connector request, or an

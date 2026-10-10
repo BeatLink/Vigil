@@ -139,8 +139,10 @@ class VigilEngine:
         self._exec_contexts[plugin.id] = net
         plugin.bind(PluginDataView(self.db, plugin.id))
 
-        async def _cancel_exec(command: str, _net=net):
-            await self.connectors.execute_raw(_net, command)
+        async def _cancel_exec(command: str, agent: Optional[str] = None, _net=net):
+            from vigil.core.connectors.types import ActionPlan
+            plan = ActionPlan(command, agent=agent)
+            await self.connectors.execute(self._action_context(_net, plan), plan)
 
         plugin.jobs = JobsGateway(self.db, plugin, cancel_exec=_cancel_exec)
         if net.is_agent:

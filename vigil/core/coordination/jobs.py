@@ -2,7 +2,7 @@
 hold, in place of pass-throughs on the engine. A job is a detached command on
 the target (a Job row) advanced by the owning plugin's poll; "running" is a DB
 state, not a live coroutine, so everything here is DB reads and writes plus
-(for cancel) one ordinary SSH command on the plugin's transport."""
+(for cancel) one ordinary SSH command on the host the job runs on."""
 
 from typing import Awaitable, Callable, Optional
 
@@ -10,8 +10,9 @@ from typing import Awaitable, Callable, Optional
 class JobsGateway:
     """Detached-job state and control scoped to one plugin."""
 
-    def __init__(self, db, plugin, cancel_exec: Optional[Callable[[str], Awaitable]] = None):
-        """Bind the gateway to the store and one plugin; cancel_exec runs a raw command on the plugin's transport."""
+    def __init__(self, db, plugin,
+                 cancel_exec: Optional[Callable[[str, Optional[str]], Awaitable]] = None):
+        """Bind the gateway to the store and one plugin; cancel_exec runs a raw command on the plugin's transport, or on the named agent."""
         self._db = db
         self._plugin = plugin
         self._cancel_exec = cancel_exec
@@ -43,7 +44,7 @@ class JobsGateway:
         if not job or not job.get('pid'):
             return False
         if self._cancel_exec is not None:
-            await self._cancel_exec(cancel_command(job['pid']))
+            await self._cancel_exec(cancel_command(job['pid']), self._plugin.job_agent(job))
         self._db.finish_job(job['id'], 'cancelled', exit_code=130, error='Cancelled by user')
         return True
 

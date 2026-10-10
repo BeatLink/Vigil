@@ -817,6 +817,49 @@ class TestSchedule:
         assert rows["Scheduled build"].startswith("Daily at 02:30")
 
 
+class TestBuildAgent:
+    def test_defaults_to_the_switch_agent(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "switch_agent": "builder"})
+        assert p.plan_action("build").agent == "builder"
+
+    def test_runs_the_build_apart_from_the_switch(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_agent": "builder"})
+        assert p.plan_action("build").agent == "builder"
+        p._pending_launch = None
+        assert p.plan_action("switch").agent is None
+        p._pending_launch = None
+        assert p.plan_action("update_flake").agent is None
+
+    async def test_a_build_is_polled_where_it_runs(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_agent": "builder"})
+        await _launch(p, "build")
+        assert p.commands()[0].agent == "builder"
+
+    async def test_a_switch_is_polled_on_the_target(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_agent": "builder"})
+        await _launch(p, "switch")
+        assert p.commands()[0].agent is None
+
+    async def test_a_scheduled_build_launches_on_the_build_agent(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_at": "02:30", "build_agent": "builder"})
+        _collect(p)
+        _rewind_schedule(p, "build")
+        assert p.commands()[0].agent == "builder"
+
+    async def test_cancel_reaches_the_build_agent(self, make_plugin):
+        from vigil.core.coordination.jobs import JobsGateway
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_agent": "builder"})
+        sent = []
+
+        async def cancel_exec(command, agent=None):
+            sent.append((command, agent))
+
+        p.jobs = JobsGateway(p.jobs._db, p, cancel_exec=cancel_exec)
+        await _launch(p, "build", pid=7171)
+        assert await p.jobs.cancel() is True
+        assert len(sent) == 1 and sent[0][1] == "builder" and "7171" in sent[0][0]
+
+
 class TestSwitchWrapping:
     def test_wrapper_runs_outside_sudo(self, make_plugin):
         p = make_plugin(NixosUpgrade, {**BASE_CFG, "switch_wrapper": ["systemd-inhibit", "--what=sleep"]})

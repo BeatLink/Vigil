@@ -121,7 +121,7 @@ def make_plugin(db_manager):
 
         from vigil.core.coordination.jobs import JobsGateway
 
-        async def _cancel_exec(command):
+        async def _cancel_exec(command, agent=None):
             await connectors.execute_raw(net, command)
 
         plugin.jobs = JobsGateway(db_manager, plugin, cancel_exec=_cancel_exec)
