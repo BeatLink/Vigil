@@ -181,7 +181,6 @@ class NixosUpgrade(Plugin):
         self.rebuild_args = list(config.get('rebuild_args', []))
         self.build_host = config.get('build_host') or None
         self.switch_agent = config.get('switch_agent') or None
-        self.auto_build = bool(config.get('auto_build', False))
         self.build_args = list(config.get('build_args', ['--keep-going', '--print-build-logs']))
         self.target_host = config.get('target_host') or None
         self.auto_switch = bool(config.get('auto_switch', False))
