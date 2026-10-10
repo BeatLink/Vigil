@@ -10,7 +10,8 @@ rather than held for the full `eval_interval`, and a dashboard poll always
 evaluates. An unreachable or non-NixOS target, unreadable flake metadata,
 or an evaluation that never ran is unavailable; an evaluation that ran and
 errored is failed. `eval_agent` runs the two expensive commands on another agent's
-host, for a target too small to evaluate its own flake. Actions launch
+host, for a target too small to evaluate its own flake, and `build_host` sends the
+switch's own compilation to a host that can do it. Actions launch
 detached jobs on the target: `nix flake update` on the flake, and
 `nixos-rebuild switch --flake`; a `github:` flake with a `push_ssh_key` is
 updated in a fresh clone that is committed and pushed back over SSH. With `auto_switch`, drift that outlasts
@@ -18,7 +19,7 @@ updated in a fresh clone that is committed and pushed back over SSH. With `auto_
 only when the flake changed after the running generation was made. Config:
 flake, configuration, eval_agent, eval_interval, retry_interval, eval_timeout,
 max_input_age, drift_status, reboot_status, require_sudo, nix_bin,
-rebuild_bin, nix_args, rebuild_args, auto_switch, auto_switch_after,
+rebuild_bin, nix_args, rebuild_args, build_host, auto_switch, auto_switch_after,
 switch_wrapper, post_switch, push_ssh_key, commit_author,
 commit_message."""
 
@@ -174,6 +175,7 @@ class NixosUpgrade(Plugin):
         self.nix_args = list(config.get(
             'nix_args', ['--extra-experimental-features', 'nix-command flakes']))
         self.rebuild_args = list(config.get('rebuild_args', []))
+        self.build_host = config.get('build_host') or None
         self.auto_switch = bool(config.get('auto_switch', False))
         self.auto_switch_after = parse_duration(config.get('auto_switch_after', '30m'))
         self.switch_wrapper = list(config.get('switch_wrapper', []))
@@ -229,6 +231,12 @@ class NixosUpgrade(Plugin):
         """A mutable remote ref is only seen freshly with --refresh; a local
         path is read from disk every time and needs none."""
         return [] if self.local_path else ['--refresh']
+
+    def _build_host_args(self) -> List[str]:
+        """Where the switch compiles what the cache cannot supply: a target too
+        small to build its own closure names a host that can, which needs SSH
+        from the target's root to that host."""
+        return ['--build-host', self.build_host] if self.build_host else []
 
     def _attribute(self) -> Optional[str]:
         """The nixosConfigurations attribute to evaluate: the configured name,
@@ -600,7 +608,8 @@ class NixosUpgrade(Plugin):
 
     def _switch_command(self) -> str:
         flake_ref = f'{self.flake}#{self.configuration}' if self.configuration else self.flake
-        args = ' '.join(shlex.quote(a) for a in self.rebuild_args + self._refresh_args())
+        args = ' '.join(shlex.quote(a) for a in
+                        self._build_host_args() + self.rebuild_args + self._refresh_args())
         wrapper = ''.join(shlex.quote(a) + ' ' for a in self.switch_wrapper)
         switch = (f'{wrapper}{self._sudo()}{self.rebuild_bin} switch --flake {shlex.quote(flake_ref)} '
                   f'{args}').strip()

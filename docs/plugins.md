@@ -438,6 +438,7 @@ Both actions launch a **detached** job on the target, polled to completion by th
 | `nix_bin` / `rebuild_bin` | Binaries to invoke (defaults: `nix` / `nixos-rebuild`) |
 | `nix_args` | Extra arguments on every `nix` call (default: `["--extra-experimental-features", "nix-command flakes"]`; set `[]` to drop them) |
 | `rebuild_args` | Extra arguments on `nixos-rebuild switch`, e.g. `["--use-remote-sudo"]` |
+| `build_host` | Compile the switch on this host instead of the target, as `nixos-rebuild --build-host` (default: unset, build on the target). For a target that cannot build its own closure; pairs with `rebuild_args: ["--max-jobs", "0"]` to stop it building at all. Needs SSH from the target's root to a nix-trusted user on that host |
 | `auto_switch` | Launch Rebuild & Switch without being asked once drift outlasts `auto_switch_after` (default: `false`) |
 | `auto_switch_after` | How long drift must last before an automatic switch (default: `30m`), so a deploy of your own lands first |
 | `switch_wrapper` | Command the switch runs under, outside `sudo`, e.g. `["systemd-inhibit", "--what=idle:sleep", "--mode=block"]` to keep a laptop or phone awake through it |

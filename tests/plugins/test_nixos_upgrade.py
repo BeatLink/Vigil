@@ -330,6 +330,19 @@ class TestCommands:
         p = make_plugin(NixosUpgrade, {**BASE_CFG, "rebuild_args": ["--use-remote-sudo"]})
         assert "--use-remote-sudo" in p._switch_command()
 
+    def test_build_host_sends_compilation_elsewhere(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_host": "heimdall"})
+        assert "--build-host heimdall" in p._switch_command()
+
+    def test_build_host_is_unset_by_default(self, plugin):
+        assert "--build-host" not in plugin._switch_command()
+
+    def test_build_host_precedes_rebuild_args(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_host": "heimdall",
+                                       "rebuild_args": ["--max-jobs", "0"]})
+        cmd = p._switch_command()
+        assert cmd.index("--build-host") < cmd.index("--max-jobs")
+
     def test_update_targets_the_flake(self, plugin):
         assert "flake update --flake /etc/nixos" in plugin._update_command()
 
