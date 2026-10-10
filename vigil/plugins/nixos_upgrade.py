@@ -19,17 +19,20 @@ detached jobs on the target: `nix flake update` on the flake, and
 `nixos-rebuild switch --flake`; a `github:` flake with a `push_ssh_key` is
 updated in a fresh clone that is committed and pushed back over SSH. With `auto_switch`, drift that outlasts
 `auto_switch_after` launches the switch itself, once per target closure, and
-only when the flake changed after the running generation was made. Config:
+only when the flake changed after the running generation was made. `update_at` and
+`build_at` launch the update and the build once a day at a local time of day; a slot
+missed while Vigil was down runs once when it returns, and a restart never repeats one. Config:
 flake, configuration, eval_agent, eval_interval, retry_interval, eval_timeout,
 max_input_age, drift_status, reboot_status, require_sudo, nix_bin,
 rebuild_bin, nix_args, rebuild_args, build_host, switch_agent, target_host,
-auto_switch, auto_switch_after,
+auto_switch, auto_switch_after, update_at, build_at,
 switch_wrapper, post_switch, push_ssh_key, commit_author,
 commit_message."""
 
 import json
 import shlex
 import time
+from datetime import datetime, time as time_of_day, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from vigil.plugins.base.plugin_base import Plugin
@@ -129,6 +132,25 @@ def _escape(value: str) -> str:
     return value.replace('\\', '\\\\').replace('"', '\\"').replace('$', '\\$')
 
 
+def _time_of_day(value, key: str) -> Optional[time_of_day]:
+    """Read a configured daily time such as "02:30", or None when unset."""
+    if value is None or value == '':
+        return None
+    try:
+        return time_of_day.fromisoformat(str(value))
+    except ValueError as e:
+        raise ValueError(f"`{key}` must be a time of day such as \"02:30\", not {value!r}") from e
+
+
+def _latest_slot(at: time_of_day, now: float) -> int:
+    """The epoch of the most recent local `at` no later than `now`."""
+    moment = datetime.fromtimestamp(now)
+    slot = datetime.combine(moment.date(), at)
+    if slot > moment:
+        slot -= timedelta(days=1)
+    return int(slot.timestamp())
+
+
 def _severity(value, default: str) -> str:
     """Read a configured status name, falling back on anything unrecognised."""
     try:
@@ -185,6 +207,9 @@ class NixosUpgrade(Plugin):
         self.target_host = config.get('target_host') or None
         self.auto_switch = bool(config.get('auto_switch', False))
         self.auto_switch_after = parse_duration(config.get('auto_switch_after', '30m'))
+        self.schedule = {kind: at for kind, at in (
+            ('update', _time_of_day(config.get('update_at'), 'update_at')),
+            ('build', _time_of_day(config.get('build_at'), 'build_at'))) if at is not None}
         self.switch_wrapper = list(config.get('switch_wrapper', []))
         self.post_switch = config.get('post_switch') or None
         self.push_ssh_key = config.get('push_ssh_key') or None
@@ -198,6 +223,8 @@ class NixosUpgrade(Plugin):
         # The target an automatic switch is due for, and the launch the current cycle sent for it.
         self._auto_switch_due = None
         self._auto_launch = None
+        # The (kind, slot, command, workdir) of the scheduled job the current cycle launched.
+        self._scheduled_launch = None
 
     # --- flake reference ---
 
@@ -288,6 +315,15 @@ class NixosUpgrade(Plugin):
             self._auto_switch_due = None
             return [Command(detached.launch_command(command, workdir), agent=self.switch_agent)]
 
+        self._scheduled_launch = None
+        due = self._scheduled_due()
+        if due is not None:
+            kind, slot = due
+            command = self._build_command() if kind == 'build' else self._update_command()
+            workdir = detached.workdir_for(f'{self.id}-{kind}-{int(time.time())}')
+            self._scheduled_launch = (kind, slot, command, workdir)
+            return [Command(detached.launch_command(command, workdir), agent=self.switch_agent)]
+
         commands = [Command(_probe_script())]
         # An offloaded evaluation needs the target's attribute name, which the first probe supplies.
         if self._due_for_eval() and not (self.eval_agent and self._attribute() is None):
@@ -317,6 +353,18 @@ class NixosUpgrade(Plugin):
         metric = self.data.latest_metric(_STATE_METRIC) if self.data else None
         return _decode_json(metric.metadata) if metric is not None and metric.metadata else {}
 
+    def _scheduled_due(self) -> Optional[Tuple[str, int]]:
+        """The first scheduled job whose latest slot is newer than the one last handled, update before build."""
+        handled = self._state().get('scheduled') or {}
+        now = time.time()
+        for kind, at in self.schedule.items():
+            if kind == 'update' and not self._update_enabled(self):
+                continue
+            # A schedule never seen before was seeded by the last probe cycle, so it first fires at its next slot.
+            if kind in handled and _latest_slot(at, now) > int(handled[kind]):
+                return kind, _latest_slot(at, now)
+        return None
+
     def _due_for_eval(self) -> bool:
         if self._force_eval:
             return True
@@ -341,6 +389,9 @@ class NixosUpgrade(Plugin):
         launch, self._auto_launch = self._auto_launch, None
         if launch is not None:
             return self._parse_auto_launch(launch, results[0])
+        scheduled, self._scheduled_launch = self._scheduled_launch, None
+        if scheduled is not None:
+            return self._parse_scheduled_launch(scheduled, results[0])
 
         if not results:
             return CollectResult.unavailable('No probe result for this cycle')
@@ -472,6 +523,15 @@ class NixosUpgrade(Plugin):
                     f", over the {format_duration(self.max_input_age)} limit" if stale else ''),
                 'WARNING' if stale else 'INFO'))
 
+        scheduled = dict(state.get('scheduled') or {})
+        for kind, at in self.schedule.items():
+            scheduled.setdefault(kind, _latest_slot(at, now))
+        state['scheduled'] = scheduled
+        if 'update' in self.schedule and not self._update_enabled(self):
+            acc.escalate('warning')
+            logs.append((f"Scheduled update never runs: {self.flake} has no lock file this host can "
+                         "write", 'WARNING'))
+
         reboot = self._reboot_required(fields)
         if reboot is not None:
             metrics['reboot_required'] = 1.0 if reboot else 0.0
@@ -527,6 +587,29 @@ class NixosUpgrade(Plugin):
         job_id = self.jobs.create('switch', command, workdir)
         self.jobs.set_pid(job_id, pid)
         written.logs = [(f"Automatic switch started (pid {pid})", 'INFO')]
+        return written
+
+    def _parse_scheduled_launch(self, launch: Tuple[str, int, str, str],
+                                result: CmdResult) -> CollectResult:
+        """Record the job a schedule launched, and its slot as handled so neither a retry nor a restart repeats it."""
+        kind, slot, command, workdir = launch
+        pid = detached.parse_launch(result.stdout) if result.exit_code == 0 else None
+        # An agent that never answered launched nothing, so the next cycle may try again.
+        if pid is None and result.exit_code == -1:
+            return CollectResult(logs=[(f"Could not launch the scheduled {kind}: "
+                                        f"{(result.stderr or '').strip()[:200]}", 'WARNING')])
+        state = self._state()
+        state['scheduled'] = {**(state.get('scheduled') or {}), kind: slot}
+        written = CollectResult(metrics={_STATE_METRIC: float(state.get('evaluated_epoch') or 0)},
+                                metadata={_STATE_METRIC: json.dumps(state)})
+        if pid is None:
+            written.logs = [(f"Failed to launch the scheduled {kind}: "
+                             f"{(result.stderr or result.stdout).strip()[:200]}", 'ERROR')]
+            written.status = 'failed'
+            return written
+        job_id = self.jobs.create(kind, command, workdir)
+        self.jobs.set_pid(job_id, pid)
+        written.logs = [(f"Scheduled {kind} started (pid {pid})", 'INFO')]
         return written
 
     @staticmethod
@@ -769,6 +852,9 @@ class NixosUpgrade(Plugin):
                              f"({stamp(state.get('inputs_last_modified'))})"),
             ('Last evaluated', stamp(state.get('evaluated_epoch'))),
         ]
+        handled = state.get('scheduled') or {}
+        for kind, at in self.schedule.items():
+            rows.append((f'Scheduled {kind}', f"Daily at {at:%H:%M}, last slot {stamp(handled.get(kind))}"))
         for label, error in (('Evaluation error', state.get('eval_error')),
                              ('Metadata error', state.get('metadata_error'))):
             if error:

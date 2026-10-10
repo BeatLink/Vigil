@@ -685,6 +685,138 @@ class TestAutoSwitch:
         assert p._auto_switch_due is None
 
 
+SCHEDULE_CFG = {**BASE_CFG, "update_at": "02:00", "build_at": "02:30"}
+
+
+def _rewind_schedule(plugin, kind: str, days: int = 1) -> None:
+    """Move a schedule's handled slot `days` back, as if its slots since had passed unrun."""
+    state = json.loads(plugin.data.latest_metric("flake_eval_epoch").metadata)
+    state["scheduled"][kind] -= days * 86400
+    plugin.storage.apply(CollectResult(
+        metrics={"flake_eval_epoch": float(state["evaluated_epoch"])},
+        metadata={"flake_eval_epoch": json.dumps(state)},
+    ))
+
+
+def _launch_scheduled(plugin, pid=6161, result=None):
+    """Run the cycle that launches a scheduled job, returning its outcome."""
+    cmds = plugin.commands()
+    assert len(cmds) == 1 and "setsid" in cmds[0].text
+    outcome = plugin.parse([result if result is not None else CmdResult(0, f"{pid}\n", "")])
+    plugin.storage.apply(outcome)
+    return outcome
+
+
+class TestSchedule:
+    async def test_off_by_default(self, plugin):
+        _collect(plugin)
+        assert plugin._scheduled_due() is None
+
+    async def test_enabling_never_fires_at_once(self, make_plugin):
+        p = make_plugin(NixosUpgrade, SCHEDULE_CFG)
+        _collect(p)
+        assert p._scheduled_due() is None
+        assert len(p.commands()) == 1 and "setsid" not in p.commands()[0].text
+
+    async def test_a_passed_slot_launches_the_job(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_at": "02:30"})
+        _collect(p)
+        _rewind_schedule(p, "build")
+        outcome = _launch_scheduled(p, pid=6161)
+        job = p.jobs.running()
+        assert job["kind"] == "build" and job["pid"] == 6161
+        assert "build --no-link" in job["command"]
+        assert any("Scheduled build started" in m for m, _ in outcome.logs)
+
+    async def test_update_runs_before_build(self, make_plugin):
+        p = make_plugin(NixosUpgrade, SCHEDULE_CFG)
+        _collect(p)
+        _rewind_schedule(p, "update")
+        _rewind_schedule(p, "build")
+        _launch_scheduled(p)
+        assert p.jobs.running()["kind"] == "update"
+        _poll_once(p, _poll(5, 0, False, "done\n"))
+        _launch_scheduled(p)
+        assert p.jobs.running()["kind"] == "build"
+
+    async def test_a_handled_slot_survives_a_restart(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_at": "02:30"})
+        _collect(p)
+        _rewind_schedule(p, "build")
+        _launch_scheduled(p)
+        _poll_once(p, _poll(5, 0, False, "done\n"))
+        restarted = make_plugin(NixosUpgrade, {**BASE_CFG, "build_at": "02:30"})
+        assert restarted._scheduled_due() is None
+
+    async def test_several_missed_slots_run_once(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_at": "02:30"})
+        _collect(p)
+        _rewind_schedule(p, "build", days=3)
+        _launch_scheduled(p)
+        _poll_once(p, _poll(5, 0, False, "done\n"))
+        assert p._scheduled_due() is None
+
+    async def test_a_running_job_holds_the_schedule(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_at": "02:30"})
+        _collect(p)
+        await _launch(p)
+        _rewind_schedule(p, "build")
+        _poll_once(p, _poll(5, None, True, "switching\n"))
+        assert p.jobs.running()["kind"] == "switch"
+        _poll_once(p, _poll(5, 0, False, "done\n"))
+        _launch_scheduled(p)
+        assert p.jobs.running()["kind"] == "build"
+
+    async def test_unreachable_agent_retries_the_launch(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_at": "02:30"})
+        _collect(p)
+        _rewind_schedule(p, "build")
+        _launch_scheduled(p, result=CmdResult(-1, "", "Agent 'x' is not connected"))
+        assert p.jobs.running() is None
+        assert p._scheduled_due() is not None
+
+    async def test_failed_launch_is_not_retried(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_at": "02:30"})
+        _collect(p)
+        _rewind_schedule(p, "build")
+        outcome = _launch_scheduled(p, result=CmdResult(1, "", "setsid: not found"))
+        assert outcome.status == "failed"
+        assert p._scheduled_due() is None
+
+    async def test_launch_runs_on_the_switch_agent(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_at": "02:30", "switch_agent": "builder"})
+        _collect(p)
+        _rewind_schedule(p, "build")
+        assert p.commands()[0].agent == "builder"
+
+    async def test_unwritable_flake_never_updates_and_says_so(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "flake": "github:owner/config", "update_at": "02:00"})
+        _collect(p)
+        _rewind_schedule(p, "update")
+        result = _collect(p)
+        assert p._scheduled_due() is None
+        assert result.status == "warning"
+        assert any("Scheduled update never runs" in m for m, _ in result.logs)
+
+    def test_malformed_time_is_rejected(self, make_plugin):
+        with pytest.raises(ValueError, match="build_at"):
+            make_plugin(NixosUpgrade, {**BASE_CFG, "build_at": "half past two"})
+
+    def test_latest_slot_is_never_in_the_future(self):
+        from datetime import datetime, time as tod
+        from vigil.plugins.nixos_upgrade import _latest_slot
+        now = datetime(2026, 10, 10, 1, 0).timestamp()
+        assert _latest_slot(tod(2, 30), now) == datetime(2026, 10, 9, 2, 30).timestamp()
+        assert _latest_slot(tod(0, 30), now) == datetime(2026, 10, 10, 0, 30).timestamp()
+
+    async def test_detail_rows_show_each_schedule(self, make_plugin):
+        p = make_plugin(NixosUpgrade, SCHEDULE_CFG)
+        _collect(p)
+        rows = {r["label"]: r["value"] for r in p._detail_rows}
+        assert rows["Scheduled update"].startswith("Daily at 02:00")
+        assert rows["Scheduled build"].startswith("Daily at 02:30")
+
+
 class TestSwitchWrapping:
     def test_wrapper_runs_outside_sudo(self, make_plugin):
         p = make_plugin(NixosUpgrade, {**BASE_CFG, "switch_wrapper": ["systemd-inhibit", "--what=sleep"]})
