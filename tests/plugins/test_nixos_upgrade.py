@@ -358,6 +358,30 @@ class TestCommands:
     def test_switch_agent_is_unset_by_default(self, plugin):
         assert plugin.plan_action("switch").agent is None
 
+    def test_build_realises_without_activating(self, plugin):
+        cmd = plugin._build_command()
+        assert "build --no-link" in cmd
+        assert "switch" not in cmd
+
+    def test_build_keeps_going_by_default(self, plugin):
+        assert "--keep-going" in plugin._build_command()
+
+    def test_build_args_are_configurable(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "build_args": ["--max-jobs", "2"]})
+        cmd = p._build_command()
+        assert "--max-jobs 2" in cmd
+        assert "--keep-going" not in cmd
+
+    def test_build_targets_this_hosts_closure(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "flake": "github:owner/config",
+                                       "configuration": "ragnarok"})
+        assert "nixosConfigurations" in p._build_command()
+        assert "ragnarok" in p._build_command()
+
+    def test_build_runs_on_the_switch_agent(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "switch_agent": "heimdall"})
+        assert p.plan_action("build").agent == "heimdall"
+
     def test_update_targets_the_flake(self, plugin):
         assert "flake update --flake /etc/nixos" in plugin._update_command()
 

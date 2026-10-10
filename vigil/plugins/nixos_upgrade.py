@@ -181,6 +181,8 @@ class NixosUpgrade(Plugin):
         self.rebuild_args = list(config.get('rebuild_args', []))
         self.build_host = config.get('build_host') or None
         self.switch_agent = config.get('switch_agent') or None
+        self.auto_build = bool(config.get('auto_build', False))
+        self.build_args = list(config.get('build_args', ['--keep-going', '--print-build-logs']))
         self.target_host = config.get('target_host') or None
         self.auto_switch = bool(config.get('auto_switch', False))
         self.auto_switch_after = parse_duration(config.get('auto_switch_after', '30m'))
@@ -618,6 +620,15 @@ class NixosUpgrade(Plugin):
         # A subshell, so set -e ends the update and not the launcher that records its exit status.
         return '(\n' + '\n'.join(lines) + '\n)'
 
+    def _build_command(self) -> str:
+        """Realise this host's closure without activating it, so a deploy
+        substitutes instead of building. --keep-going by default: one
+        unbuildable package should cost its own path and not the whole
+        closure, and the job still exits non-zero so the failure is seen."""
+        nix = ' '.join([self.nix_bin] + [shlex.quote(a) for a in self.nix_args])
+        args = ' '.join(shlex.quote(a) for a in self.build_args + self._refresh_args())
+        return ' '.join(filter(None, [nix, 'build --no-link', args, self._installable()]))
+
     def _switch_command(self) -> str:
         flake_ref = f'{self.flake}#{self.configuration}' if self.configuration else self.flake
         args = ' '.join(shlex.quote(a) for a in
@@ -632,7 +643,7 @@ class NixosUpgrade(Plugin):
         return f'{switch}; rc=$?; {self.post_switch}; (exit $rc)'
 
     def plan_action(self, action_id: str, **kwargs):
-        if action_id not in ('update_flake', 'switch'):
+        if action_id not in ('update_flake', 'switch', 'build'):
             return None
         if self._running_job() is not None:
             return CollectResult.failed('A job is already running for this monitor',
@@ -642,8 +653,9 @@ class NixosUpgrade(Plugin):
                 f"Cannot update {self.flake}: only a local checkout, or a github: flake with a "
                 f"push_ssh_key, has a lock file this host can write")
 
-        kind = 'update' if action_id == 'update_flake' else 'switch'
-        command = self._update_command() if kind == 'update' else self._switch_command()
+        kind = {'update_flake': 'update', 'switch': 'switch', 'build': 'build'}[action_id]
+        command = {'update': self._update_command, 'switch': self._switch_command,
+                   'build': self._build_command}[kind]()
         # The on-target workdir is named before the Job row exists;
         # interpret_action records the pid the launch prints and creates the row.
         workdir = detached.workdir_for(f'{self.id}-{int(time.time())}')
@@ -651,7 +663,7 @@ class NixosUpgrade(Plugin):
         return ActionPlan(detached.launch_command(command, workdir), agent=self.switch_agent)
 
     def interpret_action(self, action_id: str, result: CmdResult, **kwargs):
-        if action_id not in ('update_flake', 'switch'):
+        if action_id not in ('update_flake', 'switch', 'build'):
             return result.exit_code == 0
 
         kind, command, workdir = self._pending_launch or ('switch', '', '')
