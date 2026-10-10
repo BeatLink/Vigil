@@ -343,6 +343,21 @@ class TestCommands:
         cmd = p._switch_command()
         assert cmd.index("--build-host") < cmd.index("--max-jobs")
 
+    def test_target_host_activates_elsewhere(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "target_host": "root@thor.technet"})
+        assert "--target-host root@thor.technet" in p._switch_command()
+
+    def test_target_host_is_unset_by_default(self, plugin):
+        assert "--target-host" not in plugin._switch_command()
+
+    def test_switch_agent_runs_the_launch_elsewhere(self, make_plugin):
+        p = make_plugin(NixosUpgrade, {**BASE_CFG, "switch_agent": "heimdall"})
+        plan = p.plan_action("switch")
+        assert plan.agent == "heimdall"
+
+    def test_switch_agent_is_unset_by_default(self, plugin):
+        assert plugin.plan_action("switch").agent is None
+
     def test_update_targets_the_flake(self, plugin):
         assert "flake update --flake /etc/nixos" in plugin._update_command()
 

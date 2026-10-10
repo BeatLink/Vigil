@@ -439,8 +439,16 @@ class VigilEngine:
             result = (await self.connectors.dispatch(net, [plan]))[0]
             return _finish(plugin.interpret_action(action_id, result, **kwargs))
         # Default: an ActionPlan — a short SSH command.
-        result = await self.connectors.execute(net, plan)
+        result = await self.connectors.execute(self._action_context(net, plan), plan)
         return _finish(plugin.interpret_action(action_id, result, **kwargs))
+
+    def _action_context(self, net, plan):
+        """The connection an ActionPlan runs over: the monitor's own target, or
+        another agent's host when the plan names one."""
+        if not plan.agent:
+            return net
+        return ExecContext(conn=self.connectors.agents.require(plan.agent),
+                           collect_timeout=net.collect_timeout)
 
     def set_setting(self, key: str, value: str) -> None:
         """UI-triggered setting write (e.g. a group's expand/collapse state)

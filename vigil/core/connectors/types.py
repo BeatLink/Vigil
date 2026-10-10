@@ -81,6 +81,8 @@ _LOG_LEVEL = {Status.ONLINE: 'INFO', Status.UNAVAILABLE: 'WARNING',
 class ActionPlan:
     command: str
     timeout: Optional[float] = None
+    # Run on this agent instead of the monitor's own target, matching Command.agent, e.g. a switch driven from the host that builds it.
+    agent: Optional[str] = None
 
 
 # --- Declarative connector requests/results ---
